@@ -1,0 +1,240 @@
+"""数据层：SQLAlchemy Core 表定义与连接管理（SQLite / PostgreSQL 通用）。"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+    create_engine,
+)
+from sqlalchemy.engine import Engine
+
+metadata = MetaData()
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+assets = Table(
+    "assets",
+    metadata,
+    Column("asset_id", String(64), primary_key=True),
+    Column("scope", String(16), nullable=False),  # company | department | engagement
+    Column("department_code", String(64)),
+    Column("engagement_slug", String(64)),
+    Column("repo", String(200), nullable=False),
+    Column("path", String(500), nullable=False),
+    Column("kind", String(32), nullable=False),
+    Column("name", String(128), nullable=False),
+    Column("title", String(200), nullable=False, default=""),
+    Column("summary", Text, nullable=False, default=""),
+    Column("conclusion_md", Text, nullable=False, default=""),
+    Column("applicability_json", Text, nullable=False, default="{}"),
+    Column("tags_json", Text, nullable=False, default="[]"),
+    Column("industry_json", Text, nullable=False, default="[]"),
+    Column("owner_ref", String(128), nullable=False, default=""),
+    Column("owner_kind", String(16), nullable=False, default=""),
+    Column("owner_value", String(64), nullable=False, default=""),
+    Column("lifecycle", String(16), nullable=False, default="experimental"),
+    Column("quality", String(16), nullable=False, default="bronze"),
+    Column("nature", String(16), nullable=False, default=""),
+    Column("version", String(32), nullable=False, default="0.1.0"),
+    Column("replaced_by", String(128), nullable=False, default=""),
+    Column("source_json", Text, nullable=False, default="{}"),
+    Column("kind_spec_json", Text, nullable=False, default="{}"),
+    Column("attachments_json", Text, nullable=False, default="[]"),
+    Column("content_text", Text, nullable=False, default=""),
+    Column("commit_sha", String(64), nullable=False, default=""),
+    Column("restricted", Boolean, nullable=False, default=False),
+    Column("valid", Boolean, nullable=False, default=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=_now),
+    Column("deleted_at", DateTime(timezone=True)),
+    UniqueConstraint(
+        "scope",
+        "department_code",
+        "engagement_slug",
+        "kind",
+        "name",
+        name="uq_assets_scope_kind_name",
+    ),
+)
+
+asset_index_findings = Table(
+    "asset_index_findings",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("repo", String(200), nullable=False),
+    Column("path", String(500), nullable=False),
+    Column("kind", String(32), nullable=False, default=""),
+    Column("name", String(128), nullable=False, default=""),
+    Column("severity", String(16), nullable=False, default="error"),
+    Column("code", String(64), nullable=False),
+    Column("message", Text, nullable=False),
+    Column("detected_at", DateTime(timezone=True), nullable=False, default=_now),
+)
+
+asset_relations = Table(
+    "asset_relations",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("from_asset_id", String(64), nullable=False),
+    Column("to_ref", String(200), nullable=False),
+    Column("to_asset_id", String(64)),
+    Column("type", String(32), nullable=False, default="relatedTo"),
+    Column("source", String(16), nullable=False, default="metadata"),  # metadata | body
+)
+
+asset_usages = Table(
+    "asset_usages",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("asset_id", String(64), nullable=False),
+    Column("event", String(16), nullable=False),  # loaded | read | applied
+    Column("session_id", String(64), nullable=False, default=""),
+    Column("engagement_slug", String(64), nullable=False, default=""),
+    Column("work_item_id", String(64), nullable=False, default=""),
+    Column("snapshot_sha", String(64), nullable=False, default=""),
+    Column("delivered_pr", Boolean, nullable=False, default=False),
+    Column("actor_type", String(16), nullable=False, default="agent"),
+    Column("actor_id", String(64), nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    UniqueConstraint("asset_id", "session_id", "event", name="uq_usage_session_event"),
+)
+
+asset_references = Table(
+    "asset_references",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("asset_id", String(64), nullable=False),
+    Column("asset_version", String(32), nullable=False, default=""),
+    Column(
+        "source_type", String(32), nullable=False
+    ),  # message | work_item | asset | session_summary
+    Column("source_id", String(128), nullable=False),
+    Column("engagement_slug", String(64), nullable=False, default=""),
+    Column("created_by", String(64), nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    UniqueConstraint("asset_id", "source_type", "source_id", name="uq_reference_source"),
+)
+
+harvest_candidates = Table(
+    "harvest_candidates",
+    metadata,
+    Column("candidate_id", String(64), primary_key=True),
+    Column("kind", String(32), nullable=False),
+    Column("scope", String(16), nullable=False, default="engagement"),
+    Column("department_code", String(64), nullable=False, default=""),
+    Column("engagement_slug", String(64), nullable=False, default=""),
+    Column("name", String(128), nullable=False),
+    Column("title", String(200), nullable=False, default=""),
+    Column(
+        "status", String(16), nullable=False, default="draft"
+    ),  # draft|submitted|merged|rejected
+    Column("origin", String(32), nullable=False, default="manual"),
+    Column("source_json", Text, nullable=False, default="{}"),
+    Column("files_json", Text, nullable=False, default="{}"),
+    Column("checks_json", Text, nullable=False, default="{}"),
+    Column("medium_risk_confirmed", Boolean, nullable=False, default=False),
+    Column("created_by", String(64), nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=_now),
+    Column("review_id", String(64), nullable=False, default=""),
+)
+
+asset_reviews = Table(
+    "asset_reviews",
+    metadata,
+    Column("review_id", String(64), primary_key=True),
+    Column("candidate_id", String(64), nullable=False),
+    Column("repo", String(200), nullable=False),
+    Column("branch", String(200), nullable=False),
+    Column("status", String(16), nullable=False, default="open"),  # open | merged | rejected
+    Column("scope", String(16), nullable=False, default="engagement"),
+    Column("summary", Text, nullable=False, default=""),
+    Column("submitted_by", String(64), nullable=False, default=""),
+    Column("submitted_at", DateTime(timezone=True), nullable=False, default=_now),
+    Column("decided_by", String(64), nullable=False, default=""),
+    Column("decided_at", DateTime(timezone=True)),
+    Column("note", Text, nullable=False, default=""),
+)
+
+asset_events = Table(
+    "asset_events",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("type", String(64), nullable=False),
+    Column("payload_json", Text, nullable=False, default="{}"),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+)
+
+asset_leads = Table(
+    "asset_leads",
+    metadata,
+    Column("lead_id", String(64), primary_key=True),
+    Column("rule", String(16), nullable=False),
+    Column("owner_user", String(64), nullable=False),
+    Column("engagement_slug", String(64), nullable=False, default=""),
+    Column("subject_type", String(32), nullable=False, default=""),
+    Column("subject_id", String(64), nullable=False, default=""),
+    Column("suggested_kind", String(32), nullable=False, default=""),
+    Column("title", String(200), nullable=False, default=""),
+    Column("detail", Text, nullable=False, default=""),
+    Column("score", Float, nullable=False, default=0.0),
+    Column("status", String(16), nullable=False, default="open"),  # open | ignored | drafted
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    UniqueConstraint("rule", "subject_type", "subject_id", name="uq_lead_subject"),
+)
+
+work_item_assets = Table(
+    "work_item_assets",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("engagement_slug", String(64), nullable=False),
+    Column("work_item_id", String(64), nullable=False),
+    Column("asset_id", String(64), nullable=False),
+    Column("role", String(16), nullable=False, default="reference"),  # sop_step | reference
+    Column("sop_step", Integer),
+    Column("locked", Boolean, nullable=False, default=False),
+    Column("created_by", String(64), nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    UniqueConstraint("work_item_id", "asset_id", "role", name="uq_work_item_asset"),
+)
+
+
+def create_engine_for(db_path: Path | str, echo: bool = False) -> Engine:
+    if str(db_path).startswith("postgresql"):
+        url = str(db_path)
+    else:
+        path = Path(db_path).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        url = f"sqlite+pysqlite:///{path}"
+    engine = create_engine(url, echo=echo, future=True)
+    return engine
+
+
+def init_db(engine: Engine) -> None:
+    metadata.create_all(engine)
+
+
+def record_event(conn: Any, event_type: str, payload: dict[str, Any]) -> None:
+    import json
+
+    conn.execute(
+        asset_events.insert().values(
+            type=event_type, payload_json=json.dumps(payload, ensure_ascii=False)
+        )
+    )

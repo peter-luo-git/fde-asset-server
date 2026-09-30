@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -12,16 +13,46 @@ class AssetSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="FDE_ASSET_", extra="ignore")
 
-    database_url: str = "sqlite+aiosqlite:///./data/asset.db"
-    data_dir: Path = Path("./data/assets")
-    repo_dir: Path = Path("./data/repos")
-    work_dir: Path = Path("./data/work")
+    data_dir: Path = Path("./data")
+    database_path: Path | None = None
+    repo_dir: Path | None = None
+    work_dir: Path | None = None
     index_poll_seconds: int = 30
     server_internal_url: str = "http://127.0.0.1:8000"
+    # dev：按请求头识别身份，成员关系读本地种子文件；oidc：校验 Casdoor 令牌 + 调 fde-server（v0.2）
+    identity_mode: Literal["dev", "oidc"] = "dev"
+    index_text_limit: int = 200_000
+    knowledge_index_limit: int = 30_000
+    attachment_size_limit: int = 50 * 1024 * 1024
+
+    @property
+    def root(self) -> Path:
+        return self.data_dir.expanduser().resolve()
+
+    @property
+    def db_path(self) -> Path:
+        return (self.database_path or self.root / "asset.db").expanduser()
+
+    @property
+    def repos(self) -> Path:
+        return (self.repo_dir or self.root / "repos").expanduser()
+
+    @property
+    def work(self) -> Path:
+        return (self.work_dir or self.root / "work").expanduser()
 
     @property
     def snapshot_dir(self) -> Path:
-        return self.data_dir / "snapshots"
+        return self.root / "snapshots"
+
+    @property
+    def blob_dir(self) -> Path:
+        """附件原件目录（本地对象存储；接 Gitea 后换 LFS）。"""
+        return self.root / "blobs"
+
+    def ensure_dirs(self) -> None:
+        for directory in (self.root, self.repos, self.work, self.snapshot_dir, self.blob_dir):
+            directory.mkdir(parents=True, exist_ok=True)
 
 
 def load_settings() -> AssetSettings:

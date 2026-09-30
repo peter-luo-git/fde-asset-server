@@ -1,16 +1,19 @@
-"""FastAPI 应用装配。业务路由在各切片中加入。"""
+"""FastAPI 应用装配。"""
 
 from __future__ import annotations
 
 from fastapi import FastAPI
 
 from fde_asset import __version__
-from fde_asset.settings import load_settings
+from fde_asset.api import routes_assets, routes_harvest, routes_work_items
+from fde_asset.api.deps import build_context
+from fde_asset.settings import AssetSettings
 
 
-def create_app() -> FastAPI:
-    settings = load_settings()
+def create_app(settings: AssetSettings | None = None) -> FastAPI:
+    context = build_context(settings)
     app = FastAPI(title="FDE 资产中心服务", version=__version__)
+    app.state.context = context
 
     @app.get("/health/live")
     async def live() -> dict[str, str]:
@@ -18,13 +21,16 @@ def create_app() -> FastAPI:
 
     @app.get("/health/ready")
     async def ready() -> dict[str, object]:
-        """就绪检查：数据目录与仓库目录可访问即可（本地形态不依赖外部服务）。"""
         checks = {
-            "data_dir": settings.data_dir.expanduser().exists(),
-            "repo_dir": settings.repo_dir.expanduser().exists(),
+            "data_dir": context.settings.root.exists(),
+            "repo_dir": context.settings.repos.exists(),
+            "database": context.settings.db_path.exists(),
         }
         return {"status": "ok" if all(checks.values()) else "degraded", "checks": checks}
 
+    app.include_router(routes_assets.router)
+    app.include_router(routes_harvest.router)
+    app.include_router(routes_work_items.router)
     return app
 
 

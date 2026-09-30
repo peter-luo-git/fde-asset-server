@@ -17,7 +17,12 @@ def ensure_bare_repo(path: Path) -> None:
 
 def main() -> None:
     settings = load_settings()
-    for directory in (settings.data_dir, settings.repo_dir, settings.work_dir, settings.snapshot_dir):
+    for directory in (
+        settings.data_dir,
+        settings.repo_dir,
+        settings.work_dir,
+        settings.snapshot_dir,
+    ):
         directory.expanduser().mkdir(parents=True, exist_ok=True)
     ensure_bare_repo(settings.repo_dir.expanduser() / "company-assets.git")
     print("本地资产环境就绪：")
