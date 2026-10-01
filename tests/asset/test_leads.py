@@ -202,3 +202,53 @@ def test_ignore_lead_requires_owner(client) -> None:
     assert lead_id not in [
         lead["lead_id"] for lead in client.get("/api/v1/workbench").json()["leads"]
     ]
+
+
+def test_blank_spot_needs_more_than_one_engagement() -> None:
+    """单个项目里重复由 L5/L6 管；L9 专看跨项目的空白。"""
+    from fde_asset.modules.leads.rules import _blank_spots
+
+    class Item:
+        def __init__(self, title: str, slug: str) -> None:
+            self.title = title
+            self.engagement_slug = slug
+            self.owner_user = "chen"
+
+    one_project = [Item("导入超时排查", "a"), Item("导入超时复现", "a")]
+    assert _blank_spots(one_project, []) == []
+
+    across = [Item("导入超时排查", "a"), Item("导入超时复现", "b")]
+    leads = _blank_spots(across, [])
+    assert leads, "跨两个项目出现同一类问题就该提醒"
+    assert leads[0].rule == "L9"
+    assert "2 个项目" in leads[0].title
+
+
+def test_blank_spot_is_silent_when_the_asset_already_exists() -> None:
+    from fde_asset.modules.leads.rules import _blank_spots
+
+    class Item:
+        def __init__(self, title: str, slug: str) -> None:
+            self.title = title
+            self.engagement_slug = slug
+            self.owner_user = "chen"
+
+    across = [Item("导入超时排查", "a"), Item("导入超时复现", "b")]
+    assert _blank_spots(across, ["导入超时的根因与解决"]) == [], "库里已经有了就不该再提醒"
+
+
+def test_blank_spots_are_capped() -> None:
+    """一次最多提 5 条，免得把其它线索淹了。"""
+    from fde_asset.modules.leads.rules import _blank_spots
+
+    class Item:
+        def __init__(self, title: str, slug: str) -> None:
+            self.title = title
+            self.engagement_slug = slug
+            self.owner_user = "chen"
+
+    items = []
+    for index in range(12):
+        items.append(Item(f"主题{index}问题排查", "a"))
+        items.append(Item(f"主题{index}问题复现", "b"))
+    assert len(_blank_spots(items, [])) <= 5

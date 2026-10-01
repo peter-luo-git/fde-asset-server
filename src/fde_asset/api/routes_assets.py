@@ -11,7 +11,7 @@ from fde_asset.api.deps import ServiceContext, get_context, get_principal
 from fde_asset.core.db import asset_index_findings, assets
 from fde_asset.modules.asset import catalog
 from fde_asset.modules.app import health as app_health_module
-from fde_asset.modules.asset import feedback, matching, snapshot, sop, usage
+from fde_asset.modules.asset import checkup, feedback, matching, snapshot, sop, usage
 from fde_asset.modules.asset.indexer import index_all
 from fde_asset.modules.asset.manifest import KIND_RULES
 from fde_asset.modules.harvest import service as harvest_service
@@ -292,6 +292,16 @@ def governance_signals(
 ) -> dict[str, Any]:
     """负责人待办：我负责的资产收到的负面反馈，以及被反复拒绝的推荐。"""
     return feedback.owner_signals(context.engine, principal)
+
+
+@router.get("/governance/checkup")
+def asset_checkup(
+    owner_only: bool = True,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """资产体检：半年没更新、零复用、被反复拒绝、收到差评，四条规则。"""
+    return checkup.run(context.engine, principal, owner_only=owner_only)
 
 
 @router.get("/settings")

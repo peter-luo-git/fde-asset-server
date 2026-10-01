@@ -282,7 +282,54 @@ def detect(source: ActivitySource, *, existing_asset_titles: Iterable[str] = ())
                     score=1.1 * _age_decay(engagement.accepted_at),
                 )
             )
+    leads.extend(_blank_spots(items, titles))
     return [lead for lead in leads if lead.score >= 0.2]
+
+
+#: L9 空白识别：同一类问题在多个项目各踩一次，却没人沉淀
+BLANK_MIN_ENGAGEMENTS = 2
+
+
+def _blank_spots(work_items, existing_titles) -> list[Lead]:
+    """跨项目反复出现、库里却没有对应资产的，才是最该提醒的空白。
+
+    单个项目内的重复，L5/L6 已经在管；这条专门看"跨项目"——
+    同一件事在两个以上项目各踩一次，说明它是通用问题，值得沉淀成公司或部门级资产。
+    """
+    buckets: dict[str, set[str]] = {}
+    samples: dict[str, str] = {}
+    owners: dict[str, str] = {}
+    for item in work_items:
+        for token in _bigrams(item.title):
+            if not item.engagement_slug:
+                continue
+            buckets.setdefault(token, set()).add(item.engagement_slug)
+            samples.setdefault(token, item.title)
+            owners.setdefault(token, item.owner_user)
+
+    leads: list[Lead] = []
+    for token, slugs in buckets.items():
+        if len(slugs) < BLANK_MIN_ENGAGEMENTS:
+            continue
+        # 库里已经有相近标题的资产就不算空白
+        if any(_similar(token, title) or token in title for title in existing_titles):
+            continue
+        leads.append(
+            Lead(
+                "L9",
+                owners.get(token, ""),
+                sorted(slugs)[0],
+                "topic",
+                token,
+                "Case",
+                f"「{token}」在 {len(slugs)} 个项目各出现过，库里却没有对应资产",
+                f"例如：{samples.get(token, '')}。跨项目反复出现的问题，值得沉淀成公司或部门级资产",
+                score=0.9 + 0.2 * min(len(slugs), 4),
+            )
+        )
+    # 同一次扫描里最多提 5 条空白，免得淹没其它线索
+    leads.sort(key=lambda lead: lead.score, reverse=True)
+    return leads[:5]
 
 
 def refresh(engine: Engine, source: ActivitySource) -> dict[str, Any]:
