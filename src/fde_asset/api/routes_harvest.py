@@ -6,7 +6,7 @@ import base64
 import json
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Response
 from sqlalchemy import select, update
 
 from fde_asset.api.deps import ServiceContext, get_context, get_principal
@@ -15,6 +15,7 @@ from fde_asset.modules.asset.indexer import index_repository
 from fde_asset.modules.asset.visibility import can_review, visibility_clause
 from fde_asset.modules.harvest import service
 from fde_asset.modules.leads import rules as leads_rules
+from fde_asset.platform.blobs import BlobError
 from fde_asset.platform.identity import Principal
 
 router = APIRouter(prefix="/api/v1", tags=["harvest"])
@@ -104,6 +105,7 @@ def create_from_upload(
             department_code=payload.get("department_code", ""),
             engagement_slug=payload.get("engagement_slug", ""),
             legacy_note=payload.get("legacy_note", ""),
+            store=context.blob_store,
         )
     except service.HarvestError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
@@ -136,9 +138,83 @@ def patch_candidate(
     candidate = get_candidate(candidate_id, context, principal)
     if candidate["status"] != "draft":
         raise HTTPException(status_code=409, detail="只有草稿可以修改")
-    updated = service.update_candidate(context.engine, candidate_id, payload["files"])
+    try:
+        if "meta" in payload:
+            service.update_meta(context.engine, candidate_id, payload["meta"])
+        if "files" in payload:
+            service.update_candidate(context.engine, candidate_id, payload["files"])
+    except service.HarvestError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     service.run_checks(context.engine, candidate_id, _scan_context(context))
-    return service.get_candidate(context.engine, candidate_id) | {"files": updated["files"]}
+    return service.get_candidate(context.engine, candidate_id)
+
+
+@router.post("/harvest-candidates/{candidate_id}/attachments")
+def add_attachment(
+    candidate_id: str,
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """给草稿加附件：content_base64 为原件内容，支持 PDF / Word / Excel / PPT / Markdown。"""
+    get_candidate(candidate_id, context, principal)
+    content = base64.b64decode(payload["content_base64"])
+    try:
+        result = service.attach_file(
+            context.engine,
+            candidate_id,
+            filename=payload["filename"],
+            content=content,
+            store=context.blob_store,
+            size_limit=context.settings.attachment_size_limit,
+        )
+    except BlobError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except service.HarvestError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    service.run_checks(context.engine, candidate_id, _scan_context(context))
+    return result
+
+
+@router.get("/harvest-candidates/{candidate_id}/attachments/{filename}")
+def download_attachment(
+    candidate_id: str,
+    filename: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> Response:
+    get_candidate(candidate_id, context, principal)
+    try:
+        content = service.read_attachment(candidate_id, filename, context.blob_store)
+    except BlobError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    if content is None:
+        raise HTTPException(status_code=404, detail="附件不存在")
+    return Response(
+        content=content,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.delete("/harvest-candidates/{candidate_id}/attachments/{filename}")
+def remove_attachment(
+    candidate_id: str,
+    filename: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    get_candidate(candidate_id, context, principal)
+    try:
+        candidate = service.detach_file(
+            context.engine, candidate_id, filename=filename, store=context.blob_store
+        )
+    except BlobError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except service.HarvestError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    service.run_checks(context.engine, candidate_id, _scan_context(context))
+    return candidate
 
 
 @router.post("/harvest-candidates/{candidate_id}/checks")
@@ -183,6 +259,7 @@ def submit_candidate(
             target_repo=target,
             scan_context=_scan_context(context),
             medium_risk_confirmed=bool(payload.get("medium_risk_confirmed")),
+            blob_store=context.blob_store,
         )
     except service.HarvestError as exc:
         # 提交失败时把作用域回滚为原值，避免草稿状态与实际不符

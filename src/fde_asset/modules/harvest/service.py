@@ -18,6 +18,7 @@ from fde_asset.modules.asset.manifest import (
     validate_asset,
 )
 from fde_asset.modules.harvest.templates import render_template
+from fde_asset.platform.blobs import BlobStore, safe_name
 from fde_asset.platform.extract import extract_text
 from fde_asset.platform.identity import Principal
 from fde_asset.platform.repo.ports import RepoRef
@@ -210,8 +211,9 @@ def draft_from_upload(
     department_code: str = "",
     engagement_slug: str = "",
     legacy_note: str = "",
+    store: BlobStore | None = None,
 ) -> dict[str, Any]:
-    """历史文档导入：提取文本预填正文，结论与适用边界留给人补。"""
+    """历史文档导入：提取文本预填正文，结论与适用边界留给人补，原件存进 BlobStore。"""
     extraction = extract_text(filename, content)
     name = _slugify(title) or "legacy-import"
     owner = (
@@ -251,7 +253,11 @@ def draft_from_upload(
             f"    note: {legacy_note or filename}",
         ]
     )
-    files = {rule.main_file: body, "asset.yaml": manifest, f"attachments/{filename}": "<binary>"}
+    files = {
+        rule.main_file: body,
+        "asset.yaml": manifest,
+        f"{ATTACHMENT_PREFIX}{safe_name(filename)}": ATTACHMENT_PLACEHOLDER,
+    }
     result = create_draft(
         engine,
         principal,
@@ -267,6 +273,8 @@ def draft_from_upload(
             files=files,
         ),
     )
+    if store is not None:
+        store.put(result["candidate_id"], filename, content)
     result["extraction"] = {
         "status": extraction.status,
         "chars": len(extraction.text),
@@ -291,6 +299,61 @@ def get_candidate(engine: Engine, candidate_id: str) -> dict[str, Any]:
     return data
 
 
+#: 草稿里附件的占位内容；真正的原件在 BlobStore 里，提交时才materialize 进仓库
+ATTACHMENT_PLACEHOLDER = "<binary>"
+ATTACHMENT_PREFIX = "attachments/"
+
+
+def attach_file(
+    engine: Engine,
+    candidate_id: str,
+    *,
+    filename: str,
+    content: bytes,
+    store: BlobStore,
+    size_limit: int = 50 * 1024 * 1024,
+) -> dict[str, Any]:
+    """给草稿加一个附件：原件存 BlobStore，文件清单里留占位，并回报能否提取正文。"""
+    candidate = get_candidate(engine, candidate_id)
+    if candidate["status"] != "draft":
+        raise HarvestError("只有草稿可以加附件")
+    if len(content) > size_limit:
+        raise HarvestError(f"附件超过 {size_limit // 1024 // 1024}MB 上限")
+    name = safe_name(filename)
+    store.put(candidate_id, name, content)
+    files = dict(candidate["files"])
+    files[f"{ATTACHMENT_PREFIX}{name}"] = ATTACHMENT_PLACEHOLDER
+    update_candidate(engine, candidate_id, files)
+    extraction = extract_text(name, content)
+    return {
+        "path": f"{ATTACHMENT_PREFIX}{name}",
+        "bytes": len(content),
+        "text_extraction": extraction.status,
+        "chars": len(extraction.text),
+        "detail": extraction.detail,
+    }
+
+
+def detach_file(
+    engine: Engine, candidate_id: str, *, filename: str, store: BlobStore
+) -> dict[str, Any]:
+    candidate = get_candidate(engine, candidate_id)
+    if candidate["status"] != "draft":
+        raise HarvestError("只有草稿可以删附件")
+    name = safe_name(filename)
+    files = {
+        path: content
+        for path, content in candidate["files"].items()
+        if path != f"{ATTACHMENT_PREFIX}{name}"
+    }
+    store.delete(candidate_id, name)
+    return update_candidate(engine, candidate_id, files)
+
+
+def read_attachment(candidate_id: str, filename: str, store: BlobStore) -> bytes | None:
+    return store.get(candidate_id, filename)
+
+
 def update_candidate(engine: Engine, candidate_id: str, files: dict[str, str]) -> dict[str, Any]:
     with engine.begin() as conn:
         conn.execute(
@@ -299,6 +362,49 @@ def update_candidate(engine: Engine, candidate_id: str, files: dict[str, str]) -
             .values(files_json=json.dumps(files, ensure_ascii=False), updated_at=_now())
         )
     return get_candidate(engine, candidate_id)
+
+
+#: 允许前端直接改的元数据字段，其余字段仍靠编辑 asset.yaml
+EDITABLE_META = ("title", "summary", "tags", "lifecycle", "industry", "suitable", "notSuitable")
+
+
+def update_meta(engine: Engine, candidate_id: str, meta: dict[str, Any]) -> dict[str, Any]:
+    """按字段改 asset.yaml，前端不必自己拼 YAML。未知字段直接忽略。"""
+    import yaml
+
+    candidate = get_candidate(engine, candidate_id)
+    if candidate["status"] != "draft":
+        raise HarvestError("只有草稿可以修改")
+    files = dict(candidate["files"])
+    document = yaml.safe_load(files.get("asset.yaml") or "") or {}
+    metadata = document.setdefault("metadata", {})
+    spec = document.setdefault("spec", {})
+    applicability = spec.setdefault("applicability", {})
+
+    for key in ("title", "summary"):
+        if key in meta:
+            metadata[key] = str(meta[key] or "")
+    if "tags" in meta:
+        metadata["tags"] = [str(tag) for tag in (meta["tags"] or [])]
+    if "lifecycle" in meta:
+        spec["lifecycle"] = str(meta["lifecycle"] or "experimental")
+    if "industry" in meta:
+        spec["industry"] = [str(item) for item in (meta["industry"] or [])]
+    for key in ("suitable", "notSuitable"):
+        if key in meta:
+            applicability[key] = str(meta[key] or "")
+
+    files["asset.yaml"] = yaml.safe_dump(document, allow_unicode=True, sort_keys=False)
+    updated = update_candidate(engine, candidate_id, files)
+    if "title" in meta:
+        with engine.begin() as conn:
+            conn.execute(
+                update(harvest_candidates)
+                .where(harvest_candidates.c.candidate_id == candidate_id)
+                .values(title=str(meta["title"] or ""), updated_at=_now())
+            )
+        updated = get_candidate(engine, candidate_id)
+    return updated
 
 
 def run_checks(
@@ -370,6 +476,7 @@ def submit(
     target_repo: RepoRef,
     scan_context: ScanContext | None = None,
     medium_risk_confirmed: bool = False,
+    blob_store: BlobStore | None = None,
 ) -> dict[str, Any]:
     """提交候选：建分支、提交文件、生成评审记录。高危必须清零。"""
     candidate = get_candidate(engine, candidate_id)
@@ -387,11 +494,17 @@ def submit(
     prefix = _target_prefix(
         candidate["kind"], candidate["name"], target_repo.scope, candidate["files"]
     )
-    files = {
-        f"{prefix}/{path}" if prefix else path: content.encode("utf-8")
-        for path, content in candidate["files"].items()
-        if isinstance(content, str)
-    }
+    files: dict[str, bytes] = {}
+    for path, content in candidate["files"].items():
+        if not isinstance(content, str):
+            continue
+        target = f"{prefix}/{path}" if prefix else path
+        if content == ATTACHMENT_PLACEHOLDER and blob_store is not None:
+            original = blob_store.get(candidate_id, path[len(ATTACHMENT_PREFIX) :])
+            # 原件丢了也不拦提交，写回占位，评审时能看出来
+            files[target] = original if original is not None else content.encode("utf-8")
+        else:
+            files[target] = content.encode("utf-8")
     branch = f"asset/{candidate['name']}-{candidate_id[:6]}"
     repo_port.create_branch(target_repo, branch)
     sha = repo_port.commit_files(

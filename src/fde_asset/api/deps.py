@@ -13,6 +13,7 @@ from fastapi import Depends, Header, HTTPException, Request
 
 from fde_asset.core.db import create_engine_for, init_db
 from fde_asset.modules.leads.rules import LocalActivitySource
+from fde_asset.platform.blobs import BlobStore
 from fde_asset.platform.identity import LocalDirectory, Principal, PrincipalNotFound
 from fde_asset.platform.repo.local_git import LocalGitRepo
 from fde_asset.platform.repo.ports import RepoRef
@@ -26,6 +27,7 @@ class ServiceContext:
     repo_port: LocalGitRepo
     directory: LocalDirectory
     activity: LocalActivitySource
+    blob_store: BlobStore
 
     def repos(self) -> list[RepoRef]:
         """已注册的资产仓库：company / dept-* / 项目仓库（本地按目录约定发现）。"""
@@ -65,6 +67,7 @@ def build_context(settings: AssetSettings | None = None) -> ServiceContext:
         repo_port=LocalGitRepo(settings.repos),
         directory=LocalDirectory(settings.root / "directory.json"),
         activity=LocalActivitySource(settings.root / "activity.json"),
+        blob_store=BlobStore(settings.blob_dir),
     )
 
 
