@@ -8,12 +8,14 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import select
 
 from fde_asset.api.deps import ServiceContext, get_context, get_principal
-from fde_asset.core.db import asset_index_findings
+from fde_asset.core.db import asset_index_findings, assets
 from fde_asset.modules.asset import catalog
-from fde_asset.modules.asset import matching, snapshot, sop, usage
+from fde_asset.modules.asset import feedback, matching, snapshot, sop, usage
 from fde_asset.modules.asset.indexer import index_all
 from fde_asset.modules.asset.manifest import KIND_RULES
+from fde_asset.modules.harvest import service as harvest_service
 from fde_asset.platform.identity import Principal
+from fde_asset.platform import settings_store
 from fde_asset.platform.refs.wiki import parse_refs
 
 router = APIRouter(prefix="/api/v1", tags=["assets"])
@@ -214,6 +216,106 @@ def build_snapshot(
         "index_truncated": result.index_truncated,
         "skipped": result.skipped,
     }
+
+
+@router.post("/assets/{asset_id}/feedback")
+def submit_feedback(
+    asset_id: str,
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """用过之后表个态；选「已过时」会自动起一份修订草稿交给负责人。"""
+    verdict = payload.get("verdict", "")
+    note = payload.get("note", "")
+    try:
+        result = feedback.submit(
+            context.engine,
+            principal,
+            asset_id=asset_id,
+            verdict=verdict,
+            note=note,
+            engagement_slug=payload.get("engagement_slug", ""),
+        )
+    except feedback.FeedbackError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    if verdict == "outdated" and payload.get("draft_revision", True):
+        with context.engine.connect() as conn:
+            row = conn.execute(select(assets).where(assets.c.asset_id == asset_id)).first()
+        if row is not None:
+            draft = feedback.revision_draft_payload(row, note, principal.user_id)
+            try:
+                candidate = harvest_service.create_draft(
+                    context.engine,
+                    principal,
+                    harvest_service.CandidateInput(
+                        kind=draft["kind"],
+                        name=draft["name"],
+                        title=draft["title"],
+                        scope=draft["scope"],
+                        department_code=draft["department_code"],
+                        engagement_slug=draft["engagement_slug"],
+                        origin="feedback",
+                        source={
+                            "origin": "feedback",
+                            "note": f"{principal.user_id} 反馈已过时：{note}",
+                        },
+                    ),
+                )
+            except harvest_service.HarvestError:
+                candidate = None
+            if candidate is not None:
+                feedback.attach_candidate(
+                    context.engine, asset_id, principal.user_id, candidate["candidate_id"]
+                )
+                result["candidate_id"] = candidate["candidate_id"]
+    return result
+
+
+@router.get("/assets/{asset_id}/feedback")
+def read_feedback(
+    asset_id: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    if catalog.get_asset(context.engine, principal, asset_id) is None:
+        raise HTTPException(status_code=404, detail="资产不存在或无权访问")
+    return feedback.summary(context.engine, asset_id)
+
+
+@router.get("/governance/signals")
+def governance_signals(
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """负责人待办：我负责的资产收到的负面反馈，以及被反复拒绝的推荐。"""
+    return feedback.owner_signals(context.engine, principal)
+
+
+@router.get("/settings")
+def read_settings(
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    return {"items": settings_store.describe(context.engine)}
+
+
+@router.put("/settings")
+def write_settings(
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    if not principal.is_admin:
+        raise HTTPException(status_code=403, detail="只有平台管理员能改系统配置")
+    try:
+        values = settings_store.update(
+            context.engine, payload.get("values", {}), updated_by=principal.user_id
+        )
+    except settings_store.SettingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    return {"values": values, "items": settings_store.describe(context.engine)}
 
 
 @router.get("/kinds")
