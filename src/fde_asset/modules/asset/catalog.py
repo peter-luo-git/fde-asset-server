@@ -94,7 +94,7 @@ def search(engine: Engine, principal: Principal, query: CatalogQuery) -> dict[st
     statement = _base_select(principal, query)
     with engine.connect() as conn:
         total = conn.execute(select(func.count()).select_from(statement.subquery())).scalar_one()
-        reuse_map = _reuse_counts(conn)
+        reuse_map = reuse_counts(conn)
         usage_map = _usage_counts(conn)
         if query.sort == "title":
             statement = statement.order_by(assets.c.title)
@@ -116,7 +116,7 @@ def get_asset(engine: Engine, principal: Principal, asset_id: str) -> dict[str, 
         ).first()
         if row is None:
             return None
-        reuse = _reuse_counts(conn).get(asset_id, 0)
+        reuse = reuse_counts(conn).get(asset_id, 0)
         usage = _usage_counts(conn).get(asset_id, 0)
     return _row_to_dict(row, reuse, usage)
 
@@ -159,7 +159,7 @@ def resolve_ref(
     }
 
 
-def _reuse_counts(conn) -> dict[str, int]:
+def reuse_counts(conn) -> dict[str, int]:
     """复用项目数 = 来源项目以外的不同项目数（使用 + 引用）。"""
     counts: dict[str, set[str]] = {}
     source_map: dict[str, str] = {}

@@ -18,6 +18,7 @@ from fde_asset.core.db import asset_index_findings, asset_relations, assets, rec
 from fde_asset.platform.extract import extract_text
 from fde_asset.platform.refs.wiki import parse_refs
 from fde_asset.platform.repo.ports import RepoRef
+from fde_asset.modules.asset.grading import refresh_grades
 from fde_asset.modules.asset.manifest import (
     KIND_RULES,
     Finding,
@@ -352,4 +353,7 @@ def _finding(conn, repo: RepoRef, item: DiscoveredAsset, code: str, message: str
 
 
 def index_all(engine: Engine, repo_port, repos: Iterable[RepoRef], **kwargs) -> list[IndexReport]:
-    return [index_repository(engine, repo_port, repo, **kwargs) for repo in repos]
+    reports = [index_repository(engine, repo_port, repo, **kwargs) for repo in repos]
+    # 等级由复用情况决定，不取 asset.yaml 里写的值；入库后统一重算一次
+    refresh_grades(engine)
+    return reports

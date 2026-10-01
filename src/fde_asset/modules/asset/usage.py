@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import and_, func, select
 from sqlalchemy.engine import Engine
 
+from fde_asset.modules.asset.grading import refresh_grades
 from fde_asset.core.db import asset_references, asset_usages, assets, record_event
 
 EVENTS = {"loaded", "read", "applied"}
@@ -137,6 +138,9 @@ def record_usages(engine: Engine, items: list[UsageInput]) -> dict[str, Any]:
                 }
                 record_event(conn, "asset.reused_first_time", payload)
                 notifications.append(payload)
+    if accepted:
+        # 复用项目数可能变了，等级跟着重算
+        refresh_grades(engine)
     return {
         "accepted": accepted,
         "duplicated": duplicated,
@@ -187,4 +191,5 @@ def record_reference(
                 "engagement_slug": engagement_slug,
             },
         )
+    refresh_grades(engine)
     return True
