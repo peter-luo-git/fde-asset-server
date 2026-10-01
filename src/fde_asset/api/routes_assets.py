@@ -9,7 +9,8 @@ from sqlalchemy import select
 
 from fde_asset.api.deps import ServiceContext, get_context, get_principal
 from fde_asset.core.db import asset_index_findings
-from fde_asset.modules.asset import catalog, snapshot, sop, usage
+from fde_asset.modules.asset import catalog
+from fde_asset.modules.asset import matching, snapshot, sop, usage
 from fde_asset.modules.asset.indexer import index_all
 from fde_asset.platform.identity import Principal
 from fde_asset.platform.refs.wiki import parse_refs
@@ -193,6 +194,26 @@ def build_snapshot(
         "index_truncated": result.index_truncated,
         "skipped": result.skipped,
     }
+
+
+@router.post("/match")
+def match_assets(
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """按项目/工作项/Agent 的上下文推荐该带哪些资产，每条都带推荐理由。"""
+    match_context = matching.MatchContext(
+        title=payload.get("title", ""),
+        description=payload.get("description", ""),
+        industry=payload.get("industry", ""),
+        department_code=payload.get("department_code", "") or principal.department_code,
+        engagement_slug=payload.get("engagement_slug", ""),
+        agent_role=payload.get("agent_role", ""),
+        stage=payload.get("stage", ""),
+        keywords=list(payload.get("keywords", []) or []),
+    )
+    return matching.match(context.engine, principal, match_context)
 
 
 @router.post("/admin/assets/reindex")
