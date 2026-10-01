@@ -73,22 +73,25 @@ def _haystack(row: Any) -> str:
 
 def _score(
     row: Any, context: MatchContext, tokens: set[str], reuse: int
-) -> tuple[float, list[str]]:
+) -> tuple[float, float, list[str]]:
+    """返回（相关度, 总分, 理由）。
+
+    相关度只看内容信号（行业、关键词）；作用域、复用、等级只做加权。
+    一条完全不沾边的资产不能仅凭「本部门」就被推出来——否则部门里所有资产都会被推。
+    """
     reasons: list[str] = []
+    relevance = 0.0
     score = 0.0
 
     industries = json.loads(row.industry_json or "[]")
     if context.industry and context.industry in industries:
-        score += 3
+        relevance += 3
         reasons.append(f"行业命中 {context.industry}")
-    elif context.industry and not industries:
-        score += 0.5
-        reasons.append("通用资产，不限行业")
 
     haystack = _haystack(row)
     hits = sorted({token for token in tokens if token and token in haystack})
     if hits:
-        score += min(len(hits), 4) * 1.5
+        relevance += min(len(hits), 4) * 1.5
         reasons.append("关键词命中 " + "、".join(hits[:4]))
 
     if row.scope == "engagement" and row.engagement_slug == context.engagement_slug:
@@ -109,7 +112,7 @@ def _score(
         score += 0.5
         reasons.append("银级")
 
-    return score, reasons
+    return relevance, relevance + score, reasons
 
 
 def _item(row: Any, score: float, reasons: list[str], reuse: int) -> dict[str, Any]:
@@ -155,17 +158,16 @@ def match(engine: Engine, principal: Principal, context: MatchContext) -> dict[s
     }
     for row in rows:
         reuse = reuse_map.get(row.asset_id, 0)
-        score, reasons = _score(row, context, tokens, reuse)
+        relevance, score, reasons = _score(row, context, tokens, reuse)
         if row.kind == "Rule":
             # 规范一律带上：红线不挑场景
             buckets["rules"].append(_item(row, score + 10, ["规范强制注入"] + reasons, reuse))
         elif row.kind == "Sop":
-            buckets["sops"].append(_item(row, score, reasons, reuse))
-        elif row.kind == "Skill":
-            if score > 0:
-                buckets["skills"].append(_item(row, score, reasons, reuse))
-        elif score > 0:
-            buckets["knowledge"].append(_item(row, score, reasons, reuse))
+            # 流程没命中关键词也给一条兜底，免得新项目完全没有流程可依
+            buckets["sops"].append(_item(row, score, reasons or ["通用流程"], reuse))
+        elif relevance > 0:
+            bucket = "skills" if row.kind == "Skill" else "knowledge"
+            buckets[bucket].append(_item(row, score, reasons, reuse))
 
     for key in buckets:
         buckets[key].sort(key=lambda item: item["score"], reverse=True)

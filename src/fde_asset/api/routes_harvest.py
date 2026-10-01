@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from urllib.parse import quote
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
@@ -142,7 +143,7 @@ def patch_candidate(
         if "meta" in payload:
             service.update_meta(context.engine, candidate_id, payload["meta"])
         if "files" in payload:
-            service.update_candidate(context.engine, candidate_id, payload["files"])
+            service.merge_files(context.engine, candidate_id, payload["files"])
     except service.HarvestError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     service.run_checks(context.engine, candidate_id, _scan_context(context))
@@ -190,10 +191,14 @@ def download_attachment(
         raise HTTPException(status_code=422, detail=str(exc)) from None
     if content is None:
         raise HTTPException(status_code=404, detail="附件不存在")
+    # 中文文件名不能直接塞进 HTTP 头（头只认 latin-1），按 RFC 5987 编码
+    quoted = quote(filename)
     return Response(
         content=content,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{quoted}\"; filename*=UTF-8''{quoted}"
+        },
     )
 
 

@@ -74,3 +74,17 @@ def test_refs_are_ready_to_paste(indexed) -> None:
     result = match(indexed.engine, CHEN, MatchContext(title="保单导入"))
     for item in result["rules"]:
         assert item["ref"].startswith("[[") and item["ref"].endswith("]]")
+
+
+def test_department_alone_does_not_make_it_relevant(indexed) -> None:
+    """只凭「本部门」不能把不相干的资产推出来，否则部门里所有资产都会被推。"""
+    result = match(
+        indexed.engine,
+        CHEN,
+        MatchContext(title="zzqqxx vvbbnn", department_code="data-intel"),
+    )
+    assert result["summary"]["knowledge"] == 0
+    assert result["summary"]["skills"] == 0
+    # 规范和流程仍然要有：红线必带，流程兜底
+    assert result["summary"]["rules"] > 0
+    assert result["summary"]["sops"] > 0

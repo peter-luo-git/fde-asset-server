@@ -162,3 +162,13 @@ def test_update_meta_rewrites_asset_yaml(context) -> None:
     assert document["spec"]["lifecycle"] == "stable"
     # 标题同时更新到候选记录，工作台列表才会跟着变
     assert updated["title"] == "改过的标题"
+
+
+def test_patch_files_merges_instead_of_replacing(context) -> None:
+    """只传正文时，asset.yaml 不能被删掉——PATCH 是合并不是整份替换。"""
+    candidate = _draft(context)
+    cid = candidate["candidate_id"]
+    service.merge_files(context.engine, cid, {"README.md": "# 只改正文"})
+    files = service.get_candidate(context.engine, cid)["files"]
+    assert "asset.yaml" in files
+    assert files["README.md"] == "# 只改正文"

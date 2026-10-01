@@ -299,6 +299,14 @@ def get_candidate(engine: Engine, candidate_id: str) -> dict[str, Any]:
     return data
 
 
+def merge_files(engine: Engine, candidate_id: str, files: dict[str, str]) -> dict[str, Any]:
+    """按文件名合并（PATCH 语义）。整份替换会把 asset.yaml 这类没传的文件删掉。"""
+    candidate = get_candidate(engine, candidate_id)
+    merged = dict(candidate["files"])
+    merged.update(files)
+    return update_candidate(engine, candidate_id, merged)
+
+
 #: 草稿里附件的占位内容；真正的原件在 BlobStore 里，提交时才materialize 进仓库
 ATTACHMENT_PLACEHOLDER = "<binary>"
 ATTACHMENT_PREFIX = "attachments/"
