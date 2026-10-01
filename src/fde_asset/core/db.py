@@ -199,6 +199,67 @@ asset_leads = Table(
     UniqueConstraint("rule", "subject_type", "subject_id", name="uq_lead_subject"),
 )
 
+asset_recommendations = Table(
+    "asset_recommendations",
+    metadata,
+    Column("recommendation_id", String(64), primary_key=True),
+    Column("asset_id", String(64), nullable=False),
+    Column("target_type", String(16), nullable=False),  # engagement | agent
+    Column("target_id", String(64), nullable=False),
+    Column("target_owner", String(64), nullable=False, default=""),
+    Column("source", String(16), nullable=False, default="self"),  # self | dept_admin | auto
+    Column("recommended_by", String(64), nullable=False, default=""),
+    Column("reason_json", Text, nullable=False, default="[]"),
+    Column("score", Float, nullable=False, default=0),
+    # suggested（算出来还没动）| sent（推给别人了）| accepted | declined
+    Column("status", String(16), nullable=False, default="suggested"),
+    Column("decided_by", String(64), nullable=False, default=""),
+    Column("decided_at", DateTime(timezone=True)),
+    Column("note", Text, nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=_now),
+    UniqueConstraint("asset_id", "target_type", "target_id", name="uq_recommendation_target"),
+)
+
+#: 接受推荐后写进来：某个项目或 Agent 关联了哪些资产
+target_assets = Table(
+    "target_assets",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("target_type", String(16), nullable=False),  # engagement | agent
+    Column("target_id", String(64), nullable=False),
+    Column("asset_id", String(64), nullable=False),
+    Column("source", String(16), nullable=False, default="manual"),  # manual | recommendation
+    Column("created_by", String(64), nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    UniqueConstraint("target_type", "target_id", "asset_id", name="uq_target_asset"),
+)
+
+#: 用过之后的反馈：这份资产到底帮没帮上忙
+asset_feedback = Table(
+    "asset_feedback",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("asset_id", String(64), nullable=False),
+    Column("verdict", String(16), nullable=False),  # helpful | not_helpful | outdated
+    Column("note", Text, nullable=False, default=""),
+    Column("engagement_slug", String(64), nullable=False, default=""),
+    Column("created_by", String(64), nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    #: 选「已过时」时自动起草的修订草稿
+    Column("candidate_id", String(64), nullable=False, default=""),
+)
+
+#: 系统配置：大小上限、重排开关等，改完即生效，不用重启
+system_settings = Table(
+    "system_settings",
+    metadata,
+    Column("key", String(64), primary_key=True),
+    Column("value", Text, nullable=False, default=""),
+    Column("updated_by", String(64), nullable=False, default=""),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=_now),
+)
+
 work_item_assets = Table(
     "work_item_assets",
     metadata,

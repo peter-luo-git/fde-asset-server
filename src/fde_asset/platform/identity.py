@@ -93,6 +93,14 @@ class LocalDirectory:
         """开发目录里的全部用户，用来算某个作用域下谁有评审权。"""
         return sorted(self._load().get("users", {}))
 
+    def engagements(self) -> dict[str, dict]:
+        """项目清单：推荐要按项目上下文匹配，正式环境由 fde-server 提供。"""
+        return self._load().get("engagements", {})
+
+    def agents(self) -> dict[str, dict]:
+        """Agent 清单（按预设 key 索引），同上。"""
+        return self._load().get("agents", {})
+
     def write(self, data: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -113,6 +121,12 @@ class HttpDirectory:
     def users(self) -> list[str]:  # pragma: no cover - 正式环境由 fde-server 提供名单
         """正式环境不从资产服务枚举用户；评审人名单由 fde-server 给。"""
         return []
+
+    def engagements(self) -> dict[str, dict]:  # pragma: no cover - 同上
+        return {}
+
+    def agents(self) -> dict[str, dict]:  # pragma: no cover - 同上
+        return {}
 
     def resolve(self, user_id: str) -> Principal:
         now = time.monotonic()

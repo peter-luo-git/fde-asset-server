@@ -709,7 +709,52 @@ DIRECTORY: dict[str, Any] = {
             "is_asset_reviewer": True,
             "memberships": [],
         },
-    }
+    },
+    # 推荐要按项目与 Agent 的上下文匹配；正式环境这两份清单由 fde-server 提供
+    "engagements": {
+        "policy-import": {
+            "title": "华安人寿保单批量导入",
+            "department_code": "finance",
+            "owner": "wang",
+            "industry": "insurance",
+            "stage": "开发与联调",
+            "description": "把 500 万行历史保单从 Oracle 迁到 PostgreSQL，要求对账零差异",
+        },
+        "core-migration": {
+            "title": "城商行核心系统迁移",
+            "department_code": "finance",
+            "owner": "wang",
+            "industry": "banking",
+            "stage": "调研与方案确认",
+            "description": "核心系统从主机下移，双跑比对后割接",
+        },
+        "ops-dashboard": {
+            "title": "内部运维看板",
+            "department_code": "data-intel",
+            "owner": "chen",
+            "industry": "",
+            "stage": "开发与联调",
+            "description": "给运维同事看的任务与告警面板",
+        },
+    },
+    "agents": {
+        "import-coder": {
+            "title": "导入编码助手",
+            "department_code": "data-intel",
+            "owner": "chen",
+            "role": "coding_agent",
+            "description": "负责保单导入相关的编码任务，常见活是改批次大小、处理日期格式、排查超时",
+            "skills": ["policy-date-parse"],
+        },
+        "migration-reviewer": {
+            "title": "迁移评审助手",
+            "department_code": "finance",
+            "owner": "wang",
+            "role": "review_agent",
+            "description": "评审数据迁移方案与割接计划，重点看回滚预案和双跑比对",
+            "skills": [],
+        },
+    },
 }
 
 COMPLIANCE: dict[str, Any] = {
