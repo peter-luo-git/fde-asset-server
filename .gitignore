@@ -9,3 +9,7 @@ data/
 .venv/
 data/
 .demo-data/
+
+# 本地模型密钥，绝不提交
+.env.local
+.env
