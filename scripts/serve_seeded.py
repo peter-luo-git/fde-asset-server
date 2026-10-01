@@ -40,16 +40,22 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--data-dir", type=Path, default=None)
+    parser.add_argument("--host", default="127.0.0.1", help="绑定地址；远程手工验收用 0.0.0.0")
     parser.add_argument(
-        "--host", default="127.0.0.1", help="绑定地址；远程手工验收用 0.0.0.0"
+        "--no-seed",
+        action="store_true",
+        help="沿用数据目录里已有的资产，不重新灌种子（保住手工造的数据）",
     )
     args = parser.parse_args()
 
     data_dir = args.data_dir or Path(tempfile.mkdtemp(prefix="fde-asset-e2e-"))
     settings = AssetSettings(data_dir=data_dir)
     settings.ensure_dirs()
-    summary = seed(settings)
-    print(f"seeded: {summary}", flush=True)
+    if args.no_seed:
+        print("reusing existing data dir, skip seeding", flush=True)
+    else:
+        summary = seed(settings)
+        print(f"seeded: {summary}", flush=True)
 
     # 直接在进程内建索引，调用方一连上就能看到资产，不必先发管理接口。
     context = build_context(settings)
