@@ -61,4 +61,8 @@ class AssetSettings(BaseSettings):
 
 
 def load_settings() -> AssetSettings:
+    # 本地开发的模型密钥放在仓库根的 .env.local（已 gitignore）
+    from fde_asset.platform.llm.client import load_env_file
+
+    load_env_file(Path(__file__).resolve().parents[2] / ".env.local")
     return AssetSettings()

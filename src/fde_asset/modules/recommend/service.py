@@ -24,7 +24,7 @@ from fde_asset.core.db import (
     record_event,
     target_assets,
 )
-from fde_asset.modules.asset import matching
+from fde_asset.modules.asset import matching, rerank
 from fde_asset.modules.asset.visibility import visibility_clause
 from fde_asset.platform.identity import Principal
 
@@ -100,9 +100,18 @@ def department_targets(directory, department_code: str) -> list[Target]:
 
 
 def compute(
-    engine: Engine, principal: Principal, target: Target, *, limit: int = DEFAULT_LIMIT
-) -> list[dict[str, Any]]:
-    """算出候选推荐（不落库）。四组结果拉平后按得分取前 N。"""
+    engine: Engine,
+    principal: Principal,
+    target: Target,
+    *,
+    limit: int = DEFAULT_LIMIT,
+    llm: Any = None,
+) -> tuple[list[dict[str, Any]], str]:
+    """算出候选推荐（不落库），返回（结果, 用的什么模式）。
+
+    两步：结构化粗排把全库收敛到模型读得完的集合，再交给模型按内容理解精排并写理由。
+    没配模型或模型出错就只用粗排，推荐不会因此瘫掉。
+    """
     result = matching.match(engine, principal, target.context())
     flat: list[dict[str, Any]] = []
     for group in ("rules", "sops", "skills", "knowledge"):
@@ -112,7 +121,25 @@ def compute(
 
     linked = {row.asset_id for row in _linked_assets(engine, target.target_type, target.target_id)}
     # 已经关联过的不再推荐，免得同一份资产反复出现在待办里
-    return [item for item in flat if item["asset_id"] not in linked][:limit]
+    pool = [item for item in flat if item["asset_id"] not in linked]
+
+    # 规范是红线，不参与精排，永远带上
+    rules = [item for item in pool if item["group"] == "rules"]
+    others = [item for item in pool if item["group"] != "rules"]
+    picked, mode = rerank.rerank(
+        others,
+        {
+            "标题": target.title or target.target_id,
+            "描述": target.description,
+            "行业": target.industry,
+            "阶段": target.stage,
+            "类型": "项目" if target.target_type == "engagement" else "Agent",
+            "Agent 角色": target.role,
+        },
+        llm,
+        limit=max(limit - len(rules), 1),
+    )
+    return (rules + picked)[:limit], mode
 
 
 def _linked_assets(engine: Engine, target_type: str, target_id: str):

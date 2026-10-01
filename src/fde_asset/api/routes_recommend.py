@@ -8,7 +8,9 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from fde_asset.api.deps import ServiceContext, get_context, get_principal
 from fde_asset.modules.recommend import service
+from fde_asset.platform import settings_store
 from fde_asset.platform.identity import Principal
+from fde_asset.platform.llm.client import build_client
 
 router = APIRouter(prefix="/api/v1", tags=["recommend"])
 
@@ -82,10 +84,21 @@ def compute(
 ) -> dict[str, Any]:
     """算推荐，不落库。页面上先给人看，人点了再保存或推送。"""
     target = _target(context, payload)
-    items = service.compute(
-        context.engine, principal, target, limit=int(payload.get("limit", service.DEFAULT_LIMIT))
+    # 快速模式只跑关键词粗排；精确模式再交给模型按内容理解精排并写理由
+    accurate = payload.get("mode", "accurate") != "fast"
+    enabled = bool(settings_store.get(context.engine, "rerank_enabled"))
+    llm = None
+    if accurate and enabled:
+        llm = build_client(str(settings_store.get(context.engine, "rerank_model") or ""))
+    items, mode = service.compute(
+        context.engine,
+        principal,
+        target,
+        limit=int(payload.get("limit", service.DEFAULT_LIMIT)),
+        llm=llm,
     )
     return {
+        "mode": mode,
         "target": {
             "target_type": target.target_type,
             "target_id": target.target_id,
