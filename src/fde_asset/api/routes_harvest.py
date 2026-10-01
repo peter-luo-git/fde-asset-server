@@ -437,6 +437,8 @@ def workbench(
                 "title": r.title,
                 "scope": r.scope,
                 "lifecycle": r.lifecycle,
+                "owner_ref": r.owner_ref,
+                "owner_kind": r.owner_kind,
             }
             for r in owned
         ],

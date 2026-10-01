@@ -24,6 +24,10 @@ def list_assets(
     scope: str | None = None,
     industry: str | None = None,
     owner_department: str | None = None,
+    owner: str | None = None,
+    owner_kind: str | None = None,
+    # personal=我个人负责；department=我部门负责；any=两者都算
+    mine: str | None = None,
     lifecycle: str | None = None,
     quality: str | None = None,
     nature: str | None = None,
@@ -35,11 +39,26 @@ def list_assets(
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
+    if mine == "personal":
+        owner = f"user:{principal.user_id}"
+    elif mine == "department":
+        owner = f"department:{principal.department_code}"
+    elif mine == "any":
+        # 「我负责的」= 我本人 + 我所在部门，和工作台口径一致
+        owner_kind = None
+        owner = None
     query = catalog.CatalogQuery(
         kind=kind,
         scope=scope,
         industry=industry,
         owner_department=owner_department,
+        owner=owner,
+        owner_kind=owner_kind,
+        owner_any=(
+            [f"user:{principal.user_id}", f"department:{principal.department_code}"]
+            if mine == "any"
+            else None
+        ),
         lifecycle=lifecycle,
         quality=quality,
         nature=nature,

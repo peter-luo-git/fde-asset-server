@@ -21,6 +21,12 @@ class CatalogQuery:
     scope: str | None = None
     industry: str | None = None
     owner_department: str | None = None
+    #: 精确到某一个负责人，形如 user:chen 或 department:data-intel
+    owner: str | None = None
+    #: 只看个人负责的还是部门负责的：user | department
+    owner_kind: str | None = None
+    #: 命中其中任意一个负责人即可（「我负责的」= 我本人 + 我部门）
+    owner_any: list[str] | None = None
     lifecycle: str | None = None
     quality: str | None = None
     nature: str | None = None
@@ -68,6 +74,12 @@ def _base_select(principal: Principal, query: CatalogQuery) -> Select:
                 assets.c.owner_kind == "department", assets.c.owner_value == query.owner_department
             )
         )
+    if query.owner:
+        statement = statement.where(assets.c.owner_ref == query.owner)
+    if query.owner_kind:
+        statement = statement.where(assets.c.owner_kind == query.owner_kind)
+    if query.owner_any:
+        statement = statement.where(assets.c.owner_ref.in_(query.owner_any))
     if query.lifecycle:
         statement = statement.where(assets.c.lifecycle == query.lifecycle)
     elif not query.include_deprecated:
