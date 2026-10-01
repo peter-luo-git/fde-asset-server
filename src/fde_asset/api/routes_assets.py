@@ -12,6 +12,7 @@ from fde_asset.core.db import asset_index_findings
 from fde_asset.modules.asset import catalog
 from fde_asset.modules.asset import matching, snapshot, sop, usage
 from fde_asset.modules.asset.indexer import index_all
+from fde_asset.modules.asset.manifest import KIND_RULES
 from fde_asset.platform.identity import Principal
 from fde_asset.platform.refs.wiki import parse_refs
 
@@ -212,6 +213,27 @@ def build_snapshot(
         "index_bytes": result.index_bytes,
         "index_truncated": result.index_truncated,
         "skipped": result.skipped,
+    }
+
+
+@router.get("/kinds")
+def list_kinds() -> dict[str, Any]:
+    """七种资产类型各自的必填要求，前端据此标红必填项，避免两边各写一份口径。"""
+    return {
+        "items": [
+            {
+                "kind": rule.kind,
+                "label": rule.label,
+                "main_file": rule.main_file,
+                "directory": rule.directory,
+                "requires_summary": rule.requires_summary,
+                "requires_applicability": rule.requires_applicability,
+                "required_sections": list(rule.required_sections),
+                "company_required_sections": list(rule.company_required_sections),
+                "required_spec_fields": list(rule.required_spec_fields),
+            }
+            for rule in KIND_RULES.values()
+        ]
     }
 
 

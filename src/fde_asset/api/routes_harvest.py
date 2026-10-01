@@ -122,10 +122,17 @@ def get_candidate(
         candidate = service.get_candidate(context.engine, candidate_id)
     except service.HarvestError:
         raise HTTPException(status_code=404, detail="候选不存在") from None
+    # 没提交之前草稿是私有的；提交之后，该作用域的评审人（如项目负责人）才能打开来评
+    may_review = candidate["status"] != "draft" and can_review(
+        principal,
+        candidate["scope"],
+        department_code=candidate["department_code"],
+        engagement_slug=candidate["engagement_slug"],
+    )
     if candidate["created_by"] != principal.user_id and not (
-        principal.is_admin or principal.is_asset_reviewer
+        principal.is_admin or principal.is_asset_reviewer or may_review
     ):
-        raise HTTPException(status_code=403, detail="草稿只有本人可见")
+        raise HTTPException(status_code=403, detail="草稿只有本人可见；提交后评审人才能打开")
     return candidate
 
 
@@ -140,14 +147,104 @@ def patch_candidate(
     if candidate["status"] != "draft":
         raise HTTPException(status_code=409, detail="只有草稿可以修改")
     try:
-        if "meta" in payload:
-            service.update_meta(context.engine, candidate_id, payload["meta"])
+        # 先合并文件再写元数据：两者都传了 asset.yaml 时，以结构化的 meta 为准
         if "files" in payload:
             service.merge_files(context.engine, candidate_id, payload["files"])
+        if "meta" in payload:
+            service.update_meta(context.engine, candidate_id, payload["meta"])
     except service.HarvestError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     service.run_checks(context.engine, candidate_id, _scan_context(context))
     return service.get_candidate(context.engine, candidate_id)
+
+
+#: 不同作用域由谁评审，和 visibility.can_review 的规则一一对应
+REVIEWER_RULE = {
+    "company": "公司资产评审员（或平台管理员）",
+    "department": "本部门的资产评审员或部门主管",
+    "engagement": "本项目负责人",
+}
+
+
+@router.get("/harvest-candidates/{candidate_id}/review")
+def candidate_review(
+    candidate_id: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """草稿的评审流程：当前进度、该谁评、历次记录与意见。
+
+    作者要看得到被打回的理由，否则不知道该改什么。
+    """
+    candidate = get_candidate(candidate_id, context, principal)
+    with context.engine.connect() as conn:
+        rows = conn.execute(
+            select(asset_reviews)
+            .where(asset_reviews.c.candidate_id == candidate_id)
+            .order_by(asset_reviews.c.submitted_at.desc())
+        ).fetchall()
+
+    history = [
+        {
+            "review_id": r.review_id,
+            "status": r.status,
+            "scope": r.scope,
+            "repo": r.repo,
+            "branch": r.branch,
+            "summary": r.summary,
+            "submitted_by": r.submitted_by,
+            "submitted_at": r.submitted_at.isoformat(),
+            "decided_by": r.decided_by,
+            "decided_at": r.decided_at.isoformat() if r.decided_at else "",
+            "note": r.note,
+        }
+        for r in rows
+    ]
+    current = next((item for item in history if item["status"] == "open"), None)
+
+    # 开发模式能从目录算出具体人；正式环境名单由 fde-server 提供，这里返回空列表
+    reviewers: list[dict[str, str]] = []
+    for user_id in context.directory.users():
+        try:
+            other = context.directory.resolve(user_id)
+        except Exception:  # noqa: BLE001 - 目录里有坏数据不该影响主流程
+            continue
+        if other.user_id == candidate["created_by"]:
+            continue  # 自己不评自己
+        if can_review(
+            other,
+            candidate["scope"],
+            department_code=candidate["department_code"],
+            engagement_slug=candidate["engagement_slug"],
+        ):
+            reviewers.append(
+                {"user_id": other.user_id, "display_name": other.display_name or other.user_id}
+            )
+
+    if candidate["status"] == "submitted":
+        stage = "waiting"
+    elif any(item["status"] == "merged" for item in history):
+        stage = "approved"
+    elif history and history[0]["status"] == "rejected":
+        stage = "rejected"
+    else:
+        stage = "draft"
+
+    return {
+        "candidate_id": candidate_id,
+        "stage": stage,
+        "scope": candidate["scope"],
+        "reviewer_rule": REVIEWER_RULE.get(candidate["scope"], ""),
+        "reviewers": reviewers,
+        "current": current,
+        "history": history,
+        "can_review_myself": can_review(
+            principal,
+            candidate["scope"],
+            department_code=candidate["department_code"],
+            engagement_slug=candidate["engagement_slug"],
+        ),
+    }
 
 
 @router.post("/harvest-candidates/{candidate_id}/attachments")

@@ -605,7 +605,8 @@ def decide(
         conn.execute(
             update(harvest_candidates)
             .where(harvest_candidates.c.candidate_id == review.candidate_id)
-            .values(status=status, updated_at=_now())
+            # 打回的候选回到草稿状态，作者才能按意见改完再交；评审记录保留 rejected 供追溯
+            .values(status="draft" if status == "rejected" else status, updated_at=_now())
         )
         record_event(
             conn,
