@@ -127,6 +127,19 @@ def _linked_assets(engine: Engine, target_type: str, target_id: str):
         ).fetchall()
 
 
+def visible_to(engine: Engine, principal: Principal, asset_ids: list[str]) -> set[str]:
+    """这批资产里，这个人能看见哪些。"""
+    if not asset_ids:
+        return set()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(assets.c.asset_id).where(
+                assets.c.asset_id.in_(asset_ids), visibility_clause(principal)
+            )
+        ).fetchall()
+    return {row.asset_id for row in rows}
+
+
 def save(
     engine: Engine,
     principal: Principal,

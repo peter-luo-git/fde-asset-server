@@ -113,8 +113,32 @@ def send(
     items = payload.get("items") or []
     if not items:
         raise HTTPException(status_code=422, detail="没有选中任何资产")
+
+    # 推给别人之前先确认对方看得见：推一个他打不开的资产，只会变成一条死待办
+    skipped_invisible: list[str] = []
+    if target.owner and target.owner != principal.user_id:
+        try:
+            owner = context.directory.resolve(target.owner)
+        except Exception:  # noqa: BLE001 - 目录查不到就不做这层过滤
+            owner = None
+        if owner is not None:
+            allowed = service.visible_to(
+                context.engine, owner, [item["asset_id"] for item in items]
+            )
+            skipped_invisible = [
+                item["asset_id"] for item in items if item["asset_id"] not in allowed
+            ]
+            items = [item for item in items if item["asset_id"] in allowed]
+    if not items:
+        raise HTTPException(
+            status_code=422,
+            detail="选中的资产对方都看不到，换成公司级资产，或先把它们的作用域放开",
+        )
+
     source = "dept_admin" if target.owner != principal.user_id else "self"
-    return service.save(context.engine, principal, target, items, source=source, status=status)
+    result = service.save(context.engine, principal, target, items, source=source, status=status)
+    result["skipped_invisible"] = skipped_invisible
+    return result
 
 
 @router.get("/recommend/list")

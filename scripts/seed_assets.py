@@ -547,6 +547,99 @@ CUST-A（保险行业），POC 周期三周，两人投入。
     }
 
 
+APP_CONSOLE_README = """# 保单导入控制台
+
+## 结论
+给运营盯批量导入进度与对账差异的面板，500 万行级别实测可用。
+
+## 怎么跑起来
+已经部署在内网演示环境，不需要自己起。要本地跑的话 `docker compose up`，依赖一个 PostgreSQL。
+
+## 演示入口
+内网打开演示地址，用只读账号登录，先看「任务列表」再点进任一批次看对账差异。
+
+## 已知限制
+演示库里是脱敏后的假数据；导出功能关掉了。
+"""
+
+APP_LABELER_README = """# 标注小工具
+
+## 结论
+给数据标注同事用的快捷标注工具，自己业余写的，键盘流操作比现有工具快一倍。
+
+## 怎么跑起来
+仓库根目录有 Dockerfile，`docker build` 后跑起来监听 7001，没有外部依赖。
+
+## 演示入口
+目前只在我本机跑，想看的话找我开一下；镜像传上来之后可以在演示环境点启动。
+
+## 已知限制
+没有权限控制，标注结果存在容器里，重启就没了。
+"""
+
+
+def application_files() -> dict[str, bytes]:
+    """两个应用资产：一个内网已部署（A 档登记），一个本地容器化（B 档）。"""
+    files: dict[str, str] = {}
+    files["applications/policy-import-console/README.md"] = APP_CONSOLE_README
+    files["applications/policy-import-console/asset.yaml"] = _yaml(
+        "Application",
+        "policy-import-console",
+        "保单导入控制台",
+        "盯批量导入进度与对账差异的运营面板",
+        "department:data-intel",
+        industry=["insurance"],
+        suitable="需要人工盯批量任务的交付",
+        not_suitable="纯后台无人值守的任务",
+        tags=["导入", "对账"],
+        extra="""  sourceType: fcp
+  maturity: pilot
+  repo: https://gitea.internal/fde-apps/policy-import-console
+  runtime:
+    type: compose
+    entry: docker-compose.yml
+    ports: [8080]
+    healthcheck: /healthz
+    env: [DB_URL]
+  demo:
+    network: intranet
+    url: http://demo.fde.internal/policy-import-console
+    account: demo / demo123（只读）
+    reachable_from: 公司内网或办公 WiFi
+    note: 每晚 2 点重置数据""",
+    )
+
+    files["applications/quick-labeler/README.md"] = APP_LABELER_README
+    files["applications/quick-labeler/asset.yaml"] = _yaml(
+        "Application",
+        "quick-labeler",
+        "标注小工具",
+        "键盘流的数据标注工具，业余项目，比现有工具快一倍",
+        "user:chen",
+        industry=[],
+        suitable="小批量人工标注",
+        not_suitable="需要多人协作或审计留痕的标注",
+        tags=["标注", "效率"],
+        lifecycle="experimental",
+        extra="""  sourceType: external
+  maturity: poc
+  repo: https://github.com/example/quick-labeler
+  runtime:
+    type: container
+    entry: Dockerfile
+    ports: [7001]
+    healthcheck: /
+    env: []
+  demo:
+    network: local
+    url: ""
+    account: ""
+    reachable_from: 作者本机，镜像上传后可在演示环境启动
+    note: 标注结果存容器里，重启即丢""",
+    )
+    return {name: text.encode("utf-8") for name, text in files.items()}
+
+
 def department_files() -> dict[str, bytes]:
     files: dict[str, str] = {}
     files["skills/pg-vacuum-tuning/SKILL.md"] = """---
@@ -851,7 +944,10 @@ def seed(settings: AssetSettings) -> dict[str, Any]:
         name="dept-data-intel-assets", scope="department", department_code="data-intel"
     )
     result["department"] = git.commit_files(
-        department, "main", department_files(), "chore(assets): 部门级种子资产"
+        department,
+        "main",
+        {**department_files(), **application_files()},
+        "chore(assets): 部门级种子资产（含应用）",
     )
 
     engagement = RepoRef(name="policy-import", scope="engagement", engagement_slug="policy-import")

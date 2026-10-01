@@ -43,7 +43,8 @@ def test_index_three_repositories(context) -> None:
     reports = {r.repo: r for r in index_all(context.engine, context.repo_port, context.repos())}
     assert reports["company-assets"].indexed == 9
     assert reports["company-assets"].invalid == 2
-    assert reports["dept-data-intel-assets"].indexed == 2
+    # 部门仓库里除了两个知识资产，还有两个应用资产（内网已部署的 + 本地容器化的）
+    assert reports["dept-data-intel-assets"].indexed == 4
     assert reports["policy-import"].indexed == 2
 
 

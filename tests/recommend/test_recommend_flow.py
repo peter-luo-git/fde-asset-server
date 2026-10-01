@@ -41,11 +41,13 @@ def test_department_head_sends_and_owner_decides(client) -> None:
         json={"target_type": "engagement", "target_id": "policy-import", "items": items},
     )
     assert sent.status_code == 200, sent.text
-    assert sent.json()["created"] == 3
+    body = sent.json()
+    # 管理员看得到的资产，老王不一定看得到；推之前会先过滤掉，不制造死待办
+    assert body["created"] + len(body["skipped_invisible"]) == 3
 
-    # 老王是 policy-import 的负责人，应该在收件箱里看到
+    # 老王是 policy-import 的负责人，应该在收件箱里看到剩下的
     inbox = as_user(client, "wang").get("/api/v1/recommend/inbox").json()["items"]
-    assert len(inbox) == 3
+    assert len(inbox) == body["created"]
     assert all(item["status"] == "sent" for item in inbox)
 
     # 不相干的人收件箱是空的

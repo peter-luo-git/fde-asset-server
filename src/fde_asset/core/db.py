@@ -250,6 +250,22 @@ asset_feedback = Table(
     Column("candidate_id", String(64), nullable=False, default=""),
 )
 
+#: 应用资产的演示地址探活结果
+app_health = Table(
+    "app_health",
+    metadata,
+    Column("asset_id", String(64), primary_key=True),
+    # online | offline | unreachable（平台够不着，多半是内网或本机）| skipped
+    Column("status", String(16), nullable=False, default="unknown"),
+    Column("network", String(16), nullable=False, default=""),
+    Column("url", Text, nullable=False, default=""),
+    Column("http_status", Integer, nullable=False, default=0),
+    Column("latency_ms", Integer, nullable=False, default=0),
+    Column("detail", Text, nullable=False, default=""),
+    Column("checked_at", DateTime(timezone=True), nullable=False, default=_now),
+    Column("last_online_at", DateTime(timezone=True)),
+)
+
 #: 系统配置：大小上限、重排开关等，改完即生效，不用重启
 system_settings = Table(
     "system_settings",

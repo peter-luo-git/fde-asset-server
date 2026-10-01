@@ -203,7 +203,25 @@ KIND_RULES: dict[str, KindRule] = {
         nature="fact",
         knowledge=True,
     ),
+    # 应用：项目本身就是资产。别的资产拿来读，应用拿来跑——核心是能演示。
+    "Application": KindRule(
+        kind="Application",
+        label="应用",
+        main_file="README.md",
+        directory="applications",
+        required_sections=("结论", "怎么跑起来", "演示入口", "已知限制"),
+        required_spec_fields=("sourceType", "maturity"),
+        nature="fact",
+        knowledge=True,
+    ),
 }
+
+#: 应用资产的枚举取值
+APP_SOURCE_TYPES = {"fcp", "external"}
+APP_MATURITY = {"poc", "pilot", "production"}
+#: 演示地址的网络类型：公网能直接点开，内网要在公司网里，VPN 另说
+APP_NETWORKS = {"internet", "intranet", "vpn", "local"}
+APP_RUNTIME_TYPES = {"url", "static", "container", "compose"}
 
 CASE_TYPES = {"fault", "faq", "pitfall", "rejection", "counterexample", "edge"}
 SOP_LAYERS = {"L1", "L2", "L3"}
@@ -332,6 +350,39 @@ def validate_asset(
             findings.append(Finding("case_type_invalid", f"caseType 取值非法：{case_type}"))
         if case_type == "fault" and not extra.get("severity"):
             findings.append(Finding("severity_missing", "故障类 Case 需要 spec.severity"))
+    if manifest.kind == "Application":
+        source_type = extra.get("sourceType", "")
+        if source_type and source_type not in APP_SOURCE_TYPES:
+            findings.append(
+                Finding("app_source_invalid", f"sourceType 只能是 fcp 或 external：{source_type}")
+            )
+        maturity = extra.get("maturity", "")
+        if maturity and maturity not in APP_MATURITY:
+            findings.append(Finding("app_maturity_invalid", f"maturity 取值非法：{maturity}"))
+        demo = extra.get("demo") or {}
+        runtime = extra.get("runtime") or {}
+        network = demo.get("network", "")
+        if demo.get("url") and network not in APP_NETWORKS:
+            findings.append(
+                Finding(
+                    "app_network_missing",
+                    "登记了演示地址就必须写 demo.network（internet / intranet / vpn / local），"
+                    "否则别人只会点到一个打不开的链接",
+                )
+            )
+        runtime_type = runtime.get("type", "")
+        if runtime_type and runtime_type not in APP_RUNTIME_TYPES:
+            findings.append(
+                Finding("app_runtime_invalid", f"runtime.type 取值非法：{runtime_type}")
+            )
+        if not demo.get("url") and runtime_type not in ("container", "compose"):
+            findings.append(
+                Finding(
+                    "app_no_entry",
+                    "应用要么登记演示地址（A 档），要么声明容器化运行方式（B 档），不能两样都没有",
+                )
+            )
+
     if manifest.kind == "Sop":
         layer = extra.get("layer", "")
         if layer and layer not in SOP_LAYERS:

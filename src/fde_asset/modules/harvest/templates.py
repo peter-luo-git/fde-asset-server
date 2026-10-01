@@ -24,6 +24,22 @@ spec:
 _EXTRA = {
     "Sop": '  layer: L2\n  extends: ""        # L2 指向 L1，L3 指向 L2\n',
     "Case": "  caseType: fault      # fault|faq|pitfall|rejection|counterexample|edge\n  severity: S3\n",
+    "Application": """  sourceType: fcp          # fcp（平台内开发）| external（外部自研）
+  maturity: poc            # poc | pilot | production
+  repo: ""
+  runtime:
+    type: url              # url | static | container | compose
+    entry: ""              # Dockerfile 或 docker-compose.yml 的路径
+    ports: []
+    healthcheck: ""
+    env: []                # 只写变量名，值由演示环境注入，不进资产库
+  demo:
+    network: intranet      # internet（公网）| intranet（内网）| vpn | local（仅本机）
+    url: ""
+    account: ""            # 演示账号说明
+    reachable_from: ""     # 一句话说清在哪能打开
+    note: ""
+""",
 }
 
 _BODY = {
@@ -178,6 +194,20 @@ description: <一句话说明这个技能在什么时候用、能做什么>
 ## 可沉淀清单
 - [ ] <可以拆成 SOP 的部分>
 - [ ] <可以拆成 Case 的部分>
+""",
+    "Application": """# {title}
+
+## 结论
+<这个应用解决什么问题，给谁用>
+
+## 怎么跑起来
+<依赖、启动命令、最小环境；本地开发的应用写清楚 Dockerfile 或 compose 在哪>
+
+## 演示入口
+<在哪看、用什么账号、先看哪几个页面最能说明问题>
+
+## 已知限制
+<什么没做、哪些数据是假的、别人试的时候要注意什么>
 """,
 }
 

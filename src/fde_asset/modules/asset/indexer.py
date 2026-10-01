@@ -39,6 +39,7 @@ COMPANY_LAYOUT: tuple[tuple[str, str], ...] = (
     ("knowledge/implementations/", "Implementation"),
     ("knowledge/cases/", "Case"),
     ("knowledge/experiences/", "Experience"),
+    ("applications/", "Application"),
 )
 
 ENGAGEMENT_LAYOUT: tuple[tuple[str, str], ...] = (
@@ -49,6 +50,7 @@ ENGAGEMENT_LAYOUT: tuple[tuple[str, str], ...] = (
     (".fde/assets/implementations/", "Implementation"),
     (".fde/assets/cases/", "Case"),
     (".fde/assets/experiences/", "Experience"),
+    (".fde/assets/applications/", "Application"),
 )
 
 

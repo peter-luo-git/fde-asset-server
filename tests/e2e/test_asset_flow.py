@@ -28,7 +28,7 @@ def test_all_twelve_steps_pass(demo_results) -> None:
     "number,keyword",
     [
         (2, "无效资产"),
-        (3, "7 种类型"),
+        (3, "8 种类型"),
         (4, "合并链路"),
         (5, "占位"),
         (7, "422"),

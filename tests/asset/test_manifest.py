@@ -19,7 +19,19 @@ spec:
     notSuitable: 不适用场景
 {extra}"""
 
-EXTRA = {"Sop": "  layer: L1\n", "Case": "  caseType: fault\n  severity: S2\n"}
+EXTRA = {
+    "Sop": "  layer: L1\n",
+    "Case": "  caseType: fault\n  severity: S2\n",
+    "Application": (
+        "  sourceType: fcp\n"
+        "  maturity: pilot\n"
+        "  runtime:\n"
+        "    type: url\n"
+        "  demo:\n"
+        "    network: intranet\n"
+        "    url: http://demo.internal/x\n"
+    ),
+}
 
 SECTIONS = {
     kind: "\n".join(f"## {section}\n内容" for section in rule.required_sections)

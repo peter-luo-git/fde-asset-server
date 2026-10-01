@@ -112,7 +112,7 @@ def run_demo(data_dir: Path, *, verbose: bool = True) -> list[StepResult]:
             _check(len(repos) == 3, f"应有三类仓库，实际 {repos}")
             return [
                 f"本地裸仓库：{', '.join(repos)}",
-                "七种类型的种子资产已写入（含 pdf / docx / xlsx / pptx 附件）",
+                "八种类型的种子资产已写入（含应用资产、pdf / docx / xlsx / pptx 附件）",
             ]
 
         # 2 索引
@@ -141,7 +141,7 @@ def run_demo(data_dir: Path, *, verbose: bool = True) -> list[StepResult]:
         def step3() -> list[str]:
             total = chen.get("/api/v1/assets", params={"limit": 100}).json()
             kinds = sorted({item["kind"] for item in total["items"]})
-            _check(len(kinds) == 7, f"应能看到 7 种类型，实际 {kinds}")
+            _check(len(kinds) == 8, f"应能看到 8 种类型，实际 {kinds}")
             dept = chen.get("/api/v1/assets", params={"scope": "department"}).json()
             case = chen.get("/api/v1/assets", params={"kind": "Case", "q": "序列"}).json()
             _check(case["total"] >= 1, "按类型加关键词应能搜到问题资产")
@@ -227,7 +227,7 @@ def run_demo(data_dir: Path, *, verbose: bool = True) -> list[StepResult]:
                 )
                 _check(response.status_code == 200, f"{kind} 模板创建失败：{response.text}")
                 created.append(kind)
-            return [f"七种类型模板均可生成草稿：{', '.join(created)}"]
+            return [f"八种类型模板均可生成草稿：{', '.join(created)}"]
 
         # 7 问题单复盘 → Case 草稿（S2 必填根因）
         def step7() -> list[str]:
@@ -470,7 +470,7 @@ def run_demo(data_dir: Path, *, verbose: bool = True) -> list[StepResult]:
 
         for number, (name, body) in enumerate(
             [
-                ("初始化本地仓库与七种类型种子资产", step1),
+                ("初始化本地仓库与八种类型种子资产", step1),
                 ("索引三类仓库并暴露无效资产", step2),
                 ("目录筛选：类型 / 作用域 / 关键词", step3),
                 ("SOP 三层合并与单步骤摘要", step4),

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from fde_asset.api.deps import ServiceContext, get_context, get_principal
 from fde_asset.core.db import asset_index_findings, assets
 from fde_asset.modules.asset import catalog
+from fde_asset.modules.app import health as app_health_module
 from fde_asset.modules.asset import feedback, matching, snapshot, sop, usage
 from fde_asset.modules.asset.indexer import index_all
 from fde_asset.modules.asset.manifest import KIND_RULES
@@ -316,6 +317,50 @@ def write_settings(
     except settings_store.SettingError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     return {"values": values, "items": settings_store.describe(context.engine)}
+
+
+@router.get("/apps")
+def list_apps(
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """应用市场：能跑的东西，带演示入口与在线状态。"""
+    result = catalog.search(
+        context.engine, principal, catalog.CatalogQuery(kind="Application", limit=200)
+    )
+    health = app_health_module.health_map(context.engine)
+    items = []
+    for item in result["items"]:
+        spec = item.get("kind_spec") or {}
+        demo = spec.get("demo") or {}
+        runtime = spec.get("runtime") or {}
+        items.append(
+            {
+                **item,
+                "source_type": spec.get("sourceType", ""),
+                "maturity": spec.get("maturity", ""),
+                "repo": spec.get("repo", ""),
+                "runtime": runtime,
+                "demo": demo,
+                "health": health.get(item["asset_id"], {"status": "unknown"}),
+            }
+        )
+    return {"total": len(items), "items": items}
+
+
+@router.post("/apps/probe")
+def probe_apps(
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """手动探一遍演示地址。定时任务也调它。"""
+    if not (principal.is_admin or principal.is_asset_reviewer):
+        raise HTTPException(status_code=403, detail="只有管理员或资产评审员能触发探活")
+    results = app_health_module.probe_all(context.engine)
+    tally: dict[str, int] = {}
+    for item in results:
+        tally[item.status] = tally.get(item.status, 0) + 1
+    return {"checked": len(results), "by_status": tally}
 
 
 @router.get("/kinds")
