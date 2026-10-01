@@ -5,7 +5,13 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from fde_asset import __version__
-from fde_asset.api import routes_assets, routes_recommend, routes_harvest, routes_work_items
+from fde_asset.api import (
+    routes_apps,
+    routes_assets,
+    routes_harvest,
+    routes_recommend,
+    routes_work_items,
+)
 from fde_asset.api.deps import build_context
 from fde_asset.settings import AssetSettings
 
@@ -32,6 +38,7 @@ def create_app(settings: AssetSettings | None = None) -> FastAPI:
     app.include_router(routes_harvest.router)
     app.include_router(routes_work_items.router)
     app.include_router(routes_recommend.router)
+    app.include_router(routes_apps.router)
     return app
 
 

@@ -45,6 +45,11 @@ class AssetSettings(BaseSettings):
     def snapshot_dir(self) -> Path:
         return self.root / "snapshots"
 
+    #: 演示容器绑哪个地址：默认只听本机，要给别人看时部署参数改成 0.0.0.0
+    demo_bind_host: str = "127.0.0.1"
+    #: 给页面展示的访问地址主机名（开发阶段是本机或指定机器，正式版是内网服务器）
+    demo_public_host: str = "127.0.0.1"
+
     @property
     def blob_dir(self) -> Path:
         """附件原件目录（本地对象存储；接 Gitea 后换 LFS）。"""

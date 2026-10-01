@@ -52,6 +52,10 @@ class BlobStore:
         path.unlink()
         return True
 
+    def path(self, scope: str, filename: str) -> Path:
+        """原件在磁盘上的位置；交给演示运行器 docker load 用。"""
+        return self._dir(scope) / safe_name(filename)
+
     def names(self, scope: str) -> list[str]:
         directory = self._dir(scope)
         if not directory.exists():

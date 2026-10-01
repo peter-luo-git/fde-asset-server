@@ -266,6 +266,31 @@ app_health = Table(
     Column("last_online_at", DateTime(timezone=True)),
 )
 
+#: 应用的容器化演示：上传镜像 → 审核 → 手动启停
+app_deployments = Table(
+    "app_deployments",
+    metadata,
+    Column("asset_id", String(64), primary_key=True),
+    Column("image_file", String(255), nullable=False, default=""),
+    Column("image_tag", String(255), nullable=False, default=""),
+    Column("image_bytes", Integer, nullable=False, default=0),
+    Column("uploaded_by", String(64), nullable=False, default=""),
+    Column("uploaded_at", DateTime(timezone=True)),
+    # pending（待审核）| approved（允许运行）| rejected
+    Column("review_status", String(16), nullable=False, default="pending"),
+    Column("reviewed_by", String(64), nullable=False, default=""),
+    Column("reviewed_at", DateTime(timezone=True)),
+    Column("review_note", Text, nullable=False, default=""),
+    # stopped | running | failed
+    Column("run_status", String(16), nullable=False, default="stopped"),
+    Column("container_id", String(128), nullable=False, default=""),
+    Column("host_port", Integer, nullable=False, default=0),
+    Column("access_url", Text, nullable=False, default=""),
+    Column("started_by", String(64), nullable=False, default=""),
+    Column("started_at", DateTime(timezone=True)),
+    Column("last_error", Text, nullable=False, default=""),
+)
+
 #: 系统配置：大小上限、重排开关等，改完即生效，不用重启
 system_settings = Table(
     "system_settings",
