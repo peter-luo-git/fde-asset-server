@@ -598,6 +598,7 @@ def application_files() -> dict[str, bytes]:
   runtime:
     type: compose
     entry: docker-compose.yml
+    main_service: web
     ports: [8080]
     healthcheck: /healthz
     env: [DB_URL]
