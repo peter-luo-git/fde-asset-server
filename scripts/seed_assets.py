@@ -592,6 +592,7 @@ def application_files() -> dict[str, bytes]:
         suitable="需要人工盯批量任务的交付",
         not_suitable="纯后台无人值守的任务",
         tags=["导入", "对账"],
+        source={"origin": "engagement", "engagementSlug": "policy-import"},
         extra="""  sourceType: fcp
   maturity: pilot
   repo: https://gitea.internal/fde-apps/policy-import-console

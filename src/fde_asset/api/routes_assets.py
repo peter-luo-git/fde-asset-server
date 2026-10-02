@@ -11,7 +11,15 @@ from fde_asset.api.deps import ServiceContext, get_context, get_principal
 from fde_asset.core.db import asset_index_findings, assets
 from fde_asset.modules.asset import catalog
 from fde_asset.modules.app import health as app_health_module
-from fde_asset.modules.asset import checkup, feedback, matching, snapshot, sop, usage
+from fde_asset.modules.asset import (
+    checkup,
+    feedback,
+    matching,
+    relations,
+    snapshot,
+    sop,
+    usage,
+)
 from fde_asset.modules.asset.indexer import index_all
 from fde_asset.modules.asset.manifest import KIND_RULES
 from fde_asset.modules.harvest import service as harvest_service
@@ -371,6 +379,28 @@ def probe_apps(
     for item in results:
         tally[item.status] = tally.get(item.status, 0) + 1
     return {"checked": len(results), "by_status": tally}
+
+
+@router.get("/assets/{asset_id}/relations")
+def asset_relations_view(
+    asset_id: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """这份资产的上下游：引用了谁、被谁引用、同项目还沉淀了什么。"""
+    if catalog.get_asset(context.engine, principal, asset_id) is None:
+        raise HTTPException(status_code=404, detail="资产不存在或无权访问")
+    return relations.neighbours(context.engine, principal, asset_id)
+
+
+@router.post("/admin/assets/relink")
+def rebuild_relations(
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    if not (principal.is_admin or principal.is_asset_reviewer):
+        raise HTTPException(status_code=403, detail="只有管理员或资产评审员可以重建关系")
+    return relations.auto_link(context.engine)
 
 
 @router.get("/kinds")

@@ -19,6 +19,7 @@ from fde_asset.platform.extract import extract_text
 from fde_asset.platform.refs.wiki import parse_refs
 from fde_asset.platform.repo.ports import RepoRef
 from fde_asset.modules.asset.grading import refresh_grades
+from fde_asset.modules.asset.relations import auto_link
 from fde_asset.modules.asset.manifest import (
     KIND_RULES,
     Finding,
@@ -358,4 +359,6 @@ def index_all(engine: Engine, repo_port, repos: Iterable[RepoRef], **kwargs) -> 
     reports = [index_repository(engine, repo_port, repo, **kwargs) for repo in repos]
     # 等级由复用情况决定，不取 asset.yaml 里写的值；入库后统一重算一次
     refresh_grades(engine)
+    # 引用在写的时候对方可能还没入库，这里统一解析，并重建自动关系
+    auto_link(engine)
     return reports
