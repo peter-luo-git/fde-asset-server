@@ -29,6 +29,8 @@ def load_env_file(path: Path) -> None:
 
 @dataclass
 class LlmConfig:
+    """一家供应商的配置。生成和重排可以是两家，各自一套地址、密钥、模型名。"""
+
     base_url: str = ""
     api_key: str = ""
     model: str = ""
@@ -39,13 +41,43 @@ class LlmConfig:
         return bool(self.base_url and self.api_key and self.model)
 
 
-def config_from_env(model_override: str = "") -> LlmConfig:
+def _cfg(prefix: str, *, model_env: str, fallback_model_env: str = "") -> LlmConfig:
+    model = os.environ.get(model_env, "")
+    if not model and fallback_model_env:
+        model = os.environ.get(fallback_model_env, "")
     return LlmConfig(
-        base_url=os.environ.get("FDE_ASSET_LLM_BASE_URL", "").rstrip("/"),
-        api_key=os.environ.get("FDE_ASSET_LLM_API_KEY", ""),
-        model=model_override or os.environ.get("FDE_ASSET_RERANK_MODEL", ""),
+        base_url=os.environ.get(f"{prefix}_BASE_URL", "").rstrip("/"),
+        api_key=os.environ.get(f"{prefix}_API_KEY", ""),
+        model=model,
         timeout=float(os.environ.get("FDE_ASSET_LLM_TIMEOUT", DEFAULT_TIMEOUT)),
     )
+
+
+def reason_config(model_override: str = "") -> LlmConfig:
+    """写推荐理由用的生成模型。"""
+    config = _cfg(
+        "FDE_ASSET_LLM",
+        model_env="FDE_ASSET_REASON_MODEL",
+        # 兼容早先把生成模型写在 RERANK_MODEL 里的 .env.local
+        fallback_model_env="FDE_ASSET_RERANK_MODEL",
+    )
+    if model_override:
+        config.model = model_override
+    return config
+
+
+def rerank_config() -> LlmConfig:
+    """排序用的 rerank 模型，可以是另一家供应商、另一个 token。"""
+    config = _cfg("FDE_ASSET_RERANK", model_env="FDE_ASSET_RERANK_MODEL_NAME")
+    if not config.base_url:
+        # 没单独配就不启用，调用方退回生成模型或关键词排序
+        return LlmConfig()
+    return config
+
+
+def config_from_env(model_override: str = "") -> LlmConfig:
+    """向后兼容的旧名字。"""
+    return reason_config(model_override)
 
 
 class LlmClient(Protocol):

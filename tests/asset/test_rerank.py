@@ -122,3 +122,83 @@ def test_real_model_reranks_and_explains() -> None:
     reason = items[0]["reasons"][0]
     assert len(reason) >= 4 and "asset_id" not in reason, f"理由要是人话：{reason}"
     assert all(item["asset_id"] in {"a1", "a2", "a3"} for item in items)
+
+
+class FakeReranker:
+    """只打分不生成的重排模型替身。"""
+
+    usable = True
+
+    def __init__(self, order: list[int] | Exception) -> None:
+        self.order = order
+        self.calls: list[tuple[str, int]] = []
+
+    def rank(self, query: str, documents: list[str], top_n: int):
+        from fde_asset.platform.llm.reranker import Scored
+
+        self.calls.append((query, len(documents)))
+        if isinstance(self.order, Exception):
+            raise self.order
+        return [Scored(index=i, score=1.0 - 0.1 * n) for n, i in enumerate(self.order)]
+
+
+def test_reranker_decides_the_order() -> None:
+    """有重排模型时由它排序，顺序跟粗排不一样。"""
+    items, mode = rerank.rerank(
+        CANDIDATES, CONTEXT, NullLlmClient(), limit=3, reranker=FakeReranker([2, 0, 1])
+    )
+    assert mode == "reranked"
+    assert [item["asset_id"] for item in items] == ["a3", "a1", "a2"]
+    assert items[0]["reasons"][0].startswith("相关度")
+
+
+def test_reasons_are_written_only_for_the_top_few() -> None:
+    """排序归重排模型，写理由只给前几条——省掉大头的生成 token。"""
+    llm = FakeLlm({"picked": [{"asset_id": "a3", "reason": "跟割接窗口直接相关"}]})
+    items, mode = rerank.rerank(
+        CANDIDATES,
+        CONTEXT,
+        llm,
+        limit=3,
+        reranker=FakeReranker([2, 0, 1]),
+        reason_top_n=1,
+    )
+    assert mode == "reranked"
+    assert items[0]["reasons"][0] == "跟割接窗口直接相关"
+    # 只把前 1 条交给生成模型
+    payload = json.loads(llm.prompts[0])
+    assert len(payload["候选资产"]) == 1
+    # 后面的仍然保留重排模型给的分数
+    assert items[1]["reasons"][0].startswith("相关度")
+
+
+def test_reranker_failure_falls_back_to_generation() -> None:
+    llm = FakeLlm({"picked": [{"asset_id": "a1", "reason": "同样是导入超时"}]})
+    items, mode = rerank.rerank(
+        CANDIDATES, CONTEXT, llm, limit=2, reranker=FakeReranker(RuntimeError("超时"))
+    )
+    assert mode == "reranked"
+    assert items[0]["asset_id"] == "a1"
+
+
+def test_everything_down_still_returns_keyword_order() -> None:
+    items, mode = rerank.rerank(
+        CANDIDATES,
+        CONTEXT,
+        FakeLlm(RuntimeError("挂了")),
+        limit=2,
+        reranker=FakeReranker(RuntimeError("也挂了")),
+    )
+    assert mode == "keyword"
+    assert [item["asset_id"] for item in items] == ["a1", "a2"]
+
+
+def test_rerank_response_parsing_is_tolerant() -> None:
+    """不同供应商的返回字段名不一样，都要能认。"""
+    from fde_asset.platform.llm.reranker import parse_results
+
+    jina = parse_results({"results": [{"index": 1, "relevance_score": 0.8}]})
+    cohere = parse_results({"data": [{"document_index": 2, "score": 0.9}]})
+    assert jina[0].index == 1 and jina[0].score == 0.8
+    assert cohere[0].index == 2 and cohere[0].score == 0.9
+    assert parse_results({"results": [{"没有index": 1}]}) == []

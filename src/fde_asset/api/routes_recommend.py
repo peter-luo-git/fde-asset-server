@@ -11,6 +11,7 @@ from fde_asset.modules.recommend import service
 from fde_asset.platform import settings_store
 from fde_asset.platform.identity import Principal
 from fde_asset.platform.llm.client import build_client
+from fde_asset.platform.llm.reranker import build_reranker
 
 router = APIRouter(prefix="/api/v1", tags=["recommend"])
 
@@ -88,14 +89,17 @@ def compute(
     accurate = payload.get("mode", "accurate") != "fast"
     enabled = bool(settings_store.get(context.engine, "rerank_enabled"))
     llm = None
+    reranker = None
     if accurate and enabled:
         llm = build_client(str(settings_store.get(context.engine, "rerank_model") or ""))
+        reranker = build_reranker()
     items, mode = service.compute(
         context.engine,
         principal,
         target,
         limit=int(payload.get("limit", service.DEFAULT_LIMIT)),
         llm=llm,
+        reranker=reranker,
     )
     return {
         "mode": mode,

@@ -75,16 +75,72 @@ def apply(
     return result
 
 
+def order_by_model(
+    candidates: list[dict[str, Any]],
+    query: str,
+    reranker: Any,
+    *,
+    limit: int,
+) -> list[dict[str, Any]] | None:
+    """用重排模型排序。只打分不生成，比让大模型写字快一个量级。
+
+    返回 None 表示没配或调用失败，调用方继续用粗排顺序。
+    """
+    if reranker is None or not getattr(reranker, "usable", False) or not candidates:
+        return None
+    documents = [
+        f"{item['title']}。{(item.get('summary') or '')[:MAX_SUMMARY]}" for item in candidates
+    ]
+    try:
+        scored = reranker.rank(query, documents, limit)
+    except Exception:  # noqa: BLE001 - 重排挂了不能让推荐瘫掉
+        return None
+    if not scored:
+        return None
+    ordered: list[dict[str, Any]] = []
+    for row in scored[:limit]:
+        if not 0 <= row.index < len(candidates):
+            continue
+        item = dict(candidates[row.index])
+        item["score"] = round(row.score * 10, 2)
+        item["reasons"] = [f"相关度 {row.score:.2f}", *item.get("reasons", [])]
+        item["reranked"] = True
+        ordered.append(item)
+    return ordered or None
+
+
 def rerank(
     candidates: list[dict[str, Any]],
     context: dict[str, Any],
     client: LlmClient | None,
     *,
     limit: int = 8,
+    reranker: Any = None,
+    reason_top_n: int = 3,
 ) -> tuple[list[dict[str, Any]], str]:
     """返回（结果, 用了哪种模式）。模式是 reranked 或 keyword。"""
     if not candidates:
         return [], "keyword"
+
+    query = "；".join(str(value) for value in context.values() if value)
+
+    # 第一优先：重排模型排序（快），再让生成模型只给前几条写理由（省 token）
+    ordered = order_by_model(candidates, query, reranker, limit=limit)
+    if ordered is not None:
+        if client is not None and getattr(client, "usable", False) and reason_top_n > 0:
+            head, tail = ordered[:reason_top_n], ordered[reason_top_n:]
+            try:
+                payload = client.complete_json(SYSTEM, build_prompt(context, head, len(head)))
+                explained = apply(head, payload.get("picked") or [], limit=len(head))
+                if explained:
+                    by_id = {item["asset_id"]: item for item in explained}
+                    head = [by_id.get(item["asset_id"], item) for item in head]
+            except Exception:  # noqa: BLE001 - 写不出理由就只给分数，不影响排序
+                pass
+            ordered = head + tail
+        return ordered, "reranked"
+
+    # 没有重排模型时，退回让生成模型直接挑
     if client is None or not getattr(client, "usable", False):
         return candidates[:limit], "keyword"
     try:

@@ -106,6 +106,7 @@ def compute(
     *,
     limit: int = DEFAULT_LIMIT,
     llm: Any = None,
+    reranker: Any = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """算出候选推荐（不落库），返回（结果, 用的什么模式）。
 
@@ -138,6 +139,7 @@ def compute(
         },
         llm,
         limit=max(limit - len(rules), 1),
+        reranker=reranker,
     )
     return (rules + picked)[:limit], mode
 
