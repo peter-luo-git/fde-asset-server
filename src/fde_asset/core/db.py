@@ -291,6 +291,48 @@ app_deployments = Table(
     Column("last_error", Text, nullable=False, default=""),
 )
 
+#: 订阅：我自己盯什么。推荐是别人推给我，订阅是我主动关注
+asset_subscriptions = Table(
+    "asset_subscriptions",
+    metadata,
+    Column("subscription_id", String(64), primary_key=True),
+    Column("user_id", String(64), nullable=False),
+    # kind | industry | tag | owner | asset（盯某一份资产的更新）
+    Column("filter_type", String(16), nullable=False),
+    Column("filter_value", String(128), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+)
+
+#: 站内通知：变更通知与订阅命中都落这里，由 fde-server 决定要不要再推 IM
+asset_notifications = Table(
+    "asset_notifications",
+    metadata,
+    Column("notification_id", String(64), primary_key=True),
+    Column("user_id", String(64), nullable=False),
+    # asset_changed | asset_new | recommendation | review
+    Column("kind", String(24), nullable=False),
+    Column("asset_id", String(64), nullable=False, default=""),
+    Column("title", Text, nullable=False, default=""),
+    Column("body", Text, nullable=False, default=""),
+    Column("reason", Text, nullable=False, default=""),
+    Column("read_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+)
+
+#: 资产版本快照：用来算"改了什么"，变更通知靠它出 diff 摘要
+asset_versions = Table(
+    "asset_versions",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("asset_id", String(64), nullable=False),
+    Column("version", String(32), nullable=False, default=""),
+    Column("commit_sha", String(64), nullable=False, default=""),
+    Column("summary", Text, nullable=False, default=""),
+    Column("sections_json", Text, nullable=False, default="{}"),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    UniqueConstraint("asset_id", "commit_sha", name="uq_asset_version"),
+)
+
 #: 系统配置：大小上限、重排开关等，改完即生效，不用重启
 system_settings = Table(
     "system_settings",

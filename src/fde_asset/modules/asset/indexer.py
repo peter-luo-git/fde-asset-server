@@ -361,4 +361,25 @@ def index_all(engine: Engine, repo_port, repos: Iterable[RepoRef], **kwargs) -> 
     refresh_grades(engine)
     # 引用在写的时候对方可能还没入库，这里统一解析，并重建自动关系
     auto_link(engine)
+    _snapshot_and_notify(engine)
     return reports
+
+
+def _snapshot_and_notify(engine: Engine) -> None:
+    """给每份资产留一份版本快照；内容真的变了才发变更通知。"""
+    from sqlalchemy import select as _select
+
+    from fde_asset.core.db import assets as _assets
+    from fde_asset.modules.notify import service as notify
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            _select(_assets).where(_assets.c.deleted_at.is_(None), _assets.c.valid.is_(True))
+        ).fetchall()
+    for row in rows:
+        is_new_version = notify.snapshot_version(engine, row)
+        if not is_new_version:
+            continue
+        diff = notify.diff_summary(engine, row.asset_id)
+        if diff["changed"] or diff["added"] or diff["removed"] or diff["summary_changed"]:
+            notify.announce_change(engine, row.asset_id)
