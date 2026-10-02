@@ -382,23 +382,44 @@ def submit_candidate(
 @router.get("/reviews")
 def list_reviews(
     status: str = "open",
+    mine: bool = False,
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
+    """评审队列。mine=true 只返回我有权决定的，用来做「待我评审」。"""
     with context.engine.connect() as conn:
         rows = conn.execute(
             select(asset_reviews)
             .where(asset_reviews.c.status == status)
             .order_by(asset_reviews.c.submitted_at)
         ).fetchall()
+        candidates = {
+            row.candidate_id: row
+            for row in conn.execute(
+                select(harvest_candidates).where(
+                    harvest_candidates.c.candidate_id.in_([r.candidate_id for r in rows] or [""])
+                )
+            )
+        }
+
     items = []
     for row in rows:
+        candidate = candidates.get(row.candidate_id)
         data = dict(row._mapping)
         data["submitted_at"] = row.submitted_at.isoformat()
         data["decided_at"] = row.decided_at.isoformat() if row.decided_at else None
+        data["title"] = candidate.title if candidate else ""
+        data["kind"] = candidate.kind if candidate else ""
+        data["name"] = candidate.name if candidate else ""
+        # 作用域内的真实归属要从候选上取，否则项目级评审永远算不出有权限
         data["can_decide"] = can_review(
-            principal, row.scope, department_code=principal.department_code
+            principal,
+            row.scope,
+            department_code=candidate.department_code if candidate else "",
+            engagement_slug=candidate.engagement_slug if candidate else "",
         )
+        if mine and not data["can_decide"]:
+            continue
         items.append(data)
     return {"items": items}
 

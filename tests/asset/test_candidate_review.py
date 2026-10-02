@@ -155,3 +155,16 @@ def test_reviewer_cannot_peek_before_submission(client) -> None:
         },
     ).json()["candidate_id"]
     assert as_user(client, "wang").get(f"/api/v1/harvest-candidates/{cid}").status_code == 403
+
+
+def test_review_queue_knows_who_can_decide(client) -> None:
+    """「待我评审」要按真实归属算权限：项目级评审归项目负责人。"""
+    cid = _submit_ready_case(client)
+
+    wang = as_user(client, "wang").get("/api/v1/reviews", params={"mine": True}).json()["items"]
+    assert any(item["candidate_id"] == cid for item in wang), "老王是项目负责人，该看到"
+    assert all(item["can_decide"] for item in wang)
+    assert wang[0]["title"] == "评审流程演示", "队列里要能看出是什么资产"
+
+    zhao = as_user(client, "zhao").get("/api/v1/reviews", params={"mine": True}).json()["items"]
+    assert zhao == [], "不相干的人队列是空的"
