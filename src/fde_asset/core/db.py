@@ -32,8 +32,9 @@ assets = Table(
     "assets",
     metadata,
     Column("asset_id", String(64), primary_key=True),
-    Column("scope", String(16), nullable=False),  # company | department | engagement
+    Column("scope", String(16), nullable=False),  # company | department | customer | engagement
     Column("department_code", String(64)),
+    Column("customer_code", String(64), nullable=False, default=""),
     Column("engagement_slug", String(64)),
     Column("repo", String(200), nullable=False),
     Column("path", String(500), nullable=False),

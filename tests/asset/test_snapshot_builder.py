@@ -53,3 +53,12 @@ def test_attachment_text_written_for_agent(indexed) -> None:
     extracted = result.path / "knowledge" / "impl" / "oracle-to-pg-cutover" / "attachments-text"
     assert (extracted / "baseline.xlsx.txt").exists()
     assert not list(result.path.rglob("*.xlsx"))  # 二进制不进快照
+
+
+def test_customer_layer_sits_between_department_and_engagement() -> None:
+    """合并顺序：公司 → 部门 → 客户 → 项目，越靠后越具体。"""
+    from fde_asset.modules.asset.snapshot import _layer_order
+
+    assert _layer_order("company") < _layer_order("department")
+    assert _layer_order("department") < _layer_order("customer")
+    assert _layer_order("customer") < _layer_order("engagement")

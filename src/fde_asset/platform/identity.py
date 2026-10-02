@@ -18,6 +18,8 @@ class Membership:
     engagement_slug: str
     department_code: str
     role: str = "member"  # owner | member | viewer
+    #: 这个项目是哪个客户的；同一客户的多个项目之间复用最密集
+    customer_code: str = ""
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,11 @@ class Principal:
         if self.department_code:
             codes.add(self.department_code)
         return codes
+
+    @property
+    def customer_codes(self) -> set[str]:
+        """我参与过的项目所属的客户；客户级资产按这个放行。"""
+        return {m.customer_code for m in self.memberships if m.customer_code}
 
     def owns_engagement(self, slug: str) -> bool:
         return any(m.engagement_slug == slug and m.role == "owner" for m in self.memberships)
@@ -84,6 +91,7 @@ class LocalDirectory:
                     engagement_slug=m["engagement_slug"],
                     department_code=m.get("department_code", ""),
                     role=m.get("role", "member"),
+                    customer_code=m.get("customer_code", ""),
                 )
                 for m in raw.get("memberships", [])
             ),
@@ -147,7 +155,10 @@ class HttpDirectory:
             is_department_head=bool(payload.get("is_department_head")),
             memberships=tuple(
                 Membership(
-                    m["engagement_slug"], m.get("department_code", ""), m.get("role", "member")
+                    m["engagement_slug"],
+                    m.get("department_code", ""),
+                    m.get("role", "member"),
+                    m.get("customer_code", ""),
                 )
                 for m in payload.get("memberships", [])
             ),

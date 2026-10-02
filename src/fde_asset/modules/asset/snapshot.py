@@ -1,4 +1,8 @@
-"""会话快照：按「公司 → 部门 → 项目」三层合并，并生成 knowledge/INDEX.md（L0）。"""
+"""会话快照：按「公司 → 部门 → 客户 → 项目」四层合并，并生成 knowledge/INDEX.md（L0）。
+
+越靠后越具体，同名内容后面的覆盖前面的——客户级排在部门之后、项目之前，
+因为"这家客户的坑"比部门通用经验具体，又比单个项目的实施记录通用。
+"""
 
 from __future__ import annotations
 
@@ -32,7 +36,7 @@ class SnapshotResult:
 
 
 def _layer_order(scope: str) -> int:
-    return {"company": 0, "department": 1, "engagement": 2}.get(scope, 3)
+    return {"company": 0, "department": 1, "customer": 2, "engagement": 3}.get(scope, 4)
 
 
 def build_snapshot(

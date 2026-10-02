@@ -109,7 +109,7 @@ def run_demo(data_dir: Path, *, verbose: bool = True) -> list[StepResult]:
         # 1 种子仓库
         def step1() -> list[str]:
             repos = sorted(p.name for p in settings.repos.glob("*.git"))
-            _check(len(repos) == 3, f"应有三类仓库，实际 {repos}")
+            _check(len(repos) == 4, f"应有四类仓库（公司/部门/客户/项目），实际 {repos}")
             return [
                 f"本地裸仓库：{', '.join(repos)}",
                 "八种类型的种子资产已写入（含应用资产、pdf / docx / xlsx / pptx 附件）",

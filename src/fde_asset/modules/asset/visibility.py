@@ -19,13 +19,20 @@ def visibility_clause(principal: Principal) -> ColumnElement[bool]:
             and_(assets.c.scope == "department", assets.c.department_code.in_(departments))
         )
 
+    customers = principal.customer_codes
+    if customers:
+        # 同一客户的多个项目之间复用最密集，而且常常跨部门
+        clauses.append(and_(assets.c.scope == "customer", assets.c.customer_code.in_(customers)))
+
     slugs = principal.engagement_slugs
     if slugs:
         clauses.append(and_(assets.c.scope == "engagement", assets.c.engagement_slug.in_(slugs)))
 
     visible = or_(*clauses)
     if principal.is_admin:
-        visible = or_(visible, assets.c.scope.in_(["company", "department", "engagement"]))
+        visible = or_(
+            visible, assets.c.scope.in_(["company", "department", "customer", "engagement"])
+        )
 
     # 受限资产：只有资产所有人与负责部门的部门主管可见，管理员也不例外
     restricted_ok = or_(
@@ -43,9 +50,14 @@ def visibility_clause(principal: Principal) -> ColumnElement[bool]:
 
 
 def can_review(
-    principal: Principal, scope: str, *, department_code: str = "", engagement_slug: str = ""
+    principal: Principal,
+    scope: str,
+    *,
+    department_code: str = "",
+    engagement_slug: str = "",
+    customer_code: str = "",
 ) -> bool:
-    """评审权限：项目级看项目 owner，部门级看本部门资产评审员或部门主管，公司级看资产评审员。"""
+    """评审权限：项目级看项目 owner，部门级看本部门评审员或主管，客户级看资产评审员或该客户项目负责人，公司级看资产评审员。"""
     if principal.is_admin:
         return True
     if scope == "engagement":
@@ -53,6 +65,13 @@ def can_review(
     if scope == "department":
         same_department = principal.department_code == department_code
         return same_department and (principal.is_asset_reviewer or principal.is_department_head)
+    if scope == "customer":
+        # 客户级跨部门，由资产评审员把关；该客户下任一项目的负责人也可以
+        if principal.is_asset_reviewer:
+            return True
+        return any(
+            m.customer_code == customer_code and m.role == "owner" for m in principal.memberships
+        )
     if scope == "company":
         return principal.is_asset_reviewer
     return False

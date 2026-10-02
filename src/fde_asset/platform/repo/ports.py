@@ -13,6 +13,7 @@ class RepoRef:
     name: str  # 例：company-assets / dept-data-intel-assets / policy-import
     scope: str  # company | department | engagement
     department_code: str = ""
+    customer_code: str = ""
     engagement_slug: str = ""
 
     @property

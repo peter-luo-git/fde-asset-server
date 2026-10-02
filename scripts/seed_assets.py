@@ -578,6 +578,42 @@ APP_LABELER_README = """# 标注小工具
 """
 
 
+CUSTOMER_CASE = """# 华安核心接口限流
+
+## 结论
+这家客户的网关默认限流 50 QPS，批量任务必须自己限速，否则会被整体熔断。
+
+## 现象
+导入跑到一半整条链路 503。
+
+## 根因
+客户网关对单来源 IP 限流，批量任务没有退避。
+
+## 解决方法
+客户端限速到 30 QPS 并加指数退避重试。
+"""
+
+
+def customer_files() -> dict[str, bytes]:
+    """客户级资产：同一个客户的多个项目都用得上，而且这些项目常常跨部门。"""
+    files: dict[str, str] = {}
+    files["knowledge/cases/huaan-gateway-throttling/README.md"] = CUSTOMER_CASE
+    files["knowledge/cases/huaan-gateway-throttling/asset.yaml"] = _yaml(
+        "Case",
+        "huaan-gateway-throttling",
+        "华安核心接口限流",
+        "客户网关默认限流 50 QPS，批量任务要自己限速并退避",
+        "department:finance",
+        industry=["insurance"],
+        suitable="对接这家客户任何需要批量调接口的项目",
+        not_suitable="非本客户的项目",
+        tags=["限流", "网关"],
+        extra="  caseType: fault\n  severity: S2",
+        source={"customerCode": "HUAAN", "engagementSlug": "policy-import"},
+    )
+    return {name: text.encode("utf-8") for name, text in files.items()}
+
+
 def application_files() -> dict[str, bytes]:
     """两个应用资产：一个内网已部署（A 档登记），一个本地容器化（B 档）。"""
     files: dict[str, str] = {}
@@ -780,14 +816,24 @@ DIRECTORY: dict[str, Any] = {
             "display_name": "小陈",
             "department_code": "data-intel",
             "memberships": [
-                {"engagement_slug": "policy-import", "department_code": "finance", "role": "member"}
+                {
+                    "engagement_slug": "policy-import",
+                    "department_code": "finance",
+                    "customer_code": "HUAAN",
+                    "role": "member",
+                }
             ],
         },
         "wang": {
             "display_name": "老王",
             "department_code": "finance",
             "memberships": [
-                {"engagement_slug": "policy-import", "department_code": "finance", "role": "owner"}
+                {
+                    "engagement_slug": "policy-import",
+                    "department_code": "finance",
+                    "customer_code": "HUAAN",
+                    "role": "owner",
+                }
             ],
         },
         "li": {
@@ -950,6 +996,11 @@ def seed(settings: AssetSettings) -> dict[str, Any]:
         "main",
         {**department_files(), **application_files()},
         "chore(assets): 部门级种子资产（含应用）",
+    )
+
+    customer = RepoRef(name="cust-HUAAN-assets", scope="customer", customer_code="HUAAN")
+    result["customer"] = git.commit_files(
+        customer, "main", customer_files(), "chore(assets): 客户级种子资产"
     )
 
     engagement = RepoRef(name="policy-import", scope="engagement", engagement_slug="policy-import")

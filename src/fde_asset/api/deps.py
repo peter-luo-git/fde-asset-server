@@ -38,12 +38,19 @@ class ServiceContext:
                 found.append(RepoRef(name=name, scope="company"))
             elif name.startswith("dept-") and name.endswith("-assets"):
                 found.append(RepoRef(name=name, scope="department", department_code=name[5:-7]))
+            elif name.startswith("cust-") and name.endswith("-assets"):
+                found.append(RepoRef(name=name, scope="customer", customer_code=name[5:-7]))
             else:
                 found.append(RepoRef(name=name, scope="engagement", engagement_slug=name))
         return found
 
     def repo_for(
-        self, scope: str, *, department_code: str = "", engagement_slug: str = ""
+        self,
+        scope: str,
+        *,
+        department_code: str = "",
+        engagement_slug: str = "",
+        customer_code: str = "",
     ) -> RepoRef:
         if scope == "company":
             return RepoRef(name="company-assets", scope="company")
@@ -52,6 +59,12 @@ class ServiceContext:
                 name=f"dept-{department_code}-assets",
                 scope="department",
                 department_code=department_code,
+            )
+        if scope == "customer":
+            return RepoRef(
+                name=f"cust-{customer_code}-assets",
+                scope="customer",
+                customer_code=customer_code,
             )
         return RepoRef(name=engagement_slug, scope="engagement", engagement_slug=engagement_slug)
 
