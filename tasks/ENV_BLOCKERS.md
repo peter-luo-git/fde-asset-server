@@ -22,3 +22,12 @@
 - 影响：在加上策略之前，演示环境里不要放任何真实凭据
 - 谁来做：部署侧（fde-deploy），需要宿主机 root
 - 现状：fde-demo 这个 bridge 网络已经把容器和其它容器隔开，但出网仍然是通的
+
+## E6 演示宿主机需要 docker compose 插件
+
+多容器演示用 `docker compose`（v2 插件），不是老的 `docker-compose` 脚本。
+宿主机上没有的话，多容器应用传了也起不来，单容器不受影响。
+
+- 装法：把 docker-compose 二进制放进 `/usr/libexec/docker/cli-plugins/` 并加执行位
+- 自检：`docker compose version`
+- 代码侧已经处理：探测不到就跳过多容器相关的测试，接口会返回可读的报错

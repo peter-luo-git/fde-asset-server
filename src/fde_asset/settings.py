@@ -49,6 +49,12 @@ class AssetSettings(BaseSettings):
     demo_bind_host: str = "127.0.0.1"
     #: 给页面展示的访问地址主机名（开发阶段是本机或指定机器，正式版是内网服务器）
     demo_public_host: str = "127.0.0.1"
+    #: 多人协作的工作空间根目录；容器只能挂 <根>/<用户或部门>/ 下面的内容
+    workspace_root: Path | None = None
+
+    @property
+    def workspaces(self) -> Path:
+        return (self.workspace_root or self.root / "workspaces").expanduser()
 
     @property
     def blob_dir(self) -> Path:
@@ -56,7 +62,14 @@ class AssetSettings(BaseSettings):
         return self.root / "blobs"
 
     def ensure_dirs(self) -> None:
-        for directory in (self.root, self.repos, self.work, self.snapshot_dir, self.blob_dir):
+        for directory in (
+            self.root,
+            self.repos,
+            self.work,
+            self.snapshot_dir,
+            self.blob_dir,
+            self.workspaces,
+        ):
             directory.mkdir(parents=True, exist_ok=True)
 
 

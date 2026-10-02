@@ -58,7 +58,11 @@ def upload_image(
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
-    """所有人自己 `docker save -o app.tar <镜像>` 之后传上来。"""
+    """两种都收：
+
+    - 单容器：`docker save -o app.tar <镜像>`
+    - 多容器：`docker-compose.yml` + `images.tar` 打成一个 bundle（见 scripts/fde_app_pack.py）
+    """
     asset = _owned(context, principal, asset_id)
     if not _may_manage(principal, asset):
         raise HTTPException(status_code=403, detail="只有应用负责人或管理员能传镜像")
@@ -117,6 +121,8 @@ def start_app(
             started_by=principal.user_id,
             limits=RunLimits(bind_host=context.settings.demo_bind_host),
             public_host=context.settings.demo_public_host,
+            workspace_root=context.settings.workspaces,
+            work_dir=context.settings.work,
         )
     except deploy.DeployError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None

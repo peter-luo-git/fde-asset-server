@@ -53,6 +53,20 @@ class FakeRunner:
         return "fake logs"
 
 
+def _fake_image_tar(tmp_path: Path) -> bytes:
+    """造一个结构合法、但内容是假的镜像 tar：解包逻辑要能认出它是单容器包。"""
+    import io
+    import tarfile
+
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        info = tarfile.TarInfo("manifest.json")
+        payload = b'[{"RepoTags":["fake/app:latest"]}]'
+        info.size = len(payload)
+        archive.addfile(info, io.BytesIO(payload))
+    return buffer.getvalue()
+
+
 @pytest.fixture()
 def store(tmp_path):
     return BlobStore(tmp_path / "blobs")
@@ -150,7 +164,7 @@ def test_start_failure_is_recorded(client, indexed, store) -> None:
     asset_id = _app_id(client)
     _upload(client, asset_id)
     as_user(client, "admin").post(f"/api/v1/apps/{asset_id}/review", json={"approve": True})
-    store.put(deploy.IMAGE_SCOPE, f"{asset_id}-app.tar", b"fake")
+    store.put(deploy.IMAGE_SCOPE, f"{asset_id}-app.tar", _fake_image_tar(Path(".")))
 
     with pytest.raises(deploy.DeployError, match="启动失败"):
         deploy.start(
@@ -169,7 +183,7 @@ def test_full_state_machine_with_fake_runner(client, indexed, store) -> None:
     asset_id = _app_id(client)
     _upload(client, asset_id)
     as_user(client, "admin").post(f"/api/v1/apps/{asset_id}/review", json={"approve": True})
-    store.put(deploy.IMAGE_SCOPE, f"{asset_id}-app.tar", b"fake")
+    store.put(deploy.IMAGE_SCOPE, f"{asset_id}-app.tar", _fake_image_tar(Path(".")))
     runner = FakeRunner()
 
     started = deploy.start(
