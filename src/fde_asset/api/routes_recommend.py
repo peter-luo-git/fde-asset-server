@@ -9,6 +9,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from fde_asset.api.deps import ServiceContext, get_context, get_principal
 from fde_asset.modules.recommend import service
 from fde_asset.platform import settings_store
+from fde_asset.platform.cache import recommendation_cache
 from fde_asset.platform.identity import Principal
 from fde_asset.platform.llm.client import build_client
 from fde_asset.platform.llm.reranker import build_reranker
@@ -93,14 +94,35 @@ def compute(
     if accurate and enabled:
         llm = build_client(str(settings_store.get(context.engine, "rerank_model") or ""))
         reranker = build_reranker()
-    items, mode = service.compute(
-        context.engine,
-        principal,
-        target,
-        limit=int(payload.get("limit", service.DEFAULT_LIMIT)),
-        llm=llm,
-        reranker=reranker,
+    limit = int(payload.get("limit", service.DEFAULT_LIMIT))
+    # 缓存键带上用户：可见范围因人而异，不能把别人能看的缓存给我
+    cache_key = ":".join(
+        [
+            principal.user_id,
+            target.target_type,
+            target.target_id,
+            "accurate" if accurate and enabled else "fast",
+            str(limit),
+            target.title,
+            target.description[:80],
+            target.industry,
+            target.stage,
+        ]
     )
+    cached = None if payload.get("refresh") else recommendation_cache.get(cache_key)
+    if cached is not None:
+        items, mode = cached
+        mode = f"{mode}-cached"
+    else:
+        items, mode = service.compute(
+            context.engine,
+            principal,
+            target,
+            limit=limit,
+            llm=llm,
+            reranker=reranker,
+        )
+        recommendation_cache.set(cache_key, (items, mode))
     return {
         "mode": mode,
         "target": {
@@ -189,13 +211,15 @@ def decide(
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     try:
-        return service.decide(
+        result = service.decide(
             context.engine,
             principal,
             recommendation_id,
             accept=bool(payload.get("accept", True)),
             note=payload.get("note", ""),
         )
+        recommendation_cache.invalidate()
+        return result
     except service.RecommendError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
@@ -210,9 +234,12 @@ def link(
     target = _target(context, payload)
     if not _may_manage(principal, target):
         raise HTTPException(status_code=403, detail="只有目标负责人或管理员能关联资产")
-    return service.link(
+    result = service.link(
         context.engine, principal, target.target_type, target.target_id, payload["asset_id"]
     )
+    # 关联之后推荐结果就变了（已关联的不再推），清掉这个目标的缓存
+    recommendation_cache.invalidate()
+    return result
 
 
 @router.get("/recommend/linked")

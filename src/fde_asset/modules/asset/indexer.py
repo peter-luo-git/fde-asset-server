@@ -20,6 +20,7 @@ from fde_asset.platform.refs.wiki import parse_refs
 from fde_asset.platform.repo.ports import RepoRef
 from fde_asset.modules.asset.grading import refresh_grades
 from fde_asset.modules.asset.relations import auto_link
+from fde_asset.platform.cache import recommendation_cache
 from fde_asset.modules.asset.manifest import (
     KIND_RULES,
     Finding,
@@ -364,6 +365,8 @@ def index_all(engine: Engine, repo_port, repos: Iterable[RepoRef], **kwargs) -> 
     # 引用在写的时候对方可能还没入库，这里统一解析，并重建自动关系
     auto_link(engine)
     _snapshot_and_notify(engine)
+    # 资产变了，之前算出来的推荐就不作数了
+    recommendation_cache.invalidate()
     return reports
 
 
