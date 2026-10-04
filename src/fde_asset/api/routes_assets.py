@@ -12,6 +12,7 @@ from fde_asset.core.db import asset_index_findings, assets
 from fde_asset.modules.asset import catalog
 from fde_asset.modules.app import health as app_health_module
 from fde_asset.modules.asset import (
+    ask,
     checkup,
     feedback,
     matching,
@@ -25,6 +26,7 @@ from fde_asset.modules.asset.manifest import KIND_RULES
 from fde_asset.modules.harvest import service as harvest_service
 from fde_asset.platform.identity import Principal
 from fde_asset.platform import settings_store
+from fde_asset.platform.llm.reranker import build_reranker
 from fde_asset.platform.refs.wiki import parse_refs
 
 router = APIRouter(prefix="/api/v1", tags=["assets"])
@@ -97,6 +99,30 @@ def list_invalid(
     return {
         "items": [dict(row._mapping) | {"detected_at": row.detected_at.isoformat()} for row in rows]
     }
+
+
+@router.get("/assets/ask")
+def ask_assets(
+    q: str,
+    kind: str | None = None,
+    scope: str | None = None,
+    limit: int = Query(ask.DEFAULT_LIMIT, ge=1, le=50),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """按问题检索：一句话进来，按语义相关度出资产；没配重排模型时退回关键词。"""
+    if not q.strip():
+        raise HTTPException(status_code=422, detail="问题不能为空")
+    return ask.ask(
+        context.engine,
+        principal,
+        q,
+        reranker=build_reranker(),
+        kind=kind,
+        scope=scope,
+        limit=limit,
+        min_score=int(settings_store.get(context.engine, "search_min_relevance")) / 100,
+    )
 
 
 @router.get("/assets/resolve")
@@ -391,6 +417,20 @@ def asset_relations_view(
     if catalog.get_asset(context.engine, principal, asset_id) is None:
         raise HTTPException(status_code=404, detail="资产不存在或无权访问")
     return relations.neighbours(context.engine, principal, asset_id)
+
+
+@router.get("/assets/{asset_id}/graph")
+def asset_relation_graph(
+    asset_id: str,
+    depth: int = Query(2, ge=1, le=relations.GRAPH_MAX_DEPTH),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """关系图谱：以这份资产为中心往外展开几层，节点全部经过可见性过滤。"""
+    result = relations.graph(context.engine, principal, asset_id, depth)
+    if result is None:
+        raise HTTPException(status_code=404, detail="资产不存在或无权访问")
+    return result
 
 
 @router.post("/admin/assets/relink")

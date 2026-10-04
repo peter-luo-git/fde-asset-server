@@ -81,10 +81,12 @@ def order_by_model(
     reranker: Any,
     *,
     limit: int,
+    min_score: float | None = None,
 ) -> list[dict[str, Any]] | None:
     """用重排模型排序。只打分不生成，比让大模型写字快一个量级。
 
     返回 None 表示没配或调用失败，调用方继续用粗排顺序。
+    给了 `min_score` 时低于门槛的不要；全都不够格就返回空列表——宁缺毋滥，不退回粗排。
     """
     if reranker is None or not getattr(reranker, "usable", False) or not candidates:
         return None
@@ -101,11 +103,15 @@ def order_by_model(
     for row in scored[:limit]:
         if not 0 <= row.index < len(candidates):
             continue
+        if min_score is not None and row.score < min_score:
+            continue
         item = dict(candidates[row.index])
         item["score"] = round(row.score * 10, 2)
         item["reasons"] = [f"相关度 {row.score:.2f}", *item.get("reasons", [])]
         item["reranked"] = True
         ordered.append(item)
+    if min_score is not None:
+        return ordered
     return ordered or None
 
 
@@ -117,6 +123,7 @@ def rerank(
     limit: int = 8,
     reranker: Any = None,
     reason_top_n: int = 3,
+    min_score: float | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """返回（结果, 用了哪种模式）。模式是 reranked 或 keyword。"""
     if not candidates:
@@ -125,9 +132,9 @@ def rerank(
     query = "；".join(str(value) for value in context.values() if value)
 
     # 第一优先：重排模型排序（快），再让生成模型只给前几条写理由（省 token）
-    ordered = order_by_model(candidates, query, reranker, limit=limit)
+    ordered = order_by_model(candidates, query, reranker, limit=limit, min_score=min_score)
     if ordered is not None:
-        if client is not None and getattr(client, "usable", False) and reason_top_n > 0:
+        if ordered and client is not None and getattr(client, "usable", False) and reason_top_n > 0:
             head, tail = ordered[:reason_top_n], ordered[reason_top_n:]
             try:
                 payload = client.complete_json(SYSTEM, build_prompt(context, head, len(head)))

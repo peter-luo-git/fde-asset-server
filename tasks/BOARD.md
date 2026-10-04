@@ -3,8 +3,9 @@
 状态：todo / doing / review / done / env-pending
 规则：一个切片半天内、生产代码 ≤ 300 行；`make check` 绿 = 完成；评审最多 2 轮。
 
-**整体状态（2026-09-30 夜）**：v0.1 的 21 个切片全部 done。
-`make check` 绿（**133 个测试**）、`scripts/asset_demo.py` 十二步全绿、alembic upgrade/downgrade 双向验证通过。
+**整体状态（2026-10-04）**：v0.1 的 21 个切片全部 done；10-01 之后按《资产中心-推荐与应用资产设计》§3.5 的四批排期又做了 15 个切片（见下方「v0.1 之后」）。
+后端全量 **304 通过 / 3 跳过**（跳过的 3 个需要 docker 与 docker compose）、ruff 与 `alembic heads` 通过。
+还没做的和被 fde-server 卡住的，统一记在 fde-specs《资产中心-后续工作清单》。
 
 | ID | 切片 | 状态 | 验收命令 | 落地位置 |
 |---|---|---|---|---|
@@ -43,6 +44,38 @@
 > S-W1/W2/W3 的代码在 `fde-web` 的 `feat/asset-center-web` 分支（提交 `444e71d`），尚未合并到 main。
 > fde-server 按指令一行未改，两个配套切片只做了接口契约设计，见《资产中心-组织与共享设计》§六。
 
+## v0.1 之后（2026-10-01 起）
+
+编号沿用《资产中心-推荐与应用资产设计》里的切片号；没有编号的用 X- 开头。
+
+| ID | 切片 | 状态 | 验收命令 | 落地位置 |
+|---|---|---|---|---|
+| Q3 | 质量等级按复用自动评级（铜/银/金） | **done** | `pytest -q tests/asset/test_grading.py` | `modules/asset/grading.py` |
+| X-1 | 草稿附件原件、按字段改元数据、评审流程可见 | **done** | `pytest -q tests/asset/test_candidate_attachments.py tests/asset/test_candidate_review.py` | `modules/harvest/service.py`、`api/routes_harvest.py` |
+| X-2 | 目录按负责人筛选（个人 / 部门） | **done** | `pytest -q tests/asset/test_owner_filter.py` | `modules/asset/catalog.py` |
+| R-1…R-3 | 推荐中心：算、推、收件箱、接收即关联 | **done** | `pytest -q tests/recommend` | `modules/recommend/service.py`、`api/routes_recommend.py` |
+| F5+F7 | 反馈闭环、拒绝原因回流、负责人待办、系统配置 | **done** | `pytest -q tests/asset/test_feedback_and_settings.py` | `modules/asset/feedback.py`、`platform/settings_store.py` |
+| A-1…A-4 | 应用类资产 A 档：登记 + 探活 | **done** | `pytest -q tests/asset/test_application_assets.py` | `modules/app/health.py`、`manifest.py` 的 `Application` |
+| B-1…B-4 | 容器化演示 B 档：单容器 + compose、上传审核、手动启停 | **env-pending** | `pytest -q tests/asset/test_app_deploy.py tests/asset/test_compose_deploy.py` | `modules/app/{deploy,compose,bundle}.py`、`platform/runner/`；等 E5、E6 |
+| F1a | 内容理解重排：rerank 模型全量打分 + 门槛截断 + 前 3 条写理由 | **done** | `pytest -q tests/asset/test_matching.py tests/asset/test_rerank.py tests/asset/test_ask.py` | `modules/asset/{matching,rerank}.py`、`platform/llm/`；2026-10-04 真实调通，13 份资产 0.2–0.3 秒 |
+| X-3 | 推荐结果缓存 | **done** | `pytest -q tests/platform/test_cache.py` | `platform/cache.py` |
+| F4+F12 | 资产体检（四条规则）+ 跨项目空白识别 L9 | **done** | `pytest -q tests/asset/test_checkup.py tests/asset/test_leads.py` | `modules/asset/checkup.py`、`modules/leads/rules.py` |
+| F6+F13 | 变更通知（章节级 diff）+ 订阅，共用站内收件箱 | **done** | `pytest -q tests/asset/test_notify.py` | `modules/notify/service.py`、`api/routes_notify.py` |
+| F8a | 关系：自动建链 + 按可见性读一层邻居 | **done** | `pytest -q tests/asset/test_relations.py` | `modules/asset/relations.py` |
+| F9 | 客户级作用域 | **done** | `pytest -q tests/platform/test_customer_scope.py` | `visibility.py`、迁移 `0006_customer_scope` |
+| X-4 | 旧库启动时自动补齐新增的列 | **done** | `pytest -q tests/platform/test_schema_upgrade.py` | `core/db.py` 的 `add_missing_columns()` |
+| F1b | 按问题检索（后端）：权限过滤后全量语义打分，不做字面粗筛 | **done** | `pytest -q tests/asset/test_ask.py` | `modules/asset/ask.py`、`GET /api/v1/assets/ask` |
+| F1b-web | 按问题检索（前端搜索框）：默认按问题找，可切回按关键词筛 | **done** | `npm run test:asset`、`npm run qa:asset-browser` | fde-web `pages/AssetCatalogPage.tsx` |
+| F8b | 关系图谱：子图接口（1–3 层、60 节点上限、不可见资产不当跳板）+ 前端 SVG 图 | **done** | `pytest -q tests/asset/test_relations.py`；`npm run test:asset` | `modules/asset/relations.py` 的 `graph()`、`GET /api/v1/assets/{id}/graph`；fde-web `components/AssetRelationGraph.tsx` |
+| X-5 | 演示服务启动时加载 `.env.local`；测试用 `FDE_ASSET_SKIP_ENV_FILE` 跳过 | **done** | `npm run test:asset-e2e`（加 `FDE_E2E_SEMANTIC=1` 验真实模型） | `settings.load_local_env()`、`scripts/serve_seeded.py` |
+| F2 | Agent 检索工具 `search_assets` / `get_asset` | todo | — | 资产侧可先做，挂到 Agent 要等 fde-server |
+| F3 | 启动资产包 | 不做 | — | 2026-10-04 决定暂不做，理由见《资产中心-后续工作清单》§一 |
+| F11 | 度量看板 | todo | — | 2026-10-04 决定这一轮先不做 |
+
+> 前端对应的页面在 `fde-web` 的 `feat/asset-center-web` 分支（最新提交 `b41ff6e`），仍未合并到 main。
+
 ## 下一步
 
-按《资产中心-v0.1交接说明》§六的顺序：先定 Q1（与 fde-server 现有 asset/harvest 模块的关系）→ Q2（成员关系接口）→ Q4（Gitea 仓库落地）→ Q3（质量等级规则）。
+1. F2 的 MCP 服务（资产侧，不依赖 fde-server）；
+2. 用真实资产重新校语义相关度门槛（《资产中心-后续工作清单》§四 P2）；
+3. 需要 fde-server 配合的事项（S-14b、S-15b、成员关系接口、通知送达）见《资产中心-后续工作清单》§二，等 fde-server 开工后再排。

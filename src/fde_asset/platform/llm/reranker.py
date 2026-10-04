@@ -47,7 +47,7 @@ class HttpReranker:
         import httpx
 
         response = httpx.post(
-            f"{self.config.base_url}/rerank",
+            rerank_url(self.config.base_url),
             headers={
                 "Authorization": f"Bearer {self.config.api_key}",
                 "Content-Type": "application/json",
@@ -62,6 +62,12 @@ class HttpReranker:
         )
         response.raise_for_status()
         return parse_results(response.json())
+
+
+def rerank_url(base_url: str) -> str:
+    """配置里写到 `/v1` 或直接写到 `/v1/rerank` 都认，免得拼出 `/rerank/rerank`。"""
+    base = base_url.rstrip("/")
+    return base if base.endswith("/rerank") else f"{base}/rerank"
 
 
 def parse_results(payload: dict[str, Any]) -> list[Scored]:

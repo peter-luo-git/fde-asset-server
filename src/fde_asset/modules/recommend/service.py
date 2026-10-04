@@ -107,13 +107,15 @@ def compute(
     limit: int = DEFAULT_LIMIT,
     llm: Any = None,
     reranker: Any = None,
+    min_score: float | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """算出候选推荐（不落库），返回（结果, 用的什么模式）。
 
-    两步：结构化粗排把全库收敛到模型读得完的集合，再交给模型按内容理解精排并写理由。
-    没配模型或模型出错就只用粗排，推荐不会因此瘫掉。
+    有重排模型时，可见范围内的技能和知识全部交给它按语义打分，低于门槛的不要；
+    没配模型或模型出错就退回关键词粗排，推荐不会因此瘫掉。
     """
-    result = matching.match(engine, principal, target.context())
+    semantic = reranker is not None and getattr(reranker, "usable", False)
+    result = matching.match(engine, principal, target.context(), prefilter=not semantic)
     flat: list[dict[str, Any]] = []
     for group in ("rules", "sops", "skills", "knowledge"):
         for item in result[group]:
@@ -140,7 +142,16 @@ def compute(
         llm,
         limit=max(limit - len(rules), 1),
         reranker=reranker,
+        min_score=min_score if semantic else None,
     )
+    if semantic and mode != "reranked":
+        # 重排没成功：候选是没做字面粗筛的全集，不能原样推出去，重新走一遍关键词粗排
+        return compute(engine, principal, target, limit=limit, llm=llm, reranker=None)
+    if semantic and not any(item["group"] == "sops" for item in picked):
+        # 流程过不了门槛也留一条兜底，免得新项目完全没有流程可依
+        fallback = next((item for item in others if item["group"] == "sops"), None)
+        if fallback is not None:
+            picked.append({**fallback, "reasons": ["通用流程兜底", *fallback["reasons"]]})
     return (rules + picked)[:limit], mode
 
 

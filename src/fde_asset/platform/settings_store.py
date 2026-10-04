@@ -48,6 +48,14 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
     ),
     SettingSpec("rerank_model", "重排模型", "str", "", "", "留空则用环境变量里的默认模型"),
     SettingSpec(
+        "search_min_relevance",
+        "语义相关度门槛",
+        "int",
+        5,
+        "分（满分 100）",
+        "按问题检索和精确推荐里，重排模型打分低于它的资产不显示；调高更准，调低更全",
+    ),
+    SettingSpec(
         "app_probe_interval_minutes", "应用探活间隔", "int", 10, "分钟", "多久探一次演示地址"
     ),
 )

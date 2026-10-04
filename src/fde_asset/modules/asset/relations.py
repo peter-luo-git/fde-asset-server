@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import and_, delete, insert, select
+from sqlalchemy import and_, delete, insert, or_, select
 from sqlalchemy.engine import Engine
 
 from fde_asset.core.db import asset_relations, assets
@@ -23,6 +23,12 @@ from fde_asset.platform.identity import Principal
 
 #: 同项目资产互相挂链时，单个资产最多挂多少条，免得一个大项目连成一张糊掉的网
 SAME_ENGAGEMENT_CAP = 12
+
+#: 图谱最多展开几层、最多多少个节点——再多图就糊了，也没人看得过来
+GRAPH_MAX_DEPTH = 3
+GRAPH_MAX_NODES = 60
+#: 这几种关系没有方向，A→B 和 B→A 只画一条线
+UNDIRECTED = {"sameEngagement", "relatedTo"}
 
 RELATION_LABEL = {
     "relatedTo": "引用",
@@ -189,4 +195,90 @@ def neighbours(engine: Engine, principal: Principal, asset_id: str) -> dict[str,
         "incoming": sorted(incoming, key=lambda item: (item["type"], item["title"])),
         # 引用了但对方还没入库（或我看不到），照实说，不要装作没有
         "unresolved": [{"ref": row.to_ref, "type": row.type} for row in unresolved if row.to_ref],
+    }
+
+
+def graph(
+    engine: Engine, principal: Principal, asset_id: str, depth: int = 2
+) -> dict[str, Any] | None:
+    """以某份资产为中心、往外展开 `depth` 层的关系子图。看不到中心资产时返回 None。
+
+    每一层只沿着**看得见的**资产往外走：无权看的资产不会成为节点，
+    也不会被当作跳板把它背后的资产带出来。
+    """
+    depth = max(1, min(depth, GRAPH_MAX_DEPTH))
+    with engine.connect() as conn:
+
+        def visible(ids: set[str]) -> dict[str, Any]:
+            if not ids:
+                return {}
+            rows = conn.execute(
+                select(assets).where(assets.c.asset_id.in_(ids), visibility_clause(principal))
+            ).fetchall()
+            return {row.asset_id: row for row in rows}
+
+        root = visible({asset_id})
+        if not root:
+            return None
+        nodes: dict[str, tuple[Any, int]] = {asset_id: (root[asset_id], 0)}
+        edges: dict[tuple[str, str, str], dict[str, Any]] = {}
+        frontier = {asset_id}
+        truncated = False
+        for level in range(1, depth + 1):
+            if not frontier:
+                break
+            links = conn.execute(
+                select(asset_relations).where(
+                    asset_relations.c.to_asset_id.is_not(None),
+                    or_(
+                        asset_relations.c.from_asset_id.in_(frontier),
+                        asset_relations.c.to_asset_id.in_(frontier),
+                    ),
+                )
+            ).fetchall()
+            touched = {link.from_asset_id for link in links} | {link.to_asset_id for link in links}
+            found = visible(touched - nodes.keys())
+            next_frontier: set[str] = set()
+            for found_id in sorted(found, key=lambda key: found[key].title):
+                if len(nodes) >= GRAPH_MAX_NODES:
+                    truncated = True
+                    break
+                nodes[found_id] = (found[found_id], level)
+                next_frontier.add(found_id)
+            for link in links:
+                source, target = link.from_asset_id, link.to_asset_id
+                if source not in nodes or target not in nodes or source == target:
+                    continue
+                if link.type in UNDIRECTED and source > target:
+                    source, target = target, source
+                edges.setdefault(
+                    (source, target, link.type),
+                    {
+                        "from": source,
+                        "to": target,
+                        "type": link.type,
+                        "label": RELATION_LABEL.get(link.type, link.type),
+                        "source": link.source,
+                        "directed": link.type not in UNDIRECTED,
+                    },
+                )
+            frontier = next_frontier
+
+    return {
+        "root": asset_id,
+        "depth": depth,
+        "truncated": truncated,
+        "nodes": [
+            {
+                "asset_id": row.asset_id,
+                "kind": row.kind,
+                "name": row.name,
+                "title": row.title,
+                "summary": row.summary,
+                "scope": row.scope,
+                "depth": level,
+            }
+            for row, level in sorted(nodes.values(), key=lambda pair: (pair[1], pair[0].title))
+        ],
+        "edges": sorted(edges.values(), key=lambda edge: (edge["from"], edge["to"], edge["type"])),
     }

@@ -121,6 +121,7 @@ def compute(
             limit=limit,
             llm=llm,
             reranker=reranker,
+            min_score=int(settings_store.get(context.engine, "search_min_relevance")) / 100,
         )
         recommendation_cache.set(cache_key, (items, mode))
     return {

@@ -37,7 +37,7 @@ class CatalogQuery:
     offset: int = 0
 
 
-def _row_to_dict(row: Any, reuse: int = 0, usage: int = 0) -> dict[str, Any]:
+def row_to_dict(row: Any, reuse: int = 0, usage: int = 0) -> dict[str, Any]:
     data = dict(row._mapping)
     for field_name in (
         "applicability_json",
@@ -60,7 +60,7 @@ def _row_to_dict(row: Any, reuse: int = 0, usage: int = 0) -> dict[str, Any]:
     return data
 
 
-def _base_select(principal: Principal, query: CatalogQuery) -> Select:
+def base_select(principal: Principal, query: CatalogQuery) -> Select:
     statement = select(assets).where(visibility_clause(principal), assets.c.valid.is_(True))
     if query.kind:
         statement = statement.where(assets.c.kind == query.kind)
@@ -103,7 +103,7 @@ def _base_select(principal: Principal, query: CatalogQuery) -> Select:
 
 
 def search(engine: Engine, principal: Principal, query: CatalogQuery) -> dict[str, Any]:
-    statement = _base_select(principal, query)
+    statement = base_select(principal, query)
     with engine.connect() as conn:
         total = conn.execute(select(func.count()).select_from(statement.subquery())).scalar_one()
         reuse_map = reuse_counts(conn)
@@ -114,7 +114,7 @@ def search(engine: Engine, principal: Principal, query: CatalogQuery) -> dict[st
             statement = statement.order_by(assets.c.updated_at.desc())
         rows = conn.execute(statement.limit(query.limit).offset(query.offset)).fetchall()
     items = [
-        _row_to_dict(r, reuse_map.get(r.asset_id, 0), usage_map.get(r.asset_id, 0)) for r in rows
+        row_to_dict(r, reuse_map.get(r.asset_id, 0), usage_map.get(r.asset_id, 0)) for r in rows
     ]
     if query.sort == "reuse":
         items.sort(key=lambda item: item["reuse_engagement_count"], reverse=True)
@@ -130,7 +130,7 @@ def get_asset(engine: Engine, principal: Principal, asset_id: str) -> dict[str, 
             return None
         reuse = reuse_counts(conn).get(asset_id, 0)
         usage = _usage_counts(conn).get(asset_id, 0)
-    return _row_to_dict(row, reuse, usage)
+    return row_to_dict(row, reuse, usage)
 
 
 def resolve_ref(

@@ -135,8 +135,14 @@ def _item(row: Any, score: float, reasons: list[str], reuse: int) -> dict[str, A
     }
 
 
-def match(engine: Engine, principal: Principal, context: MatchContext) -> dict[str, Any]:
-    """返回四组推荐，每组按得分从高到低。"""
+def match(
+    engine: Engine, principal: Principal, context: MatchContext, *, prefilter: bool = True
+) -> dict[str, Any]:
+    """返回四组推荐，每组按得分从高到低。
+
+    `prefilter=False` 时技能和知识不要求字面命中、也不截断：后面有重排模型按语义挑，
+    字面粗筛只会把「说法不同但内容对得上」的资产提前丢掉。
+    """
     tokens = tokenize(f"{context.title} {context.description} {context.stage}")
     tokens.update(token.lower() for token in context.keywords if token)
 
@@ -165,15 +171,16 @@ def match(engine: Engine, principal: Principal, context: MatchContext) -> dict[s
         elif row.kind == "Sop":
             # 流程没命中关键词也给一条兜底，免得新项目完全没有流程可依
             buckets["sops"].append(_item(row, score, reasons or ["通用流程"], reuse))
-        elif relevance > 0:
+        elif relevance > 0 or not prefilter:
             bucket = "skills" if row.kind == "Skill" else "knowledge"
             buckets[bucket].append(_item(row, score, reasons, reuse))
 
     for key in buckets:
         buckets[key].sort(key=lambda item: item["score"], reverse=True)
     buckets["sops"] = buckets["sops"][:SOP_LIMIT]
-    buckets["skills"] = buckets["skills"][:SKILL_LIMIT]
-    buckets["knowledge"] = buckets["knowledge"][:KNOWLEDGE_LIMIT]
+    if prefilter:
+        buckets["skills"] = buckets["skills"][:SKILL_LIMIT]
+        buckets["knowledge"] = buckets["knowledge"][:KNOWLEDGE_LIMIT]
 
     return {
         "context": {

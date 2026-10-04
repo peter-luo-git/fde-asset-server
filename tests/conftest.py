@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+# 测试不读 .env.local：结果不能取决于这台机器上有没有配真实的模型
+os.environ.setdefault("FDE_ASSET_SKIP_ENV_FILE", "1")
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))

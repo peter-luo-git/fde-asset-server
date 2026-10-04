@@ -20,7 +20,7 @@ sys.path.insert(0, str(_ROOT))
 from fde_asset.api.app import create_app  # noqa: E402
 from fde_asset.api.deps import build_context  # noqa: E402
 from fde_asset.modules.asset.indexer import index_all  # noqa: E402
-from fde_asset.settings import AssetSettings  # noqa: E402
+from fde_asset.settings import AssetSettings, load_local_env  # noqa: E402
 from scripts.seed_assets import seed  # noqa: E402
 
 
@@ -48,6 +48,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # 演示服务也要能用上 .env.local 里配的模型，否则按问题检索只能退回关键词
+    load_local_env()
     data_dir = args.data_dir or Path(tempfile.mkdtemp(prefix="fde-asset-e2e-"))
     settings = AssetSettings(data_dir=data_dir)
     settings.ensure_dirs()

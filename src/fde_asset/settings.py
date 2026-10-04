@@ -73,9 +73,21 @@ class AssetSettings(BaseSettings):
             directory.mkdir(parents=True, exist_ok=True)
 
 
-def load_settings() -> AssetSettings:
-    # 本地开发的模型密钥放在仓库根的 .env.local（已 gitignore）
+def load_local_env() -> None:
+    """把仓库根的 `.env.local`（已 gitignore，放本地开发的模型密钥）加载进环境变量。
+
+    设了 `FDE_ASSET_SKIP_ENV_FILE` 就不加载：自动化测试要的是确定的结果，
+    不能因为这台机器上碰巧有一份密钥就去调真实的模型。
+    """
+    import os
+
     from fde_asset.platform.llm.client import load_env_file
 
+    if os.environ.get("FDE_ASSET_SKIP_ENV_FILE"):
+        return
     load_env_file(Path(__file__).resolve().parents[2] / ".env.local")
+
+
+def load_settings() -> AssetSettings:
+    load_local_env()
     return AssetSettings()
