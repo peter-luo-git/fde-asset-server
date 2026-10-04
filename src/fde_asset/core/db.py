@@ -18,6 +18,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    inspect,
+    literal,
 )
 from sqlalchemy.engine import Engine
 
@@ -373,6 +375,49 @@ def create_engine_for(db_path: Path | str, echo: bool = False) -> Engine:
 
 def init_db(engine: Engine) -> None:
     metadata.create_all(engine)
+    add_missing_columns(engine)
+
+
+def _default_literal(engine: Engine, column: Column) -> str | None:
+    default = column.default
+    if default is None or not default.is_scalar:
+        return None
+    compiled = literal(default.arg, column.type).compile(
+        dialect=engine.dialect, compile_kwargs={"literal_binds": True}
+    )
+    return str(compiled)
+
+
+def add_missing_columns(engine: Engine) -> list[str]:
+    """给旧库补上代码里新增的列，返回补了哪些（`表.列`）。
+
+    `create_all` 只建缺失的表，不会给已有的表加列；本地库和演示库不走 alembic，
+    代码加了列以后旧库一启动就报 no such column。由 alembic 管理的库不在这里动，
+    否则迁移脚本再加同一列会撞车。
+    """
+    inspector = inspect(engine)
+    if inspector.has_table("alembic_version"):
+        return []
+    quote = engine.dialect.identifier_preparer.quote
+    added: list[str] = []
+    with engine.begin() as conn:
+        for table in metadata.sorted_tables:
+            existing = {item["name"] for item in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in existing:
+                    continue
+                ddl = f"{quote(column.name)} {column.type.compile(dialect=engine.dialect)}"
+                if not column.nullable:
+                    default = _default_literal(engine, column)
+                    if column.primary_key or default is None:
+                        raise RuntimeError(
+                            f"旧库缺少列 {table.name}.{column.name}，它非空且没有固定默认值，"
+                            "无法自动补齐；请写迁移脚本或重建数据目录"
+                        )
+                    ddl += f" NOT NULL DEFAULT {default}"
+                conn.exec_driver_sql(f"ALTER TABLE {quote(table.name)} ADD COLUMN {ddl}")
+                added.append(f"{table.name}.{column.name}")
+    return added
 
 
 def record_event(conn: Any, event_type: str, payload: dict[str, Any]) -> None:
