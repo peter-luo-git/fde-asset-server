@@ -2179,6 +2179,51 @@ paths:
       summary: Compute
       tags:
       - recommend
+  /api/v1/recommend/explain:
+    post:
+      description: 按需写推荐理由：人想知道「为什么推这份」时才调生成模型，一次最多 5 份。
+      operationId: explain_api_v1_recommend_explain_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Explain Api V1 Recommend Explain Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Explain
+      tags:
+      - recommend
   /api/v1/recommend/inbox:
     get:
       operationId: inbox_api_v1_recommend_inbox_get

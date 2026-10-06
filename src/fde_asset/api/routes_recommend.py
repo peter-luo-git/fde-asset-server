@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from fde_asset.api.deps import ServiceContext, get_context, get_principal
+from fde_asset.modules.asset import rerank as rerank_module
 from fde_asset.modules.recommend import service
 from fde_asset.platform import settings_store
 from fde_asset.platform.cache import recommendation_cache
@@ -15,6 +16,9 @@ from fde_asset.platform.llm.client import build_client
 from fde_asset.platform.llm.reranker import build_reranker
 
 router = APIRouter(prefix="/api/v1", tags=["recommend"])
+
+#: 按需写理由时等生成模型多久
+EXPLAIN_TIMEOUT_SECONDS = 90.0
 
 
 def _target(context: ServiceContext, payload: dict[str, Any]) -> service.Target:
@@ -86,14 +90,12 @@ def compute(
 ) -> dict[str, Any]:
     """算推荐，不落库。页面上先给人看，人点了再保存或推送。"""
     target = _target(context, payload)
-    # 快速模式只跑关键词粗排；精确模式再交给模型按内容理解精排并写理由
+    # 快速模式只跑关键词粗排；精确模式交给 rerank 模型按内容理解排序。
+    # 理由不在这里写：生成模型写字要十几秒，改成人点了才生成（见 /recommend/explain）
     accurate = payload.get("mode", "accurate") != "fast"
     enabled = bool(settings_store.get(context.engine, "rerank_enabled"))
     llm = None
-    reranker = None
-    if accurate and enabled:
-        llm = build_client(str(settings_store.get(context.engine, "rerank_model") or ""))
-        reranker = build_reranker()
+    reranker = build_reranker() if accurate and enabled else None
     limit = int(payload.get("limit", service.DEFAULT_LIMIT))
     # 缓存键带上用户：可见范围因人而异，不能把别人能看的缓存给我
     cache_key = ":".join(
@@ -135,6 +137,39 @@ def compute(
         },
         "items": items,
     }
+
+
+@router.post("/recommend/explain")
+def explain(
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """按需写推荐理由：人想知道「为什么推这份」时才调生成模型，一次最多 5 份。"""
+    target = _target(context, payload)
+    asset_ids = [str(item) for item in payload.get("asset_ids") or []][
+        : rerank_module.EXPLAIN_LIMIT
+    ]
+    if not asset_ids:
+        raise HTTPException(status_code=422, detail="asset_ids 不能为空")
+    cache_key = ":".join(
+        ["explain", principal.user_id, target.target_type, target.target_id, target.title]
+        + [target.description[:80], target.stage, ",".join(sorted(asset_ids))]
+    )
+    cached = None if payload.get("refresh") else recommendation_cache.get(cache_key)
+    if cached is not None:
+        return {"available": True, "reasons": cached, "cached": True}
+    llm = build_client(str(settings_store.get(context.engine, "rerank_model") or ""))
+    config = getattr(llm, "config", None)
+    if config is not None:
+        # 写理由是人点了才等的，给够时间：实测生成模型写两句话要三十秒上下，默认的 30 秒超时刚好卡在边上
+        config.timeout = max(config.timeout, EXPLAIN_TIMEOUT_SECONDS)
+    reasons = service.explain(context.engine, principal, target, asset_ids, llm)
+    if reasons is None:
+        # 没配生成模型或它这次没成功：照实说，页面上仍然有相关度和规则给的理由
+        return {"available": False, "reasons": {}}
+    recommendation_cache.set(cache_key, reasons)
+    return {"available": True, "reasons": reasons, "cached": False}
 
 
 @router.post("/recommend/send")

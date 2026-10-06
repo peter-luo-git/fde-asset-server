@@ -50,6 +50,7 @@ def _reviewers(context: ServiceContext, candidate: dict[str, Any]) -> list[dict[
             candidate["scope"],
             department_code=candidate["department_code"],
             engagement_slug=candidate["engagement_slug"],
+            customer_code=candidate["customer_code"],
         ):
             reviewers.append(
                 {"user_id": other.user_id, "display_name": other.display_name or other.user_id}
@@ -75,6 +76,7 @@ def create_candidate(
                 scope=payload.get("scope", "engagement"),
                 department_code=payload.get("department_code", ""),
                 engagement_slug=payload.get("engagement_slug", ""),
+                customer_code=payload.get("customer_code", ""),
                 origin=payload.get("origin", "manual"),
                 source=payload.get("source", {}),
                 files=payload.get("files", {}),
@@ -130,6 +132,7 @@ def create_from_upload(
             scope=payload.get("scope", "company"),
             department_code=payload.get("department_code", ""),
             engagement_slug=payload.get("engagement_slug", ""),
+            customer_code=payload.get("customer_code", ""),
             legacy_note=payload.get("legacy_note", ""),
             store=context.blob_store,
         )
@@ -153,6 +156,7 @@ def get_candidate(
         candidate["scope"],
         department_code=candidate["department_code"],
         engagement_slug=candidate["engagement_slug"],
+        customer_code=candidate["customer_code"],
     )
     if candidate["created_by"] != principal.user_id and not (
         principal.is_admin or principal.is_asset_reviewer or may_review
@@ -251,6 +255,7 @@ def candidate_review(
             candidate["scope"],
             department_code=candidate["department_code"],
             engagement_slug=candidate["engagement_slug"],
+            customer_code=candidate["customer_code"],
         ),
     }
 
@@ -350,15 +355,29 @@ def submit_candidate(
         "department_code", candidate["department_code"] or principal.department_code
     )
     engagement_slug = payload.get("engagement_slug", candidate["engagement_slug"])
+    customer_code = payload.get("customer_code", candidate["customer_code"])
+    if scope == "customer":
+        if not customer_code:
+            raise HTTPException(status_code=422, detail="客户级资产必须指定客户代号")
+        if not principal.is_admin and customer_code not in principal.customer_codes:
+            raise HTTPException(status_code=403, detail=f"你没有参与客户 {customer_code} 的项目")
     target = context.repo_for(
-        scope, department_code=department_code, engagement_slug=engagement_slug
+        scope,
+        department_code=department_code,
+        engagement_slug=engagement_slug,
+        customer_code=customer_code,
     )
     # 先落定作用域，再提交：评审记录要按最终作用域判定评审权限
     with context.engine.begin() as conn:
         conn.execute(
             update(harvest_candidates)
             .where(harvest_candidates.c.candidate_id == candidate_id)
-            .values(scope=scope, department_code=department_code, engagement_slug=engagement_slug)
+            .values(
+                scope=scope,
+                department_code=department_code,
+                engagement_slug=engagement_slug,
+                customer_code=customer_code if scope == "customer" else "",
+            )
         )
     try:
         result = service.submit(
@@ -381,6 +400,7 @@ def submit_candidate(
                     scope=candidate["scope"],
                     department_code=candidate["department_code"],
                     engagement_slug=candidate["engagement_slug"],
+                    customer_code=candidate["customer_code"],
                 )
             )
         raise HTTPException(status_code=409, detail=str(exc)) from None
@@ -449,6 +469,7 @@ def list_reviews(
             row.scope,
             department_code=candidate.department_code if candidate else "",
             engagement_slug=candidate.engagement_slug if candidate else "",
+            customer_code=candidate.customer_code if candidate else "",
         )
         if mine and not data["can_decide"]:
             continue
@@ -479,12 +500,14 @@ def decide_review(
         review.scope,
         department_code=candidate.department_code,
         engagement_slug=candidate.engagement_slug,
+        customer_code=candidate.customer_code,
     ):
         raise HTTPException(status_code=403, detail="没有该作用域的评审权限")
     target = context.repo_for(
         review.scope,
         department_code=candidate.department_code,
         engagement_slug=candidate.engagement_slug,
+        customer_code=candidate.customer_code,
     )
     result = service.decide(
         context.engine,

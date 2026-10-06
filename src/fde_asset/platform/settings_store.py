@@ -43,9 +43,7 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
         "knowledge_index_limit", "知识索引预算", "int", 30000, "字符", "注入会话的 INDEX.md 上限"
     ),
     SettingSpec("sop_budget", "SOP 步骤摘要预算", "int", 8192, "字符", "单步摘要写进提示词的上限"),
-    SettingSpec(
-        "rerank_enabled", "推荐启用内容理解重排", "bool", False, "", "关掉就退回关键词排序"
-    ),
+    SettingSpec("rerank_enabled", "推荐启用内容理解重排", "bool", True, "", "关掉就退回关键词排序"),
     SettingSpec("rerank_model", "重排模型", "str", "", "", "留空则用环境变量里的默认模型"),
     SettingSpec(
         "search_min_relevance",

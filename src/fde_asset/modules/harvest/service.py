@@ -51,6 +51,7 @@ class CandidateInput:
     scope: str = "engagement"
     department_code: str = ""
     engagement_slug: str = ""
+    customer_code: str = ""
     origin: str = "manual"
     source: dict[str, Any] = field(default_factory=dict)
     files: dict[str, str] = field(default_factory=dict)
@@ -110,6 +111,12 @@ def create_draft(engine: Engine, principal: Principal, data: CandidateInput) -> 
         raise HarvestError("项目级候选必须指定 engagement_slug")
     if data.scope == "department" and not data.department_code:
         raise HarvestError("部门级候选必须指定 department_code")
+    if data.scope == "customer":
+        if not data.customer_code:
+            raise HarvestError("客户级候选必须指定 customer_code")
+        # 只有参与这个客户项目的人才写得了它的资产；否则任何人都能往别的客户仓库里塞东西
+        if not principal.is_admin and data.customer_code not in principal.customer_codes:
+            raise HarvestError(f"你没有参与客户 {data.customer_code} 的项目，不能为它沉淀资产")
 
     owner = (
         f"department:{principal.department_code}"
@@ -132,6 +139,7 @@ def create_draft(engine: Engine, principal: Principal, data: CandidateInput) -> 
                 scope=data.scope,
                 department_code=data.department_code,
                 engagement_slug=data.engagement_slug,
+                customer_code=data.customer_code if data.scope == "customer" else "",
                 name=data.name,
                 title=data.title,
                 status="draft",
@@ -268,6 +276,7 @@ def draft_from_upload(
     scope: str = "company",
     department_code: str = "",
     engagement_slug: str = "",
+    customer_code: str = "",
     legacy_note: str = "",
     store: BlobStore | None = None,
 ) -> dict[str, Any]:
@@ -327,6 +336,7 @@ def draft_from_upload(
             scope=scope,
             department_code=department_code,
             engagement_slug=engagement_slug,
+            customer_code=customer_code,
             origin="upload",
             source={"origin": "legacy", "note": legacy_note or filename},
             files=files,

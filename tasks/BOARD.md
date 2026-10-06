@@ -4,7 +4,7 @@
 规则：一个切片半天内、生产代码 ≤ 300 行；`make check` 绿 = 完成；评审最多 2 轮。
 
 **整体状态（2026-10-06）**：v0.1 的 21 个切片全部 done；10-01 之后按《资产中心-推荐与应用资产设计》§3.5 的四批排期又做了 15 个切片（见下方「v0.1 之后」）。
-后端全量 **343 通过 / 3 跳过**（跳过的 3 个需要 docker 与 docker compose）、ruff 与 `alembic heads` 通过。
+后端全量 **353 通过 / 3 跳过**（跳过的 3 个需要 docker 与 docker compose）、ruff 与 `alembic heads` 通过。
 还没做的和被 fde-server 卡住的，统一记在 fde-specs《资产中心-后续工作清单》。
 
 | ID | 切片 | 状态 | 验收命令 | 落地位置 |
@@ -79,6 +79,9 @@
 | X-13 | 删草稿（线索回到工作台）、资产下架/废弃/恢复、应用可被引用、评审通知 | **done** | `pytest -q tests/asset/test_small_gaps.py` | `harvest/service.delete_draft()`、`modules/asset/lifecycle.py`、`notify/service.notify_review()` |
 | F3 | 启动资产包 | 不做 | — | 2026-10-04 决定暂不做，理由见《资产中心-后续工作清单》§一 |
 | F11 | 度量看板 | todo | — | 2026-10-04 决定这一轮先不做 |
+| X-14 | 客户级草稿：带客户代号、进客户仓库、按客户判评审权（迁移 `0007_candidate_customer`） | **done** | `pytest -q tests/platform/test_customer_drafts.py` | `harvest/service.create_draft()`、`api/routes_harvest.py` |
+| X-15 | 推荐理由按需生成，`rerank_enabled` 默认开 | **done** | `pytest -q tests/recommend/test_explain.py` | `POST /api/v1/recommend/explain`、`rerank.explain()` |
+| X-16 | 工作台「粘贴一段文字」 | **done** | `npm run test:asset` | fde-web `pages/AssetWorkbenchPage.tsx` |
 
 > 前端对应的页面在 `fde-web` 的 `feat/asset-center-web` 分支（最新提交 `b41ff6e`），仍未合并到 main。
 
@@ -86,4 +89,4 @@
 
 1. 等 fde-server 开工：成员关系接口、使用上报、SOP 步骤注入、挂载 MCP（《资产中心-后续工作清单》§二）；
 2. 用真实资产重新校语义相关度门槛（同上 §四 P2）；
-3. 盘点出来还没做的 7 个缺口见同上 §1.1。
+3. 盘点出来还没做的缺口见同上 §1.1，工程和环境上的待办见 §1.2。

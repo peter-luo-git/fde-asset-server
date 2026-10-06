@@ -131,14 +131,7 @@ def compute(
     others = [item for item in pool if item["group"] != "rules"]
     picked, mode = rerank.rerank(
         others,
-        {
-            "标题": target.title or target.target_id,
-            "描述": target.description,
-            "行业": target.industry,
-            "阶段": target.stage,
-            "类型": "项目" if target.target_type == "engagement" else "Agent",
-            "Agent 角色": target.role,
-        },
+        target_context(target),
         llm,
         limit=max(limit - len(rules), 1),
         reranker=reranker,
@@ -153,6 +146,43 @@ def compute(
         if fallback is not None:
             picked.append({**fallback, "reasons": ["通用流程兜底", *fallback["reasons"]]})
     return (rules + picked)[:limit], mode
+
+
+def target_context(target: Target) -> dict[str, Any]:
+    """喂给模型的目标上下文：排序和写理由用同一份，说的才是同一件事。"""
+    return {
+        "标题": target.title or target.target_id,
+        "描述": target.description,
+        "行业": target.industry,
+        "阶段": target.stage,
+        "类型": "项目" if target.target_type == "engagement" else "Agent",
+        "Agent 角色": target.role,
+    }
+
+
+def explain(
+    engine: Engine, principal: Principal, target: Target, asset_ids: list[str], llm: Any
+) -> dict[str, str] | None:
+    """给这几份资产各写一句「为什么推荐给这个目标」。只解释提问的人看得见的资产。"""
+    wanted = list(dict.fromkeys(asset_ids))[: rerank.EXPLAIN_LIMIT]
+    if not wanted:
+        return {}
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(assets).where(assets.c.asset_id.in_(wanted), visibility_clause(principal))
+        ).fetchall()
+    by_id = {row.asset_id: row for row in rows}
+    candidates = [
+        {
+            "asset_id": asset_id,
+            "kind": by_id[asset_id].kind,
+            "title": by_id[asset_id].title,
+            "summary": by_id[asset_id].summary,
+        }
+        for asset_id in wanted
+        if asset_id in by_id
+    ]
+    return rerank.explain(candidates, target_context(target), llm)
 
 
 def _linked_assets(engine: Engine, target_type: str, target_id: str):

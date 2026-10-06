@@ -107,13 +107,21 @@ def test_json_in_code_fence_is_parsed() -> None:
 
 
 # —— 真调模型的那条：没配密钥就跳过 ——
+# 只在这里看一眼 .env.local 配了没有，看完把环境变量还原：这个文件在收集阶段就被导入，
+# 留在环境里的话，整轮测试里所有走到模型的地方都会悄悄连上真实服务。
+_before = dict(os.environ)
 load_env_file(Path(__file__).resolve().parents[2] / ".env.local")
 LIVE = config_from_env().usable and os.environ.get("FDE_ASSET_LLM_LIVE_TEST", "1") == "1"
+LOCAL_ENV = {key: value for key, value in os.environ.items() if key not in _before}
+for _key in LOCAL_ENV:
+    del os.environ[_key]
 
 
 @pytest.mark.skipif(not LIVE, reason="没有配置模型网关（.env.local）")
-def test_real_model_reranks_and_explains() -> None:
+def test_real_model_reranks_and_explains(monkeypatch) -> None:
     """真连模型：相关的要挑出来，不相关的不要硬凑，理由得是人话。"""
+    for key, value in LOCAL_ENV.items():
+        monkeypatch.setenv(key, value)
     items, mode = rerank.rerank(CANDIDATES, CONTEXT, build_client(), limit=3)
     if mode != "reranked":
         pytest.skip("模型调用没成功（多半是网络或配额），已自动退回关键词排序")

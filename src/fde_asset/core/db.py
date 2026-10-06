@@ -142,6 +142,8 @@ harvest_candidates = Table(
     Column("scope", String(16), nullable=False, default="engagement"),
     Column("department_code", String(64), nullable=False, default=""),
     Column("engagement_slug", String(64), nullable=False, default=""),
+    # 客户级草稿归哪个客户；没有它，提交时算不出目标仓库，也判不了谁能评审
+    Column("customer_code", String(64), nullable=False, default=""),
     Column("name", String(128), nullable=False),
     Column("title", String(200), nullable=False, default=""),
     Column(

@@ -23,6 +23,14 @@ SYSTEM = (
     "宁缺毋滥：不相关的不要硬凑。"
 )
 
+EXPLAIN_SYSTEM = (
+    "你是交付团队的资产助手。给你一个项目或 Agent 的上下文，和几份已经被推荐给它的资产。"
+    "为每一份写一句话，说清它对这个目标具体用得上在哪；确实看不出关系就写「关系不大」，不要硬编。"
+    '只输出 JSON：{"reasons":[{"asset_id":"...","reason":"一句话"}]}。'
+)
+#: 一次最多解释几份：理由是人点了才生成的，一次要太多就又慢回去了
+EXPLAIN_LIMIT = 5
+
 MAX_CANDIDATES = 30
 MAX_SUMMARY = 160
 
@@ -159,3 +167,30 @@ def rerank(
     if not chosen:
         return candidates[:limit], "keyword"
     return chosen, "reranked"
+
+
+def explain(
+    candidates: list[dict[str, Any]], context: dict[str, Any], client: LlmClient | None
+) -> dict[str, str] | None:
+    """按需给几份资产各写一句推荐理由，返回 {asset_id: 理由}；没配生成模型或调用失败返回 None。
+
+    排序交给 rerank 模型之后只要零点几秒，慢的是让生成模型写字。所以理由不再随推荐一起算，
+    而是人想知道「为什么推这份」时才生成。
+    """
+    if client is None or not getattr(client, "usable", False) or not candidates:
+        return None
+    chosen = candidates[:EXPLAIN_LIMIT]
+    try:
+        payload = client.complete_json(EXPLAIN_SYSTEM, build_prompt(context, chosen, len(chosen)))
+    except Exception:  # noqa: BLE001 - 写不出理由不是错误，照实说没有就行
+        return None
+    known = {item["asset_id"] for item in chosen}
+    reasons: dict[str, str] = {}
+    for row in payload.get("reasons") or []:
+        if not isinstance(row, dict):
+            continue
+        asset_id = str(row.get("asset_id", ""))
+        reason = str(row.get("reason", "")).strip()
+        if asset_id in known and reason:
+            reasons[asset_id] = reason
+    return reasons
