@@ -21,7 +21,7 @@ from fde_asset.api.app import create_app  # noqa: E402
 from fde_asset.api.deps import build_context  # noqa: E402
 from fde_asset.modules.asset.indexer import index_all  # noqa: E402
 from fde_asset.settings import AssetSettings, load_local_env  # noqa: E402
-from scripts.seed_assets import seed  # noqa: E402
+from scripts.seed_assets import refresh_directory, seed  # noqa: E402
 
 
 class _ReadySignal(uvicorn.Server):
@@ -55,6 +55,11 @@ def main() -> int:
     settings.ensure_dirs()
     if args.no_seed:
         print("reusing existing data dir, skip seeding", flush=True)
+        added = refresh_directory(settings)
+        if added:
+            print(
+                f"directory.json 补上了后来才有的 {len(added)} 项：" + "、".join(added), flush=True
+            )
     else:
         summary = seed(settings)
         print(f"seeded: {summary}", flush=True)

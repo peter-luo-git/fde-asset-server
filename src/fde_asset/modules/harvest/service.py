@@ -4,16 +4,24 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.engine import Engine
 
-from fde_asset.core.db import asset_reviews, harvest_candidates, record_event
+from fde_asset.core.db import (
+    asset_leads,
+    asset_reviews,
+    assets,
+    harvest_candidates,
+    record_event,
+)
 from fde_asset.modules.asset.manifest import (
     KIND_RULES,
+    NAME_PATTERN,
+    SHORT_BY_KIND,
     parse_manifest,
     validate_asset,
 )
@@ -46,15 +54,58 @@ class CandidateInput:
     origin: str = "manual"
     source: dict[str, Any] = field(default_factory=dict)
     files: dict[str, str] = field(default_factory=dict)
+    #: 从哪条沉淀线索起草的；填了就把那条线索标成已起草，不再出现在工作台
+    lead_id: str = ""
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def generate_name(engine: Engine, kind: str) -> str:
+    """没填标识时替用户起一个：类型前缀-日期-四位随机串，例如 `case-20261005-a3f2`。
+
+    标识是资产的地址（Git 目录名、`[[kind/name]]` 引用、接口参数），只能是 ASCII；
+    但中文标题转不出像样的 ASCII，逼着人现想一个英文名是纯负担，所以默认自动生成。
+    """
+    prefix = SHORT_BY_KIND.get(kind, kind.lower())
+    stamp = _now().strftime("%Y%m%d")
+    with engine.connect() as conn:
+        for _ in range(20):
+            name = f"{prefix}-{stamp}-{uuid.uuid4().hex[:4]}"
+            taken = (
+                conn.execute(
+                    select(harvest_candidates.c.candidate_id).where(
+                        harvest_candidates.c.name == name
+                    )
+                ).first()
+                or conn.execute(
+                    select(assets.c.asset_id).where(assets.c.kind == kind, assets.c.name == name)
+                ).first()
+            )
+            if not taken:
+                return name
+    return f"{prefix}-{stamp}-{uuid.uuid4().hex[:12]}"
+
+
 def create_draft(engine: Engine, principal: Principal, data: CandidateInput) -> dict[str, Any]:
     if data.kind not in KIND_RULES:
         raise HarvestError(f"不支持的 kind：{data.kind}")
+    name = (data.name or "").strip()
+    if not name:
+        name = generate_name(engine, data.kind)
+    elif not NAME_PATTERN.match(name) or len(name) > 64:
+        raise HarvestError("标识只能用小写字母、数字和连字符；不填会自动生成")
+    data = replace(data, name=name)
+    if data.lead_id:
+        with engine.connect() as conn:
+            lead = conn.execute(
+                select(asset_leads.c.owner_user).where(asset_leads.c.lead_id == data.lead_id)
+            ).first()
+        # 线索是给某个人的待办，别人不能替他"处理掉"
+        if lead is None or lead.owner_user != principal.user_id:
+            raise HarvestError("线索不存在，或者不是给你的")
+        data = replace(data, origin="lead", source={**data.source, "leadId": data.lead_id})
     if data.scope == "engagement" and not data.engagement_slug:
         raise HarvestError("项目级候选必须指定 engagement_slug")
     if data.scope == "department" and not data.department_code:
@@ -91,6 +142,13 @@ def create_draft(engine: Engine, principal: Principal, data: CandidateInput) -> 
                 created_by=principal.user_id,
             )
         )
+        if data.lead_id:
+            # 只处理这一条：同一个工作项可能还有别的线索，各自说的是不同的事
+            conn.execute(
+                update(asset_leads)
+                .where(asset_leads.c.lead_id == data.lead_id)
+                .values(status="drafted")
+            )
         record_event(
             conn,
             "candidate.created",
@@ -215,7 +273,8 @@ def draft_from_upload(
 ) -> dict[str, Any]:
     """历史文档导入：提取文本预填正文，结论与适用边界留给人补，原件存进 BlobStore。"""
     extraction = extract_text(filename, content)
-    name = _slugify(title) or "legacy-import"
+    # 中文标题转不出 ASCII，以前一律落成 legacy-import，多传几份就重名了
+    name = _slugify(title, fallback="") or generate_name(engine, kind)
     owner = (
         f"department:{principal.department_code}"
         if principal.department_code

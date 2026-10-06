@@ -252,3 +252,56 @@ def test_blank_spots_are_capped() -> None:
         items.append(Item(f"主题{index}问题排查", "a"))
         items.append(Item(f"主题{index}问题复现", "b"))
     assert len(_blank_spots(items, [])) <= 5
+
+
+def _draft_from(client, lead: dict) -> dict:
+    return client.post(
+        "/api/v1/harvest-candidates",
+        json={
+            "kind": lead["suggested_kind"],
+            "title": lead["title"],
+            "scope": "engagement",
+            "engagement_slug": lead["engagement_slug"] or "policy-import",
+            "lead_id": lead["lead_id"],
+        },
+    )
+
+
+def test_drafting_from_a_lead_takes_it_off_the_list(client) -> None:
+    """起草之后线索就算处理了，不该还挂在工作台上。"""
+    client.headers.update({"X-FDE-User": "chen"})
+    client.post("/api/v1/workbench/leads/refresh")
+    before = client.get("/api/v1/workbench").json()["leads"]
+    # 同一个工作项往往同时命中好几条规则，各说各的事；挑这样的一条来起草
+    lead = next(
+        item
+        for item in before
+        if sum(other["subject_id"] == item["subject_id"] for other in before) > 1
+    )
+
+    created = _draft_from(client, lead)
+    assert created.status_code == 200, created.text
+    assert created.json()["origin"] == "lead", "草稿要记下是从线索来的"
+
+    after = client.get("/api/v1/workbench").json()["leads"]
+    assert lead["lead_id"] not in {item["lead_id"] for item in after}
+    assert len(after) == len(before) - 1, "只处理起草的这一条，同一工作项的其它线索留着"
+
+    # 重新扫描不能把它翻出来；草稿提交评审、被打回，也都不恢复
+    client.post("/api/v1/workbench/leads/refresh")
+    again = client.get("/api/v1/workbench").json()["leads"]
+    assert lead["lead_id"] not in {item["lead_id"] for item in again}
+
+
+def test_cannot_draft_from_someone_elses_lead(client) -> None:
+    client.headers.update({"X-FDE-User": "chen"})
+    client.post("/api/v1/workbench/leads/refresh")
+    lead = client.get("/api/v1/workbench").json()["leads"][0]
+
+    client.headers.update({"X-FDE-User": "zhao"})
+    assert _draft_from(client, lead).status_code == 422
+    assert _draft_from(client, {**lead, "lead_id": "no-such-lead"}).status_code == 422
+
+    client.headers.update({"X-FDE-User": "chen"})
+    still = client.get("/api/v1/workbench").json()["leads"]
+    assert lead["lead_id"] in {item["lead_id"] for item in still}, "别人碰不掉我的线索"

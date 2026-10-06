@@ -18,7 +18,16 @@ def test_targets_split_mine_and_department(client) -> None:
     """我负责的和我部门的分开列；普通成员看不到部门视图。"""
     wang = as_user(client, "wang").get("/api/v1/recommend/targets").json()
     assert {item["target_id"] for item in wang["mine"]} >= {"policy-import", "core-migration"}
-    assert wang["department"] == [], "老王不是部门主管，没有部门视图"
+    # 老王兼 finance 部门主管：部门视图里是本部门的全部项目和 Agent
+    assert {item["target_id"] for item in wang["department"]} == {
+        "policy-import",
+        "core-migration",
+        "migration-reviewer",
+    }
+
+    chen = as_user(client, "chen").get("/api/v1/recommend/targets").json()
+    assert chen["mine"], "小陈有自己负责的项目"
+    assert chen["department"] == [], "小陈不是部门主管，没有部门视图"
 
     admin = as_user(client, "admin").get("/api/v1/recommend/targets").json()
     assert len(admin["mine"]) >= 5

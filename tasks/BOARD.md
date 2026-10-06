@@ -3,8 +3,8 @@
 状态：todo / doing / review / done / env-pending
 规则：一个切片半天内、生产代码 ≤ 300 行；`make check` 绿 = 完成；评审最多 2 轮。
 
-**整体状态（2026-10-04）**：v0.1 的 21 个切片全部 done；10-01 之后按《资产中心-推荐与应用资产设计》§3.5 的四批排期又做了 15 个切片（见下方「v0.1 之后」）。
-后端全量 **304 通过 / 3 跳过**（跳过的 3 个需要 docker 与 docker compose）、ruff 与 `alembic heads` 通过。
+**整体状态（2026-10-06）**：v0.1 的 21 个切片全部 done；10-01 之后按《资产中心-推荐与应用资产设计》§3.5 的四批排期又做了 15 个切片（见下方「v0.1 之后」）。
+后端全量 **319 通过 / 3 跳过**（跳过的 3 个需要 docker 与 docker compose）、ruff 与 `alembic heads` 通过。
 还没做的和被 fde-server 卡住的，统一记在 fde-specs《资产中心-后续工作清单》。
 
 | ID | 切片 | 状态 | 验收命令 | 落地位置 |
@@ -68,6 +68,11 @@
 | F1b-web | 按问题检索（前端搜索框）：默认按问题找，可切回按关键词筛 | **done** | `npm run test:asset`、`npm run qa:asset-browser` | fde-web `pages/AssetCatalogPage.tsx` |
 | F8b | 关系图谱：子图接口（1–3 层、60 节点上限、不可见资产不当跳板）+ 前端 SVG 图 | **done** | `pytest -q tests/asset/test_relations.py`；`npm run test:asset` | `modules/asset/relations.py` 的 `graph()`、`GET /api/v1/assets/{id}/graph`；fde-web `components/AssetRelationGraph.tsx` |
 | X-5 | 演示服务启动时加载 `.env.local`；测试用 `FDE_ASSET_SKIP_ENV_FILE` 跳过 | **done** | `npm run test:asset-e2e`（加 `FDE_E2E_SEMANTIC=1` 验真实模型） | `settings.load_local_env()`、`scripts/serve_seeded.py` |
+| X-6 | 草稿标识自动生成（`case-20261005-a3f2`），可手改；上传历史文档不再一律落成 legacy-import | **done** | `pytest -q tests/asset/test_draft_naming.py` | `harvest/service.generate_name()` |
+| X-7 | 从线索起草后线索标成已起草，草稿来源记为线索 | **done** | `pytest -q tests/asset/test_leads.py` | `harvest/service.create_draft()` 的 `lead_id` |
+| X-8 | 开发模式身份列表接口，供页面右下角切换演示身份 | **done** | `pytest -q tests/platform/test_dev_identities.py` | `GET /api/v1/dev/identities`；fde-web `components/DevIdentitySwitcher.tsx` |
+| X-9 | 重建索引时内容没变就不动更新时间；详情页显示入库时间与最近更新 | **done** | `pytest -q tests/asset/test_indexer.py` | `indexer._upsert()` |
+| X-10 | 沿用旧数据启动时补齐名单文件里后来才有的部分；老王兼 finance 部门主管 | **done** | `pytest -q tests/platform/test_directory_refresh.py` | `scripts/seed_assets.refresh_directory()` |
 | F2 | Agent 检索工具 `search_assets` / `get_asset` | todo | — | 资产侧可先做，挂到 Agent 要等 fde-server |
 | F3 | 启动资产包 | 不做 | — | 2026-10-04 决定暂不做，理由见《资产中心-后续工作清单》§一 |
 | F11 | 度量看板 | todo | — | 2026-10-04 决定这一轮先不做 |

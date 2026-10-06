@@ -332,9 +332,22 @@ def index_repository(
     return report
 
 
+#: 这两列每次索引都会变，不代表资产内容变了
+_BOOKKEEPING = {"updated_at", "commit_sha"}
+
+
 def _upsert(conn, asset_id: str, values: dict, now: datetime) -> None:
-    exists = conn.execute(select(assets.c.asset_id).where(assets.c.asset_id == asset_id)).first()
+    exists = conn.execute(select(assets).where(assets.c.asset_id == asset_id)).first()
     if exists:
+        # 内容没变就不动更新时间：服务每次启动都会重建索引，
+        # 否则所有资产的"最近更新"都会变成上一次重启的时间
+        unchanged = all(
+            getattr(exists, key) == value
+            for key, value in values.items()
+            if key not in _BOOKKEEPING
+        )
+        if unchanged:
+            values = {key: value for key, value in values.items() if key != "updated_at"}
         conn.execute(update(assets).where(assets.c.asset_id == asset_id).values(**values))
     else:
         conn.execute(assets.insert().values(created_at=now, **values))

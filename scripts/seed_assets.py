@@ -827,6 +827,8 @@ DIRECTORY: dict[str, Any] = {
         "wang": {
             "display_name": "老王",
             "department_code": "finance",
+            # 两个项目都在 finance 部门下，由他兼部门主管，才演示得了「部门视图 → 推送给负责人」
+            "is_department_head": True,
             "memberships": [
                 {
                     "engagement_slug": "policy-import",
@@ -976,6 +978,60 @@ ACTIVITY: dict[str, Any] = {
         },
     ],
 }
+
+
+def merge_missing(existing: Any, fresh: Any, path: str = "") -> tuple[Any, list[str]]:
+    """把 `fresh` 里有、`existing` 里没有的部分补进去，已有的内容一律不动。返回（结果, 补了哪些）。
+
+    字典逐层补缺的键；成员关系这类列表按 `engagement_slug` 对上号，只给对上的那一项补缺的字段，
+    不增不删——名单里少一个人、少一个项目可能是有意改的，多出来的更不能动。
+    """
+    if isinstance(existing, dict) and isinstance(fresh, dict):
+        merged = dict(existing)
+        added: list[str] = []
+        for key, value in fresh.items():
+            here = f"{path}.{key}" if path else str(key)
+            if key not in existing:
+                merged[key] = value
+                added.append(here)
+            else:
+                merged[key], more = merge_missing(existing[key], value, here)
+                added.extend(more)
+        return merged, added
+    if isinstance(existing, list) and isinstance(fresh, list):
+        by_slug = {
+            item["engagement_slug"]: item
+            for item in fresh
+            if isinstance(item, dict) and "engagement_slug" in item
+        }
+        merged_list = []
+        added = []
+        for item in existing:
+            match = by_slug.get(item.get("engagement_slug")) if isinstance(item, dict) else None
+            if match is None:
+                merged_list.append(item)
+                continue
+            patched, more = merge_missing(item, match, f"{path}[{item['engagement_slug']}]")
+            merged_list.append(patched)
+            added.extend(more)
+        return merged_list, added
+    return existing, []
+
+
+def refresh_directory(settings: AssetSettings) -> list[str]:
+    """沿用旧数据目录启动时，把名单文件里后来才有的部分补上。返回补了哪些。
+
+    代码往名单里加东西（项目和 Agent 清单、成员关系里的客户代号、新角色）之后，
+    旧数据目录里的 directory.json 不会自己长出来，页面上就表现为「找不到项目」。
+    """
+    target = settings.root / "directory.json"
+    if not target.exists():
+        return []
+    existing = json.loads(target.read_text(encoding="utf-8"))
+    merged, added = merge_missing(existing, DIRECTORY)
+    if added:
+        target.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+    return added
 
 
 def seed(settings: AssetSettings) -> dict[str, Any]:

@@ -46,7 +46,8 @@ def create_candidate(
             principal,
             service.CandidateInput(
                 kind=payload["kind"],
-                name=payload["name"],
+                # 标识可以不传，服务端会生成
+                name=payload.get("name") or "",
                 title=payload["title"],
                 scope=payload.get("scope", "engagement"),
                 department_code=payload.get("department_code", ""),
@@ -54,6 +55,7 @@ def create_candidate(
                 origin=payload.get("origin", "manual"),
                 source=payload.get("source", {}),
                 files=payload.get("files", {}),
+                lead_id=payload.get("lead_id") or "",
             ),
         )
     except service.HarvestError as exc:

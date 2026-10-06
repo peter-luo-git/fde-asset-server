@@ -443,6 +443,39 @@ def rebuild_relations(
     return relations.auto_link(context.engine)
 
 
+@router.get("/dev/identities")
+def dev_identities(context: ServiceContext = Depends(get_context)) -> dict[str, Any]:
+    """开发模式下可以切换成哪些身份，给页面上的身份切换用。
+
+    这个接口本身不需要身份——它就是用来选身份的。正式环境（oidc）没有这回事，直接 404。
+    """
+    if context.settings.identity_mode != "dev":
+        raise HTTPException(status_code=404, detail="只有开发模式能切换身份")
+    items = []
+    for user_id in context.directory.users():
+        principal = context.directory.resolve(user_id)
+        roles = [
+            label
+            for flag, label in (
+                (principal.is_admin, "平台管理员"),
+                (principal.is_asset_reviewer, "资产评审员"),
+                (principal.is_department_head, "部门主管"),
+            )
+            if flag
+        ]
+        roles += [f"{m.engagement_slug} 负责人" for m in principal.memberships if m.role == "owner"]
+        items.append(
+            {
+                "user_id": principal.user_id,
+                "display_name": principal.display_name or principal.user_id,
+                "department_code": principal.department_code,
+                "roles": roles,
+                "engagements": sorted(principal.engagement_slugs),
+            }
+        )
+    return {"items": items}
+
+
 @router.get("/kinds")
 def list_kinds() -> dict[str, Any]:
     """七种资产类型各自的必填要求，前端据此标红必填项，避免两边各写一份口径。"""

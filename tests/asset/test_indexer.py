@@ -109,3 +109,20 @@ def test_attachment_text_is_indexed(context) -> None:
         row = conn.execute(select(assets).where(assets.c.name == "oracle-to-pg-cutover")).first()
     assert "shared_buffers" in row.content_text  # 来自 xlsx 附件
     assert '"text_extraction": "ok"' in row.attachments_json
+
+
+def test_reindex_without_changes_keeps_updated_at(indexed) -> None:
+    """服务每次启动都会重建索引；内容没变，"最近更新"不该跟着变成重启时间。"""
+    from sqlalchemy import select
+
+    from fde_asset.core.db import assets
+    from fde_asset.modules.asset.indexer import index_all
+
+    def stamps() -> dict[str, tuple]:
+        with indexed.engine.connect() as conn:
+            rows = conn.execute(select(assets.c.asset_id, assets.c.created_at, assets.c.updated_at))
+            return {row.asset_id: (row.created_at, row.updated_at) for row in rows}
+
+    before = stamps()
+    index_all(indexed.engine, indexed.repo_port, indexed.repos())
+    assert stamps() == before
