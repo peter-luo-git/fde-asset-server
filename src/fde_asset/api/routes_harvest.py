@@ -16,6 +16,7 @@ from fde_asset.modules.asset.indexer import index_repository
 from fde_asset.modules.asset.visibility import can_review, visibility_clause
 from fde_asset.modules.harvest import service
 from fde_asset.modules.leads import rules as leads_rules
+from fde_asset.modules.notify import service as notify_service
 from fde_asset.platform.blobs import BlobError
 from fde_asset.platform.identity import Principal
 
@@ -32,6 +33,28 @@ def _scan_context(context: ServiceContext) -> service.ScanContext:
         customer_names=tuple(data.get("customer_names", [])),
         sensitive_terms=tuple(data.get("sensitive_terms", [])),
     )
+
+
+def _reviewers(context: ServiceContext, candidate: dict[str, Any]) -> list[dict[str, str]]:
+    """这份草稿该由谁评。开发模式能从目录算出具体人；正式环境名单由 fde-server 提供，返回空列表。"""
+    reviewers: list[dict[str, str]] = []
+    for user_id in context.directory.users():
+        try:
+            other = context.directory.resolve(user_id)
+        except Exception:  # noqa: BLE001 - 目录里有坏数据不该影响主流程
+            continue
+        if other.user_id == candidate["created_by"]:
+            continue  # 自己不评自己
+        if can_review(
+            other,
+            candidate["scope"],
+            department_code=candidate["department_code"],
+            engagement_slug=candidate["engagement_slug"],
+        ):
+            reviewers.append(
+                {"user_id": other.user_id, "display_name": other.display_name or other.user_id}
+            )
+    return reviewers
 
 
 @router.post("/harvest-candidates")
@@ -204,24 +227,7 @@ def candidate_review(
     ]
     current = next((item for item in history if item["status"] == "open"), None)
 
-    # 开发模式能从目录算出具体人；正式环境名单由 fde-server 提供，这里返回空列表
-    reviewers: list[dict[str, str]] = []
-    for user_id in context.directory.users():
-        try:
-            other = context.directory.resolve(user_id)
-        except Exception:  # noqa: BLE001 - 目录里有坏数据不该影响主流程
-            continue
-        if other.user_id == candidate["created_by"]:
-            continue  # 自己不评自己
-        if can_review(
-            other,
-            candidate["scope"],
-            department_code=candidate["department_code"],
-            engagement_slug=candidate["engagement_slug"],
-        ):
-            reviewers.append(
-                {"user_id": other.user_id, "display_name": other.display_name or other.user_id}
-            )
+    reviewers = _reviewers(context, candidate)
 
     if candidate["status"] == "submitted":
         stage = "waiting"
@@ -378,7 +384,31 @@ def submit_candidate(
                 )
             )
         raise HTTPException(status_code=409, detail=str(exc)) from None
+    submitted = service.get_candidate(context.engine, candidate_id)
+    notify_service.notify_review(
+        context.engine,
+        [item["user_id"] for item in _reviewers(context, submitted)],
+        candidate_id=candidate_id,
+        title=f"有草稿等你评审：{submitted['title']}",
+        body=f"{principal.display_name or principal.user_id} 提交了一份{submitted['kind']}草稿",
+        reason="你有这个作用域的评审权",
+    )
     return result
+
+
+@router.delete("/harvest-candidates/{candidate_id}")
+def delete_candidate(
+    candidate_id: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """删掉自己的一份草稿；如果它是从线索起草的，那条线索回到工作台。"""
+    get_candidate(candidate_id, context, principal)
+    try:
+        return service.delete_draft(context.engine, principal, candidate_id, context.blob_store)
+    except service.HarvestError as exc:
+        status = 403 if "自己的" in str(exc) else 409
+        raise HTTPException(status_code=status, detail=str(exc)) from None
 
 
 @router.get("/reviews")
@@ -465,6 +495,17 @@ def decide_review(
         target_repo=target,
         note=payload.get("note", ""),
     )
+    if not result.get("idempotent"):
+        approved = result.get("status") == "merged"
+        note = str(payload.get("note", "")).strip()
+        notify_service.notify_review(
+            context.engine,
+            [candidate.created_by],
+            candidate_id=candidate.candidate_id,
+            title=("已入库：" if approved else "被打回：") + candidate.title,
+            body=(note or ("评审通过，资产已合并进仓库" if approved else "请按意见修改后重新提交")),
+            reason=f"{principal.display_name or principal.user_id} 评审了你提交的草稿",
+        )
     if result.get("status") == "merged":
         report = index_repository(
             context.engine, context.repo_port, target, text_limit=context.settings.index_text_limit

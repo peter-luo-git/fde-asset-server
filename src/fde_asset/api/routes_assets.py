@@ -15,6 +15,7 @@ from fde_asset.modules.asset import (
     ask,
     checkup,
     feedback,
+    lifecycle,
     matching,
     relations,
     snapshot,
@@ -179,7 +180,38 @@ def get_asset(
     data = catalog.get_asset(context.engine, principal, asset_id)
     if data is None:
         raise HTTPException(status_code=404, detail="资产不存在或无权查看")
+    with context.engine.connect() as conn:
+        row = conn.execute(select(assets).where(assets.c.asset_id == asset_id)).first()
+    # 页面据此决定要不要显示下架、废弃、恢复
+    data["can_manage"] = lifecycle.may_manage(principal, row) and not row.path.endswith(".md")
     return data
+
+
+@router.post("/assets/{asset_id}/lifecycle")
+def change_lifecycle(
+    asset_id: str,
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """下架、废弃或恢复一份资产：改仓库里的 asset.yaml 并提交，再重建索引。"""
+    try:
+        return lifecycle.change(
+            context.engine,
+            context.repo_port,
+            context.repos(),
+            principal,
+            asset_id,
+            str(payload.get("lifecycle", "")),
+            replaced_by=str(payload.get("replaced_by", "")),
+            note=str(payload.get("note", "")),
+            text_limit=context.settings.index_text_limit,
+        )
+    except lifecycle.LifecycleForbidden as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from None
+    except lifecycle.LifecycleError as exc:
+        status = 404 if "无权查看" in str(exc) else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from None
 
 
 @router.get("/assets/{asset_id}/passport")

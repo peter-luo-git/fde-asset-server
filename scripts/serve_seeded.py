@@ -46,6 +46,11 @@ def main() -> int:
         action="store_true",
         help="沿用数据目录里已有的资产，不重新灌种子（保住手工造的数据）",
     )
+    parser.add_argument(
+        "--with-worker",
+        action="store_true",
+        help="在本进程里顺带跑定时任务（索引轮询、线索扫描、探活）；自动化测试不开，结果才确定",
+    )
     args = parser.parse_args()
 
     # 演示服务也要能用上 .env.local 里配的模型，否则按问题检索只能退回关键词
@@ -76,6 +81,12 @@ def main() -> int:
         "indexed: " + ", ".join(f"{r.repo}={r.indexed}" for r in reports),
         flush=True,
     )
+
+    if args.with_worker:
+        from fde_asset.scheduler import start_in_thread
+
+        start_in_thread(context)
+        print("worker thread started", flush=True)
 
     base_url = f"http://{args.host}:{args.port}"
     config = uvicorn.Config(

@@ -1,0 +1,3191 @@
+# FDE 资产中心服务 · 对外接口契约（asset-v1）
+#
+# 由 scripts/export_openapi.py 从代码生成，不要手改；改接口后重跑脚本并一起提交。
+# 说明：多数写接口的请求体目前按自由 JSON 接收，契约里只能体现路径、参数与状态码，
+# 字段级的约定以 fde-web/src/features/asset/api/types.ts 和跨栈端到端测试为准。
+components:
+  schemas:
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          title: Detail
+          type: array
+      title: HTTPValidationError
+      type: object
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          title: Location
+          type: array
+        msg:
+          title: Message
+          type: string
+        type:
+          title: Error Type
+          type: string
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+      type: object
+info:
+  title: FDE 资产中心服务
+  version: 0.1.0
+openapi: 3.1.0
+paths:
+  /api/v1/admin/assets/reindex:
+    post:
+      operationId: reindex_api_v1_admin_assets_reindex_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Reindex Api V1 Admin Assets Reindex Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Reindex
+      tags:
+      - assets
+  /api/v1/admin/assets/relink:
+    post:
+      operationId: rebuild_relations_api_v1_admin_assets_relink_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Rebuild Relations Api V1 Admin Assets Relink Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Rebuild Relations
+      tags:
+      - assets
+  /api/v1/apps:
+    get:
+      description: 应用市场：能跑的东西，带演示入口与在线状态。
+      operationId: list_apps_api_v1_apps_get
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response List Apps Api V1 Apps Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: List Apps
+      tags:
+      - assets
+  /api/v1/apps/probe:
+    post:
+      description: 手动探一遍演示地址。定时任务也调它。
+      operationId: probe_apps_api_v1_apps_probe_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Probe Apps Api V1 Apps Probe Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Probe Apps
+      tags:
+      - assets
+  /api/v1/apps/{asset_id}/deployment:
+    get:
+      operationId: read_deployment_api_v1_apps__asset_id__deployment_get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Read Deployment Api V1 Apps  Asset Id  Deployment Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Read Deployment
+      tags:
+      - apps
+  /api/v1/apps/{asset_id}/image:
+    post:
+      description: '两种都收：
+
+
+        - 单容器：`docker save -o app.tar <镜像>`
+
+        - 多容器：`docker-compose.yml` + `images.tar` 打成一个 bundle（见 scripts/fde_app_pack.py）'
+      operationId: upload_image_api_v1_apps__asset_id__image_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Upload Image Api V1 Apps  Asset Id  Image Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Upload Image
+      tags:
+      - apps
+  /api/v1/apps/{asset_id}/logs:
+    get:
+      operationId: app_logs_api_v1_apps__asset_id__logs_get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: query
+        name: tail
+        required: false
+        schema:
+          default: 200
+          title: Tail
+          type: integer
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response App Logs Api V1 Apps  Asset Id  Logs Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: App Logs
+      tags:
+      - apps
+  /api/v1/apps/{asset_id}/review:
+    post:
+      description: 审核：通过了才允许运行。按确认，现阶段由管理员一个人审。
+      operationId: review_image_api_v1_apps__asset_id__review_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              default: {}
+              title: Payload
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Review Image Api V1 Apps  Asset Id  Review Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Review Image
+      tags:
+      - apps
+  /api/v1/apps/{asset_id}/start:
+    post:
+      description: 任何看得到这个应用的人都能启动——互相演示才是目的。
+      operationId: start_app_api_v1_apps__asset_id__start_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Start App Api V1 Apps  Asset Id  Start Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Start App
+      tags:
+      - apps
+  /api/v1/apps/{asset_id}/stop:
+    post:
+      operationId: stop_app_api_v1_apps__asset_id__stop_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Stop App Api V1 Apps  Asset Id  Stop Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Stop App
+      tags:
+      - apps
+  /api/v1/assets:
+    get:
+      operationId: list_assets_api_v1_assets_get
+      parameters:
+      - in: query
+        name: kind
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Kind
+      - in: query
+        name: scope
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Scope
+      - in: query
+        name: industry
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Industry
+      - in: query
+        name: owner_department
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Owner Department
+      - in: query
+        name: owner
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Owner
+      - in: query
+        name: owner_kind
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Owner Kind
+      - in: query
+        name: mine
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Mine
+      - in: query
+        name: lifecycle
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Lifecycle
+      - in: query
+        name: quality
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Quality
+      - in: query
+        name: nature
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Nature
+      - in: query
+        name: q
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Q
+      - in: query
+        name: sort
+        required: false
+        schema:
+          default: updated
+          title: Sort
+          type: string
+      - in: query
+        name: include_deprecated
+        required: false
+        schema:
+          default: false
+          title: Include Deprecated
+          type: boolean
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 50
+          maximum: 200
+          title: Limit
+          type: integer
+      - in: query
+        name: offset
+        required: false
+        schema:
+          default: 0
+          title: Offset
+          type: integer
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response List Assets Api V1 Assets Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: List Assets
+      tags:
+      - assets
+  /api/v1/assets/ask:
+    get:
+      description: 按问题检索：一句话进来，按语义相关度出资产；没配重排模型时退回关键词。
+      operationId: ask_assets_api_v1_assets_ask_get
+      parameters:
+      - in: query
+        name: q
+        required: true
+        schema:
+          title: Q
+          type: string
+      - in: query
+        name: kind
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Kind
+      - in: query
+        name: scope
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Scope
+      - in: query
+        name: limit
+        required: false
+        schema:
+          default: 10
+          maximum: 50
+          minimum: 1
+          title: Limit
+          type: integer
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Ask Assets Api V1 Assets Ask Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Ask Assets
+      tags:
+      - assets
+  /api/v1/assets/invalid:
+    get:
+      operationId: list_invalid_api_v1_assets_invalid_get
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response List Invalid Api V1 Assets Invalid Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: List Invalid
+      tags:
+      - assets
+  /api/v1/assets/references:
+    post:
+      description: 解析一段文本里的 [[引用]] 并记录（频道消息、工作项描述、交付摘要共用）。
+      operationId: add_references_api_v1_assets_references_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Add References Api V1 Assets References Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Add References
+      tags:
+      - assets
+  /api/v1/assets/resolve:
+    get:
+      operationId: resolve_api_v1_assets_resolve_get
+      parameters:
+      - in: query
+        name: ref
+        required: true
+        schema:
+          title: Ref
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Resolve Api V1 Assets Resolve Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Resolve
+      tags:
+      - assets
+  /api/v1/assets/usages:
+    post:
+      operationId: post_usages_api_v1_assets_usages_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Post Usages Api V1 Assets Usages Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Post Usages
+      tags:
+      - assets
+  /api/v1/assets/{asset_id}:
+    get:
+      operationId: get_asset_api_v1_assets__asset_id__get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Get Asset Api V1 Assets  Asset Id  Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Get Asset
+      tags:
+      - assets
+  /api/v1/assets/{asset_id}/changes:
+    get:
+      description: 这份资产最近一次更新改了什么，章节级。
+      operationId: asset_changes_api_v1_assets__asset_id__changes_get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Asset Changes Api V1 Assets  Asset Id  Changes Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Asset Changes
+      tags:
+      - notify
+  /api/v1/assets/{asset_id}/feedback:
+    get:
+      operationId: read_feedback_api_v1_assets__asset_id__feedback_get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Read Feedback Api V1 Assets  Asset Id  Feedback Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Read Feedback
+      tags:
+      - assets
+    post:
+      description: 用过之后表个态；选「已过时」会自动起一份修订草稿交给负责人。
+      operationId: submit_feedback_api_v1_assets__asset_id__feedback_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Submit Feedback Api V1 Assets  Asset Id  Feedback Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Submit Feedback
+      tags:
+      - assets
+  /api/v1/assets/{asset_id}/graph:
+    get:
+      description: 关系图谱：以这份资产为中心往外展开几层，节点全部经过可见性过滤。
+      operationId: asset_relation_graph_api_v1_assets__asset_id__graph_get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: query
+        name: depth
+        required: false
+        schema:
+          default: 2
+          maximum: 3
+          minimum: 1
+          title: Depth
+          type: integer
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Asset Relation Graph Api V1 Assets  Asset Id  Graph Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Asset Relation Graph
+      tags:
+      - assets
+  /api/v1/assets/{asset_id}/lifecycle:
+    post:
+      description: 下架、废弃或恢复一份资产：改仓库里的 asset.yaml 并提交，再重建索引。
+      operationId: change_lifecycle_api_v1_assets__asset_id__lifecycle_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Change Lifecycle Api V1 Assets  Asset Id  Lifecycle Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Change Lifecycle
+      tags:
+      - assets
+  /api/v1/assets/{asset_id}/passport:
+    get:
+      operationId: get_passport_api_v1_assets__asset_id__passport_get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Get Passport Api V1 Assets  Asset Id  Passport Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Get Passport
+      tags:
+      - assets
+  /api/v1/assets/{asset_id}/relations:
+    get:
+      description: 这份资产的上下游：引用了谁、被谁引用、同项目还沉淀了什么。
+      operationId: asset_relations_view_api_v1_assets__asset_id__relations_get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Asset Relations View Api V1 Assets  Asset Id  Relations Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Asset Relations View
+      tags:
+      - assets
+  /api/v1/assets/{asset_id}/sop-steps:
+    get:
+      operationId: get_sop_steps_api_v1_assets__asset_id__sop_steps_get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Get Sop Steps Api V1 Assets  Asset Id  Sop Steps Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Get Sop Steps
+      tags:
+      - assets
+  /api/v1/assets/{asset_id}/sop-steps/{step_number}:
+    get:
+      operationId: get_sop_step_api_v1_assets__asset_id__sop_steps__step_number__get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: path
+        name: step_number
+        required: true
+        schema:
+          title: Step Number
+          type: integer
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Get Sop Step Api V1 Assets  Asset Id  Sop Steps  Step Number  Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Get Sop Step
+      tags:
+      - assets
+  /api/v1/dev/identities:
+    get:
+      description: '开发模式下可以切换成哪些身份，给页面上的身份切换用。
+
+
+        这个接口本身不需要身份——它就是用来选身份的。正式环境（oidc）没有这回事，直接 404。'
+      operationId: dev_identities_api_v1_dev_identities_get
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Dev Identities Api V1 Dev Identities Get
+                type: object
+          description: Successful Response
+      summary: Dev Identities
+      tags:
+      - assets
+  /api/v1/governance/checkup:
+    get:
+      description: 资产体检：半年没更新、零复用、被反复拒绝、收到差评，四条规则。
+      operationId: asset_checkup_api_v1_governance_checkup_get
+      parameters:
+      - in: query
+        name: owner_only
+        required: false
+        schema:
+          default: true
+          title: Owner Only
+          type: boolean
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Asset Checkup Api V1 Governance Checkup Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Asset Checkup
+      tags:
+      - assets
+  /api/v1/governance/signals:
+    get:
+      description: 负责人待办：我负责的资产收到的负面反馈，以及被反复拒绝的推荐。
+      operationId: governance_signals_api_v1_governance_signals_get
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Governance Signals Api V1 Governance Signals Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Governance Signals
+      tags:
+      - assets
+  /api/v1/harvest-candidates:
+    post:
+      operationId: create_candidate_api_v1_harvest_candidates_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Create Candidate Api V1 Harvest Candidates Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Create Candidate
+      tags:
+      - harvest
+  /api/v1/harvest-candidates/from-issue:
+    post:
+      operationId: create_from_issue_api_v1_harvest_candidates_from_issue_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Create From Issue Api V1 Harvest Candidates From Issue Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Create From Issue
+      tags:
+      - harvest
+  /api/v1/harvest-candidates/from-upload:
+    post:
+      description: 历史文档导入：content 为 base64。提取文本预填正文，结论仍需人工补齐。
+      operationId: create_from_upload_api_v1_harvest_candidates_from_upload_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Create From Upload Api V1 Harvest Candidates From Upload Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Create From Upload
+      tags:
+      - harvest
+  /api/v1/harvest-candidates/{candidate_id}:
+    delete:
+      description: 删掉自己的一份草稿；如果它是从线索起草的，那条线索回到工作台。
+      operationId: delete_candidate_api_v1_harvest_candidates__candidate_id__delete
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Delete Candidate Api V1 Harvest Candidates  Candidate Id  Delete
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Delete Candidate
+      tags:
+      - harvest
+    get:
+      operationId: get_candidate_api_v1_harvest_candidates__candidate_id__get
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Get Candidate Api V1 Harvest Candidates  Candidate Id  Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Get Candidate
+      tags:
+      - harvest
+    patch:
+      operationId: patch_candidate_api_v1_harvest_candidates__candidate_id__patch
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Patch Candidate Api V1 Harvest Candidates  Candidate Id  Patch
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Patch Candidate
+      tags:
+      - harvest
+  /api/v1/harvest-candidates/{candidate_id}/attachments:
+    post:
+      description: 给草稿加附件：content_base64 为原件内容，支持 PDF / Word / Excel / PPT / Markdown。
+      operationId: add_attachment_api_v1_harvest_candidates__candidate_id__attachments_post
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Add Attachment Api V1 Harvest Candidates  Candidate Id  Attachments Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Add Attachment
+      tags:
+      - harvest
+  /api/v1/harvest-candidates/{candidate_id}/attachments/{filename}:
+    delete:
+      operationId: remove_attachment_api_v1_harvest_candidates__candidate_id__attachments__filename__delete
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: path
+        name: filename
+        required: true
+        schema:
+          title: Filename
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Remove Attachment Api V1 Harvest Candidates  Candidate Id  Attachments  Filename  Delete
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Remove Attachment
+      tags:
+      - harvest
+    get:
+      operationId: download_attachment_api_v1_harvest_candidates__candidate_id__attachments__filename__get
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: path
+        name: filename
+        required: true
+        schema:
+          title: Filename
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: {}
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Download Attachment
+      tags:
+      - harvest
+  /api/v1/harvest-candidates/{candidate_id}/checks:
+    post:
+      operationId: post_checks_api_v1_harvest_candidates__candidate_id__checks_post
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Post Checks Api V1 Harvest Candidates  Candidate Id  Checks Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Post Checks
+      tags:
+      - harvest
+  /api/v1/harvest-candidates/{candidate_id}/review:
+    get:
+      description: '草稿的评审流程：当前进度、该谁评、历次记录与意见。
+
+
+        作者要看得到被打回的理由，否则不知道该改什么。'
+      operationId: candidate_review_api_v1_harvest_candidates__candidate_id__review_get
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Candidate Review Api V1 Harvest Candidates  Candidate Id  Review Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Candidate Review
+      tags:
+      - harvest
+  /api/v1/harvest-candidates/{candidate_id}/submit:
+    post:
+      operationId: submit_candidate_api_v1_harvest_candidates__candidate_id__submit_post
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              default: {}
+              title: Payload
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Submit Candidate Api V1 Harvest Candidates  Candidate Id  Submit Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Submit Candidate
+      tags:
+      - harvest
+  /api/v1/kinds:
+    get:
+      description: 七种资产类型各自的必填要求，前端据此标红必填项，避免两边各写一份口径。
+      operationId: list_kinds_api_v1_kinds_get
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response List Kinds Api V1 Kinds Get
+                type: object
+          description: Successful Response
+      summary: List Kinds
+      tags:
+      - assets
+  /api/v1/match:
+    post:
+      description: 按项目/工作项/Agent 的上下文推荐该带哪些资产，每条都带推荐理由。
+      operationId: match_assets_api_v1_match_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Match Assets Api V1 Match Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Match Assets
+      tags:
+      - assets
+  /api/v1/notifications:
+    get:
+      operationId: notifications_api_v1_notifications_get
+      parameters:
+      - in: query
+        name: unread_only
+        required: false
+        schema:
+          default: true
+          title: Unread Only
+          type: boolean
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Notifications Api V1 Notifications Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Notifications
+      tags:
+      - notify
+  /api/v1/notifications/{notification_id}/read:
+    post:
+      operationId: read_notification_api_v1_notifications__notification_id__read_post
+      parameters:
+      - in: path
+        name: notification_id
+        required: true
+        schema:
+          title: Notification Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Read Notification Api V1 Notifications  Notification Id  Read Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Read Notification
+      tags:
+      - notify
+  /api/v1/recommend/compute:
+    post:
+      description: 算推荐，不落库。页面上先给人看，人点了再保存或推送。
+      operationId: compute_api_v1_recommend_compute_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Compute Api V1 Recommend Compute Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Compute
+      tags:
+      - recommend
+  /api/v1/recommend/inbox:
+    get:
+      operationId: inbox_api_v1_recommend_inbox_get
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Inbox Api V1 Recommend Inbox Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Inbox
+      tags:
+      - recommend
+  /api/v1/recommend/link:
+    post:
+      description: 本人直接关联，不走推荐流程。
+      operationId: link_api_v1_recommend_link_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Link Api V1 Recommend Link Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Link
+      tags:
+      - recommend
+  /api/v1/recommend/linked:
+    get:
+      operationId: linked_api_v1_recommend_linked_get
+      parameters:
+      - in: query
+        name: target_type
+        required: true
+        schema:
+          title: Target Type
+          type: string
+      - in: query
+        name: target_id
+        required: true
+        schema:
+          title: Target Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Linked Api V1 Recommend Linked Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Linked
+      tags:
+      - recommend
+  /api/v1/recommend/list:
+    get:
+      operationId: list_recommendations_api_v1_recommend_list_get
+      parameters:
+      - in: query
+        name: target_type
+        required: true
+        schema:
+          title: Target Type
+          type: string
+      - in: query
+        name: target_id
+        required: true
+        schema:
+          title: Target Id
+          type: string
+      - in: query
+        name: status
+        required: false
+        schema:
+          default: ''
+          title: Status
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response List Recommendations Api V1 Recommend List Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: List Recommendations
+      tags:
+      - recommend
+  /api/v1/recommend/send:
+    post:
+      description: 部门管理员推送给负责人；负责人自己保存时 status 传 suggested。
+      operationId: send_api_v1_recommend_send_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Send Api V1 Recommend Send Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Send
+      tags:
+      - recommend
+  /api/v1/recommend/targets:
+    get:
+      description: 我能为哪些项目和 Agent 找资产：我负责的 + （部门主管）本部门全部。
+      operationId: list_targets_api_v1_recommend_targets_get
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response List Targets Api V1 Recommend Targets Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: List Targets
+      tags:
+      - recommend
+  /api/v1/recommend/{recommendation_id}/decide:
+    post:
+      operationId: decide_api_v1_recommend__recommendation_id__decide_post
+      parameters:
+      - in: path
+        name: recommendation_id
+        required: true
+        schema:
+          title: Recommendation Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              default: {}
+              title: Payload
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Decide Api V1 Recommend  Recommendation Id  Decide Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Decide
+      tags:
+      - recommend
+  /api/v1/reviews:
+    get:
+      description: 评审队列。mine=true 只返回我有权决定的，用来做「待我评审」。
+      operationId: list_reviews_api_v1_reviews_get
+      parameters:
+      - in: query
+        name: status
+        required: false
+        schema:
+          default: open
+          title: Status
+          type: string
+      - in: query
+        name: mine
+        required: false
+        schema:
+          default: false
+          title: Mine
+          type: boolean
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response List Reviews Api V1 Reviews Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: List Reviews
+      tags:
+      - harvest
+  /api/v1/reviews/{review_id}/decide:
+    post:
+      operationId: decide_review_api_v1_reviews__review_id__decide_post
+      parameters:
+      - in: path
+        name: review_id
+        required: true
+        schema:
+          title: Review Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Decide Review Api V1 Reviews  Review Id  Decide Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Decide Review
+      tags:
+      - harvest
+  /api/v1/settings:
+    get:
+      operationId: read_settings_api_v1_settings_get
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Read Settings Api V1 Settings Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Read Settings
+      tags:
+      - assets
+    put:
+      operationId: write_settings_api_v1_settings_put
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Write Settings Api V1 Settings Put
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Write Settings
+      tags:
+      - assets
+  /api/v1/snapshots:
+    post:
+      operationId: build_snapshot_api_v1_snapshots_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              default: {}
+              title: Payload
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Build Snapshot Api V1 Snapshots Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Build Snapshot
+      tags:
+      - assets
+  /api/v1/subscriptions:
+    get:
+      operationId: list_subscriptions_api_v1_subscriptions_get
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response List Subscriptions Api V1 Subscriptions Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: List Subscriptions
+      tags:
+      - notify
+    post:
+      operationId: subscribe_api_v1_subscriptions_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Subscribe Api V1 Subscriptions Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Subscribe
+      tags:
+      - notify
+  /api/v1/subscriptions/{subscription_id}:
+    delete:
+      operationId: unsubscribe_api_v1_subscriptions__subscription_id__delete
+      parameters:
+      - in: path
+        name: subscription_id
+        required: true
+        schema:
+          title: Subscription Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Unsubscribe Api V1 Subscriptions  Subscription Id  Delete
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Unsubscribe
+      tags:
+      - notify
+  /api/v1/work-items/{work_item_id}/assets:
+    get:
+      operationId: list_links_api_v1_work_items__work_item_id__assets_get
+      parameters:
+      - in: path
+        name: work_item_id
+        required: true
+        schema:
+          title: Work Item Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response List Links Api V1 Work Items  Work Item Id  Assets Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: List Links
+      tags:
+      - work-items
+    post:
+      operationId: link_asset_api_v1_work_items__work_item_id__assets_post
+      parameters:
+      - in: path
+        name: work_item_id
+        required: true
+        schema:
+          title: Work Item Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Link Asset Api V1 Work Items  Work Item Id  Assets Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Link Asset
+      tags:
+      - work-items
+  /api/v1/work-items/{work_item_id}/sop-step-summary:
+    get:
+      description: 给 orchestrator 拼提示词用：只返回当前步骤的摘要与检查点。
+      operationId: sop_step_summary_api_v1_work_items__work_item_id__sop_step_summary_get
+      parameters:
+      - in: path
+        name: work_item_id
+        required: true
+        schema:
+          title: Work Item Id
+          type: string
+      - in: query
+        name: lock
+        required: false
+        schema:
+          default: false
+          title: Lock
+          type: boolean
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Sop Step Summary Api V1 Work Items  Work Item Id  Sop Step Summary Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Sop Step Summary
+      tags:
+      - work-items
+  /api/v1/workbench:
+    get:
+      description: 资产工作台：自由添加入口 + 线索 + 我的草稿 + 我提交的 + 我负责的。
+      operationId: workbench_api_v1_workbench_get
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Workbench Api V1 Workbench Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Workbench
+      tags:
+      - harvest
+  /api/v1/workbench/leads/refresh:
+    post:
+      operationId: refresh_leads_api_v1_workbench_leads_refresh_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Refresh Leads Api V1 Workbench Leads Refresh Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Refresh Leads
+      tags:
+      - harvest
+  /api/v1/workbench/leads/{lead_id}/ignore:
+    post:
+      operationId: ignore_lead_api_v1_workbench_leads__lead_id__ignore_post
+      parameters:
+      - in: path
+        name: lead_id
+        required: true
+        schema:
+          title: Lead Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Ignore Lead Api V1 Workbench Leads  Lead Id  Ignore Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Ignore Lead
+      tags:
+      - harvest
+  /health/live:
+    get:
+      operationId: live_health_live_get
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                title: Response Live Health Live Get
+                type: object
+          description: Successful Response
+      summary: Live
+  /health/ready:
+    get:
+      operationId: ready_health_ready_get
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Ready Health Ready Get
+                type: object
+          description: Successful Response
+      summary: Ready
+  /mcp:
+    get:
+      description: 协议允许服务端不提供 SSE 流，用 405 表明。
+      operationId: mcp_stream_not_supported_mcp_get
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: {}
+          description: Successful Response
+      summary: Mcp Stream Not Supported
+      tags:
+      - mcp
+    post:
+      description: MCP 的 HTTP 入口：一条或一批 JSON-RPC 消息进来，同步返回 JSON。
+      operationId: mcp_endpoint_mcp_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: {}
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Mcp Endpoint
+      tags:
+      - mcp

@@ -24,6 +24,17 @@ from fde_asset.settings import AssetSettings  # noqa: E402
 from scripts.seed_assets import seed  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _env_does_not_leak():
+    """个别用例会把 .env.local 的模型配置读进环境变量；用例结束后还原，免得后面的用例悄悄连上真实模型。"""
+    before = {key: value for key, value in os.environ.items() if key.startswith("FDE_ASSET_")}
+    yield
+    for key in [key for key in os.environ if key.startswith("FDE_ASSET_")]:
+        if key not in before:
+            del os.environ[key]
+    os.environ.update(before)
+
+
 @pytest.fixture()
 def settings(tmp_path: Path) -> AssetSettings:
     value = AssetSettings(data_dir=tmp_path / "data")

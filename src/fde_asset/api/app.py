@@ -9,6 +9,7 @@ from fde_asset.api import (
     routes_apps,
     routes_assets,
     routes_harvest,
+    routes_mcp,
     routes_notify,
     routes_recommend,
     routes_work_items,
@@ -41,6 +42,7 @@ def create_app(settings: AssetSettings | None = None) -> FastAPI:
     app.include_router(routes_recommend.router)
     app.include_router(routes_apps.router)
     app.include_router(routes_notify.router)
+    app.include_router(routes_mcp.router)
     return app
 
 

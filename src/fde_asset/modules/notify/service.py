@@ -207,6 +207,33 @@ def _push(
     )
 
 
+def notify_review(
+    engine: Engine,
+    user_ids: list[str],
+    *,
+    candidate_id: str,
+    title: str,
+    body: str,
+    reason: str,
+) -> int:
+    """评审相关的站内通知：有草稿等你评、你提交的草稿有结果了。
+
+    这时资产还没入库（或刚入库），所以 `asset_id` 一栏放的是草稿编号，页面据 kind=review 跳到草稿页。
+    """
+    with engine.begin() as conn:
+        for user_id in dict.fromkeys(user_ids):
+            _push(
+                conn,
+                user_id=user_id,
+                kind="review",
+                asset_id=candidate_id,
+                title=title,
+                body=body,
+                reason=reason,
+            )
+    return len(dict.fromkeys(user_ids))
+
+
 def _subscribers(conn, row: Any) -> dict[str, str]:
     """哪些人订阅了这份资产会命中。返回 {用户: 命中的理由}。"""
     industries = set(json.loads(row.industry_json or "[]"))
@@ -338,8 +365,9 @@ def inbox(
             "read": row.read_at is not None,
         }
         for row in rows
-        # 通知发出之后资产可能被收紧了作用域，这里再挡一道
-        if not row.asset_id or row.asset_id in visible
+        # 通知发出之后资产可能被收紧了作用域，这里再挡一道；
+        # 评审通知带的是草稿编号不是资产，草稿页自己会判权限
+        if row.kind == "review" or not row.asset_id or row.asset_id in visible
     ]
 
 

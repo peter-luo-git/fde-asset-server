@@ -233,6 +233,8 @@ KIND_BY_SHORT = {
     "impl": "Implementation",
     "case": "Case",
     "exp": "Experience",
+    # 应用没有另起缩写，引用就写 [[application/xxx]]
+    "application": "Application",
 }
 SHORT_BY_KIND = {v: k for k, v in KIND_BY_SHORT.items()}
 

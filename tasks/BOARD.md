@@ -4,7 +4,7 @@
 规则：一个切片半天内、生产代码 ≤ 300 行；`make check` 绿 = 完成；评审最多 2 轮。
 
 **整体状态（2026-10-06）**：v0.1 的 21 个切片全部 done；10-01 之后按《资产中心-推荐与应用资产设计》§3.5 的四批排期又做了 15 个切片（见下方「v0.1 之后」）。
-后端全量 **319 通过 / 3 跳过**（跳过的 3 个需要 docker 与 docker compose）、ruff 与 `alembic heads` 通过。
+后端全量 **343 通过 / 3 跳过**（跳过的 3 个需要 docker 与 docker compose）、ruff 与 `alembic heads` 通过。
 还没做的和被 fde-server 卡住的，统一记在 fde-specs《资产中心-后续工作清单》。
 
 | ID | 切片 | 状态 | 验收命令 | 落地位置 |
@@ -73,7 +73,10 @@
 | X-8 | 开发模式身份列表接口，供页面右下角切换演示身份 | **done** | `pytest -q tests/platform/test_dev_identities.py` | `GET /api/v1/dev/identities`；fde-web `components/DevIdentitySwitcher.tsx` |
 | X-9 | 重建索引时内容没变就不动更新时间；详情页显示入库时间与最近更新 | **done** | `pytest -q tests/asset/test_indexer.py` | `indexer._upsert()` |
 | X-10 | 沿用旧数据启动时补齐名单文件里后来才有的部分；老王兼 finance 部门主管 | **done** | `pytest -q tests/platform/test_directory_refresh.py` | `scripts/seed_assets.refresh_directory()` |
-| F2 | Agent 检索工具 `search_assets` / `get_asset` | todo | — | 资产侧可先做，挂到 Agent 要等 fde-server |
+| X-11 | 后台定时任务：有新提交才重建索引、定时扫线索、定时探活 | **done** | `pytest -q tests/platform/test_scheduler.py` | `scheduler.py`、`main_asset_worker.py`、`serve_seeded.py --with-worker` |
+| X-12 | 对外契约 `contracts/asset-v1.yaml` 由代码导出，测试拦住不一致 | **done** | `pytest -q tests/test_contract.py` | `scripts/export_openapi.py` |
+| F2 | Agent 检索工具（资产侧）：MCP 接口 `search_assets` / `get_asset` | **env-pending** | `pytest -q tests/platform/test_mcp.py` | `api/routes_mcp.py`；待 fde-server 挂载并在真实 dsh 上验证 |
+| X-13 | 删草稿（线索回到工作台）、资产下架/废弃/恢复、应用可被引用、评审通知 | **done** | `pytest -q tests/asset/test_small_gaps.py` | `harvest/service.delete_draft()`、`modules/asset/lifecycle.py`、`notify/service.notify_review()` |
 | F3 | 启动资产包 | 不做 | — | 2026-10-04 决定暂不做，理由见《资产中心-后续工作清单》§一 |
 | F11 | 度量看板 | todo | — | 2026-10-04 决定这一轮先不做 |
 
@@ -81,6 +84,6 @@
 
 ## 下一步
 
-1. F2 的 MCP 服务（资产侧，不依赖 fde-server）；
-2. 用真实资产重新校语义相关度门槛（《资产中心-后续工作清单》§四 P2）；
-3. 需要 fde-server 配合的事项（S-14b、S-15b、成员关系接口、通知送达）见《资产中心-后续工作清单》§二，等 fde-server 开工后再排。
+1. 等 fde-server 开工：成员关系接口、使用上报、SOP 步骤注入、挂载 MCP（《资产中心-后续工作清单》§二）；
+2. 用真实资产重新校语义相关度门槛（同上 §四 P2）；
+3. 盘点出来还没做的 7 个缺口见同上 §1.1。

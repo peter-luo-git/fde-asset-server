@@ -342,6 +342,41 @@ def draft_from_upload(
     return result
 
 
+def delete_draft(
+    engine: Engine, principal: Principal, candidate_id: str, store: BlobStore | None = None
+) -> dict[str, Any]:
+    """删掉一份还没提交的草稿。提交过的不能删——评审记录和仓库里的分支要留着追溯。"""
+    candidate = get_candidate(engine, candidate_id)
+    if candidate["created_by"] != principal.user_id:
+        raise HarvestError("只能删除自己的草稿")
+    if candidate["status"] != "draft":
+        raise HarvestError("只有草稿状态的可以删除；已提交评审或已入库的要留着追溯")
+    lead_id = (candidate.get("source") or {}).get("leadId", "")
+    with engine.begin() as conn:
+        conn.execute(
+            harvest_candidates.delete().where(harvest_candidates.c.candidate_id == candidate_id)
+        )
+        restored = False
+        if lead_id:
+            # 草稿没了，那条线索等于没处理，放回工作台
+            restored = bool(
+                conn.execute(
+                    update(asset_leads)
+                    .where(asset_leads.c.lead_id == lead_id, asset_leads.c.status == "drafted")
+                    .values(status="open")
+                ).rowcount
+            )
+        record_event(
+            conn,
+            "candidate.deleted",
+            {"candidate_id": candidate_id, "by": principal.user_id, "lead_restored": restored},
+        )
+    if store is not None:
+        for filename in store.names(candidate_id):
+            store.delete(candidate_id, filename)
+    return {"candidate_id": candidate_id, "deleted": True, "lead_restored": restored}
+
+
 def get_candidate(engine: Engine, candidate_id: str) -> dict[str, Any]:
     with engine.connect() as conn:
         row = conn.execute(
