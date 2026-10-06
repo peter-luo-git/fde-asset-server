@@ -18,12 +18,24 @@ def test_targets_split_mine_and_department(client) -> None:
     """我负责的和我部门的分开列；普通成员看不到部门视图。"""
     wang = as_user(client, "wang").get("/api/v1/recommend/targets").json()
     assert {item["target_id"] for item in wang["mine"]} >= {"policy-import", "core-migration"}
-    # 老王兼 finance 部门主管：部门视图里是本部门的全部项目和 Agent
-    assert {item["target_id"] for item in wang["department"]} == {
+    # 老王兼 finance 部门主管：部门视图里是本部门的全部项目和 Agent，
+    # 并分得清哪些是他自己负责的（直接关联）、哪些是同事负责的（推送）
+    by_id = {item["target_id"]: item for item in wang["department"]}
+    assert set(by_id) == {"policy-import", "core-migration", "migration-reviewer", "claims-recon"}
+    assert {key for key, item in by_id.items() if item["mine"]} == {
         "policy-import",
         "core-migration",
         "migration-reviewer",
     }
+    assert by_id["claims-recon"]["mine"] is False
+    assert by_id["claims-recon"]["owner"] == "sun"
+    assert by_id["claims-recon"]["owner_name"] == "小孙"
+    assert all(item["mine"] for item in wang["mine"])
+
+    # 小孙自己看：这个项目在「我负责的」里；他不是主管，没有部门视图
+    sun = as_user(client, "sun").get("/api/v1/recommend/targets").json()
+    assert [item["target_id"] for item in sun["mine"]] == ["claims-recon"]
+    assert sun["department"] == []
 
     chen = as_user(client, "chen").get("/api/v1/recommend/targets").json()
     assert chen["mine"], "小陈有自己负责的项目"
@@ -172,3 +184,32 @@ def test_agent_target_uses_its_own_context(client) -> None:
     assert any("关键词命中" in reason for item in items for reason in item["reasons"]), (
         "Agent 的描述里有导入、超时等词，应当命中"
     )
+
+
+def test_department_head_pushes_to_a_colleague_but_links_own_directly(client) -> None:
+    """部门主管：同事负责的项目只能推送，由对方确认；自己负责的直接关联。"""
+    wang = as_user(client, "wang")
+    target = {"target_type": "engagement", "target_id": "claims-recon"}
+    items = wang.post("/api/v1/recommend/compute", json=target).json()["items"][:2]
+    assert items
+
+    # 替同事直接关联：不行
+    refused = wang.post("/api/v1/recommend/link", json={**target, "asset_id": items[0]["asset_id"]})
+    assert refused.status_code == 403
+
+    sent = wang.post("/api/v1/recommend/send", json={**target, "items": items})
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["created"] + len(sent.json()["skipped_invisible"]) == len(items)
+
+    inbox = as_user(client, "sun").get("/api/v1/recommend/inbox").json()["items"]
+    assert len(inbox) == sent.json()["created"]
+    assert all(item["status"] == "sent" for item in inbox)
+    assert as_user(client, "wang").get("/api/v1/recommend/inbox").json()["items"] == []
+
+    # 自己负责的：直接关联，不产生待确认
+    own = {"target_type": "engagement", "target_id": "policy-import"}
+    mine = as_user(client, "wang").post("/api/v1/recommend/compute", json=own).json()["items"][0]
+    linked = as_user(client, "wang").post(
+        "/api/v1/recommend/link", json={**own, "asset_id": mine["asset_id"]}
+    )
+    assert linked.status_code == 200, linked.text

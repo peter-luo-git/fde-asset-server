@@ -55,13 +55,16 @@ def ask(
     reranker: Any = None,
     kind: str | None = None,
     scope: str | None = None,
+    exclude_kinds: tuple[str, ...] = (),
     limit: int = DEFAULT_LIMIT,
     min_score: float = DEFAULT_MIN_SCORE,
 ) -> dict[str, Any]:
     """返回 mode（semantic / keyword）、扫了多少份、按相关度排好的资产。"""
     question = question.strip()
     statement = (
-        catalog.base_select(principal, catalog.CatalogQuery(kind=kind, scope=scope))
+        catalog.base_select(
+            principal, catalog.CatalogQuery(kind=kind, scope=scope, exclude_kinds=exclude_kinds)
+        )
         .order_by(assets.c.updated_at.desc())
         .limit(MAX_DOCUMENTS + 1)
     )

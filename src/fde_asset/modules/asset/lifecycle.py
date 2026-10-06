@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
 from fde_asset.core.db import assets, record_event
-from fde_asset.modules.asset.indexer import index_repository
+from fde_asset.modules.asset.indexer import finish_index, index_repository
 from fde_asset.modules.asset.visibility import can_review, visibility_clause
 from fde_asset.platform.identity import Principal
 from fde_asset.platform.refs.wiki import REF_PATTERN
@@ -78,6 +78,7 @@ def change(
     replaced_by: str = "",
     note: str = "",
     text_limit: int = 200_000,
+    owner_of: Any = None,
 ) -> dict[str, Any]:
     if lifecycle not in ALLOWED:
         raise LifecycleError(f"生命周期只能是：{'、'.join(ALLOWED)}")
@@ -121,6 +122,7 @@ def change(
         author_email=f"{principal.user_id}@fde.local",
     )
     index_repository(engine, repo_port, repo, text_limit=text_limit)
+    finish_index(engine, owner_of=owner_of)
     with engine.begin() as conn:
         record_event(
             conn,

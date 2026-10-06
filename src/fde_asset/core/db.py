@@ -269,6 +269,9 @@ app_health = Table(
     Column("detail", Text, nullable=False, default=""),
     Column("checked_at", DateTime(timezone=True), nullable=False, default=_now),
     Column("last_online_at", DateTime(timezone=True)),
+    # 这次结果是谁探的：server = 平台自己；browser = 某个用户的电脑替平台探的（平台够不着的网络）
+    Column("checked_via", String(16), nullable=False, default="server"),
+    Column("checked_by", String(64), nullable=False, default=""),
 )
 
 #: 应用的容器化演示：上传镜像 → 审核 → 手动启停

@@ -74,6 +74,7 @@ def test_wang_heads_the_department_his_projects_belong_to(client) -> None:
         "policy-import",
         "core-migration",
         "migration-reviewer",
+        "claims-recon",
     }
     assert all(item["department_code"] == "finance" for item in targets["department"])
 

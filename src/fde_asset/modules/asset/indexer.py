@@ -9,7 +9,7 @@ import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Iterable
+from typing import Any, Iterable
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.engine import Engine
@@ -371,20 +371,31 @@ def _finding(conn, repo: RepoRef, item: DiscoveredAsset, code: str, message: str
     )
 
 
-def index_all(engine: Engine, repo_port, repos: Iterable[RepoRef], **kwargs) -> list[IndexReport]:
+def index_all(
+    engine: Engine, repo_port, repos: Iterable[RepoRef], *, owner_of: Any = None, **kwargs
+) -> list[IndexReport]:
     reports = [index_repository(engine, repo_port, repo, **kwargs) for repo in repos]
+    finish_index(engine, owner_of=owner_of)
+    return reports
+
+
+def finish_index(engine: Engine, *, owner_of: Any = None) -> None:
+    """索引之后的收尾：重算等级、重建关系、留版本并发通知。
+
+    只索引了一个仓库（评审通过、下架恢复）之后也要调它，否则新入库的资产没有版本记录，
+    订阅的人收不到「新资产」通知。`owner_of(类型, 标识)` 给出项目或 Agent 现在的负责人。
+    """
     # 等级由复用情况决定，不取 asset.yaml 里写的值；入库后统一重算一次
     refresh_grades(engine)
     # 引用在写的时候对方可能还没入库，这里统一解析，并重建自动关系
     auto_link(engine)
-    _snapshot_and_notify(engine)
+    _snapshot_and_notify(engine, owner_of)
     # 资产变了，之前算出来的推荐就不作数了
     recommendation_cache.invalidate()
-    return reports
 
 
-def _snapshot_and_notify(engine: Engine) -> None:
-    """给每份资产留一份版本快照；内容真的变了才发变更通知。"""
+def _snapshot_and_notify(engine: Engine, owner_of: Any = None) -> None:
+    """给每份资产留一份版本快照；第一次出现发「新资产」，内容真的变了发「更新」。"""
     from sqlalchemy import select as _select
 
     from fde_asset.core.db import assets as _assets
@@ -398,6 +409,10 @@ def _snapshot_and_notify(engine: Engine) -> None:
         is_new_version = notify.snapshot_version(engine, row)
         if not is_new_version:
             continue
+        if notify.version_count(engine, row.asset_id) == 1:
+            # 第一份版本记录 = 刚入库：告诉订阅了它所在行业、类型、标签或负责人的人
+            notify.announce_new(engine, row.asset_id)
+            continue
         diff = notify.diff_summary(engine, row.asset_id)
         if diff["changed"] or diff["added"] or diff["removed"] or diff["summary_changed"]:
-            notify.announce_change(engine, row.asset_id)
+            notify.announce_change(engine, row.asset_id, owner_of=owner_of)

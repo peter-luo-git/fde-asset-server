@@ -116,9 +116,16 @@ paths:
       - assets
   /api/v1/apps:
     get:
-      description: 应用市场：能跑的东西，带演示入口与在线状态。
+      description: 应用市场：能跑的东西，带演示入口与在线状态。`mine=true` 只要我负责的（我本人或我部门）。
       operationId: list_apps_api_v1_apps_get
       parameters:
+      - in: query
+        name: mine
+        required: false
+        schema:
+          default: false
+          title: Mine
+          type: boolean
       - in: header
         name: X-FDE-User
         required: false
@@ -150,6 +157,54 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
           description: Validation Error
       summary: List Apps
+      tags:
+      - assets
+  /api/v1/apps/health/report:
+    post:
+      description: '用户的电脑替平台探活后把结果报回来：平台在内网，够不着公网和 VPN 里的应用。
+
+
+        只收这个人看得见的应用的结果；谁报的、什么时候报的都记下来，页面上会写明。'
+      operationId: report_app_health_api_v1_apps_health_report_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Report App Health Api V1 Apps Health Report Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Report App Health
       tags:
       - assets
   /api/v1/apps/probe:
@@ -490,6 +545,14 @@ paths:
           - type: 'null'
           title: Kind
       - in: query
+        name: exclude_kind
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Exclude Kind
+      - in: query
         name: scope
         required: false
         schema:
@@ -650,6 +713,14 @@ paths:
           - type: string
           - type: 'null'
           title: Kind
+      - in: query
+        name: exclude_kind
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Exclude Kind
       - in: query
         name: scope
         required: false
@@ -2546,7 +2617,8 @@ paths:
       - recommend
   /api/v1/reviews:
     get:
-      description: 评审队列。mine=true 只返回我有权决定的，用来做「待我评审」。
+      description: "评审队列与评审记录。\n\n- `status=open`：待评审；`mine=true` 只返回我有权决定的，用来做「待我评审」\n- `status=decided`：已经评完的（通过和打回都算），最近评的排前面；\n\
+        \  `decided_by_me=true` 只看我评过的。已评审的记录只给相关的人看：\n  有这个作用域评审权的、提交人、评审人"
       operationId: list_reviews_api_v1_reviews_get
       parameters:
       - in: query
@@ -2562,6 +2634,13 @@ paths:
         schema:
           default: false
           title: Mine
+          type: boolean
+      - in: query
+        name: decided_by_me
+        required: false
+        schema:
+          default: false
+          title: Decided By Me
           type: boolean
       - in: header
         name: X-FDE-User
@@ -2848,6 +2927,44 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
           description: Validation Error
       summary: Subscribe
+      tags:
+      - notify
+  /api/v1/subscriptions/options:
+    get:
+      description: 订阅表单的选项：我看得见的资产里实际出现过的类型、行业、标签、负责人和资产。
+      operationId: subscription_options_api_v1_subscriptions_options_get
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Subscription Options Api V1 Subscriptions Options Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Subscription Options
       tags:
       - notify
   /api/v1/subscriptions/{subscription_id}:

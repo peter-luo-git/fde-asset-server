@@ -8,12 +8,19 @@ from urllib.parse import quote
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 
 from fde_asset.api.deps import ServiceContext, get_context, get_principal
-from fde_asset.core.db import asset_leads, asset_reviews, assets, harvest_candidates
-from fde_asset.modules.asset.indexer import index_repository
+from fde_asset.core.db import (
+    asset_feedback,
+    asset_leads,
+    asset_reviews,
+    assets,
+    harvest_candidates,
+)
+from fde_asset.modules.asset.indexer import finish_index, index_repository
 from fde_asset.modules.asset.visibility import can_review, visibility_clause
+from fde_asset.modules.asset.manifest import KIND_RULES
 from fde_asset.modules.harvest import service
 from fde_asset.modules.leads import rules as leads_rules
 from fde_asset.modules.notify import service as notify_service
@@ -140,6 +147,31 @@ def create_from_upload(
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
+def _owner_refs(principal: Principal) -> list[str]:
+    """「我负责的」口径：负责人是我本人，或者是我所在的部门。和体检、待办与信号一致。"""
+    refs = [f"user:{principal.user_id}"]
+    if principal.department_code:
+        refs.append(f"department:{principal.department_code}")
+    return refs
+
+
+def _owns_revised_asset(context: ServiceContext, principal: Principal, candidate_id: str) -> bool:
+    """这份草稿是不是「有人反馈我负责的资产已过时」时替我起的修订草稿。
+
+    这种草稿建在反馈人名下，但它是给资产负责人改的：负责人打不开，「待办与信号」里
+    那个草稿链接就是死的。
+    """
+    with context.engine.connect() as conn:
+        row = conn.execute(
+            select(assets.c.owner_ref)
+            .select_from(
+                asset_feedback.join(assets, assets.c.asset_id == asset_feedback.c.asset_id)
+            )
+            .where(asset_feedback.c.candidate_id == candidate_id)
+        ).first()
+    return row is not None and row.owner_ref in _owner_refs(principal)
+
+
 @router.get("/harvest-candidates/{candidate_id}")
 def get_candidate(
     candidate_id: str,
@@ -159,7 +191,10 @@ def get_candidate(
         customer_code=candidate["customer_code"],
     )
     if candidate["created_by"] != principal.user_id and not (
-        principal.is_admin or principal.is_asset_reviewer or may_review
+        principal.is_admin
+        or principal.is_asset_reviewer
+        or may_review
+        or _owns_revised_asset(context, principal, candidate_id)
     ):
         raise HTTPException(status_code=403, detail="草稿只有本人可见；提交后评审人才能打开")
     return candidate
@@ -410,7 +445,10 @@ def submit_candidate(
         [item["user_id"] for item in _reviewers(context, submitted)],
         candidate_id=candidate_id,
         title=f"有草稿等你评审：{submitted['title']}",
-        body=f"{principal.display_name or principal.user_id} 提交了一份{submitted['kind']}草稿",
+        body=(
+            f"{principal.display_name or principal.user_id} 提交了一份"
+            f"{KIND_RULES[submitted['kind']].label}草稿"
+        ),
         reason="你有这个作用域的评审权",
     )
     return result
@@ -425,7 +463,14 @@ def delete_candidate(
     """删掉自己的一份草稿；如果它是从线索起草的，那条线索回到工作台。"""
     get_candidate(candidate_id, context, principal)
     try:
-        return service.delete_draft(context.engine, principal, candidate_id, context.blob_store)
+        return service.delete_draft(
+            context.engine,
+            principal,
+            candidate_id,
+            context.blob_store,
+            # 针对我负责的资产起的修订草稿，我觉得不用改也可以直接删
+            as_owner=_owns_revised_asset(context, principal, candidate_id),
+        )
     except service.HarvestError as exc:
         status = 403 if "自己的" in str(exc) else 409
         raise HTTPException(status_code=status, detail=str(exc)) from None
@@ -435,16 +480,31 @@ def delete_candidate(
 def list_reviews(
     status: str = "open",
     mine: bool = False,
+    decided_by_me: bool = False,
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
-    """评审队列。mine=true 只返回我有权决定的，用来做「待我评审」。"""
+    """评审队列与评审记录。
+
+    - `status=open`：待评审；`mine=true` 只返回我有权决定的，用来做「待我评审」
+    - `status=decided`：已经评完的（通过和打回都算），最近评的排前面；
+      `decided_by_me=true` 只看我评过的。已评审的记录只给相关的人看：
+      有这个作用域评审权的、提交人、评审人
+    """
+    decided = status == "decided"
     with context.engine.connect() as conn:
-        rows = conn.execute(
-            select(asset_reviews)
-            .where(asset_reviews.c.status == status)
-            .order_by(asset_reviews.c.submitted_at)
-        ).fetchall()
+        statement = select(asset_reviews)
+        if decided:
+            statement = statement.where(
+                asset_reviews.c.status.in_(["merged", "rejected"])
+            ).order_by(asset_reviews.c.decided_at.desc())
+            if decided_by_me:
+                statement = statement.where(asset_reviews.c.decided_by == principal.user_id)
+        else:
+            statement = statement.where(asset_reviews.c.status == status).order_by(
+                asset_reviews.c.submitted_at
+            )
+        rows = conn.execute(statement.limit(200)).fetchall()
         candidates = {
             row.candidate_id: row
             for row in conn.execute(
@@ -473,8 +533,46 @@ def list_reviews(
         )
         if mine and not data["can_decide"]:
             continue
+        if decided:
+            related = (
+                data["can_decide"]
+                or row.submitted_by == principal.user_id
+                or row.decided_by == principal.user_id
+            )
+            if not related:
+                continue
+            data["decided_by_name"] = context.display_name(row.decided_by) if row.decided_by else ""
+            data["asset_id"] = (
+                _landed_asset_id(context, principal, candidate) if row.status == "merged" else ""
+            )
+        data["submitted_by_name"] = context.display_name(row.submitted_by)
         items.append(data)
     return {"items": items}
+
+
+def _landed_asset_id(context: ServiceContext, principal: Principal, candidate: Any) -> str:
+    """评审通过的草稿入库后是哪份资产；看不到或已经不在了就返回空，页面只给草稿链接。"""
+    if candidate is None:
+        return ""
+    # 草稿上可能带着和它的作用域无关的归属（比如项目级草稿也记着起草人的部门），
+    # 入库后的资产只按自己那一层的归属存，所以只比对这一层
+    owner_match = {
+        "department": assets.c.department_code == (candidate.department_code or ""),
+        "engagement": assets.c.engagement_slug == (candidate.engagement_slug or ""),
+        "customer": assets.c.customer_code == (candidate.customer_code or ""),
+    }.get(candidate.scope)
+    conditions = [
+        assets.c.kind == candidate.kind,
+        assets.c.name == candidate.name,
+        assets.c.scope == candidate.scope,
+        assets.c.deleted_at.is_(None),
+        visibility_clause(principal),
+    ]
+    if owner_match is not None:
+        conditions.append(owner_match)
+    with context.engine.connect() as conn:
+        row = conn.execute(select(assets.c.asset_id).where(*conditions)).first()
+    return row.asset_id if row else ""
 
 
 @router.post("/reviews/{review_id}/decide")
@@ -533,6 +631,8 @@ def decide_review(
         report = index_repository(
             context.engine, context.repo_port, target, text_limit=context.settings.index_text_limit
         )
+        # 只索引了这一个仓库，收尾（关系、版本、通知订阅的人有新资产）要另外做
+        finish_index(context.engine, owner_of=context.target_owner)
         result["index"] = {
             "indexed": report.indexed,
             "invalid": report.invalid,
@@ -548,10 +648,27 @@ def workbench(
 ) -> dict[str, Any]:
     """资产工作台：自由添加入口 + 线索 + 我的草稿 + 我提交的 + 我负责的。"""
     with context.engine.connect() as conn:
+        # 我的草稿 = 我自己建的 + 别人反馈「已过时」时替我负责的资产起的修订草稿
+        revision_ids = [
+            row.candidate_id
+            for row in conn.execute(
+                select(asset_feedback.c.candidate_id)
+                .select_from(
+                    asset_feedback.join(assets, assets.c.asset_id == asset_feedback.c.asset_id)
+                )
+                .where(
+                    asset_feedback.c.candidate_id != "",
+                    assets.c.owner_ref.in_(_owner_refs(principal)),
+                )
+            )
+        ]
         drafts = conn.execute(
             select(harvest_candidates)
             .where(
-                harvest_candidates.c.created_by == principal.user_id,
+                or_(
+                    harvest_candidates.c.created_by == principal.user_id,
+                    harvest_candidates.c.candidate_id.in_(revision_ids or [""]),
+                ),
                 harvest_candidates.c.status == "draft",
             )
             .order_by(harvest_candidates.c.updated_at.desc())

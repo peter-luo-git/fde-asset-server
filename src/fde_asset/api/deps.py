@@ -29,6 +29,19 @@ class ServiceContext:
     activity: LocalActivitySource
     blob_store: BlobStore
 
+    def target_owner(self, target_type: str, target_id: str) -> str:
+        """项目或 Agent 现在的负责人（正式环境由 fde-server 给出，这里读开发名单）。"""
+        source = (
+            self.directory.engagements() if target_type == "engagement" else self.directory.agents()
+        )
+        return str(source.get(target_id, {}).get("owner", ""))
+
+    def display_name(self, user_id: str) -> str:
+        try:
+            return self.directory.resolve(user_id).display_name or user_id
+        except Exception:  # noqa: BLE001 - 名单里没有这个人就显示账号
+            return user_id
+
     def repos(self) -> list[RepoRef]:
         """已注册的资产仓库：company / dept-* / 项目仓库（本地按目录约定发现）。"""
         found: list[RepoRef] = []

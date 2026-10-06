@@ -129,9 +129,27 @@ def _sections(text: str) -> dict[str, str]:
 
 
 def snapshot_version(engine: Engine, row: Any) -> bool:
-    """给资产的当前内容留一份版本快照。已经存过同一个 commit 就不重复存。"""
+    """给资产的当前内容留一份版本快照，返回这次有没有存。
+
+    按**内容**判断要不要存，不按提交号：`commit_sha` 记的是整个仓库的最新提交，
+    同仓库里别的资产一有提交它就变，按它存的话每份资产都会多出一份一模一样的版本。
+    """
+    sections_json = json.dumps(_sections(row.content_text or ""), ensure_ascii=False)
     with engine.begin() as conn:
-        exists = conn.execute(
+        latest = conn.execute(
+            select(asset_versions)
+            .where(asset_versions.c.asset_id == row.asset_id)
+            .order_by(asset_versions.c.id.desc())
+            .limit(1)
+        ).first()
+        if (
+            latest is not None
+            and latest.version == (row.version or "")
+            and latest.summary == (row.summary or "")
+            and latest.sections_json == sections_json
+        ):
+            return False
+        same_commit = conn.execute(
             select(asset_versions.c.id).where(
                 and_(
                     asset_versions.c.asset_id == row.asset_id,
@@ -139,7 +157,7 @@ def snapshot_version(engine: Engine, row: Any) -> bool:
                 )
             )
         ).first()
-        if exists is not None:
+        if same_commit is not None:
             return False
         conn.execute(
             asset_versions.insert().values(
@@ -147,10 +165,18 @@ def snapshot_version(engine: Engine, row: Any) -> bool:
                 version=row.version or "",
                 commit_sha=row.commit_sha or "",
                 summary=row.summary or "",
-                sections_json=json.dumps(_sections(row.content_text or ""), ensure_ascii=False),
+                sections_json=sections_json,
             )
         )
     return True
+
+
+def version_count(engine: Engine, asset_id: str) -> int:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(asset_versions.c.id).where(asset_versions.c.asset_id == asset_id)
+        ).fetchall()
+    return len(rows)
 
 
 def diff_summary(engine: Engine, asset_id: str) -> dict[str, Any]:
@@ -253,17 +279,30 @@ def _subscribers(conn, row: Any) -> dict[str, str]:
     return hit
 
 
-def _users_using(conn, asset_id: str) -> dict[str, str]:
-    """用过这份资产的项目与 Agent 的负责人。"""
+def _users_using(conn, asset_id: str, owner_of: Any = None) -> dict[str, str]:
+    """用过这份资产的项目与 Agent 的负责人。
+
+    通知的是目标**现在的**负责人（`owner_of(类型, 标识)` 给出）；查不到时才退回当初做关联的人——
+    项目会换负责人，关联也可能是部门主管推送后由别人接受的。
+    """
     found: dict[str, str] = {}
     for row in conn.execute(select(target_assets).where(target_assets.c.asset_id == asset_id)):
         label = "项目" if row.target_type == "engagement" else "Agent"
-        if row.created_by:
-            found.setdefault(row.created_by, f"你的{label} {row.target_id} 关联了这份资产")
+        owner = ""
+        if owner_of is not None:
+            try:
+                owner = owner_of(row.target_type, row.target_id) or ""
+            except Exception:  # noqa: BLE001 - 名单查不到不该让通知整个失败
+                owner = ""
+        recipient = owner or row.created_by
+        if recipient:
+            found.setdefault(recipient, f"你的{label} {row.target_id} 关联了这份资产")
     return found
 
 
-def announce_change(engine: Engine, asset_id: str, *, author: str = "") -> dict[str, Any]:
+def announce_change(
+    engine: Engine, asset_id: str, *, author: str = "", owner_of: Any = None
+) -> dict[str, Any]:
     """资产更新后发通知：用过的人 + 订阅的人，各给各的理由。"""
     with engine.begin() as conn:
         row = conn.execute(select(assets).where(assets.c.asset_id == asset_id)).first()
@@ -283,7 +322,7 @@ def announce_change(engine: Engine, asset_id: str, *, author: str = "") -> dict[
         body = "；".join(body_parts) or "内容有更新"
 
         audience: dict[str, str] = {}
-        audience.update(_users_using(conn, asset_id))
+        audience.update(_users_using(conn, asset_id, owner_of))
         for user_id, reason in _subscribers(conn, row).items():
             audience.setdefault(user_id, reason)
         audience.pop(author, None)  # 自己改的不用通知自己
@@ -386,3 +425,57 @@ def mark_read(engine: Engine, principal: Principal, notification_id: str) -> boo
             .values(read_at=_now())
         )
     return True
+
+
+# —— 订阅时可以选什么 ——
+
+
+def subscription_options(
+    engine: Engine, principal: Principal, display_name_of: Any = None
+) -> dict[str, list[dict[str, str]]]:
+    """订阅表单的选项：这个人看得见的资产里实际出现过的行业、标签、负责人，以及资产本身。
+
+    订阅是按值精确匹配的，让人手填等于让人猜系统里存的是什么（类型是 `Case` 不是「问题」，
+    负责人是 `user:chen` 不是「小陈」），填错了不报错、只是永远不命中。所以给出现成的选项。
+    """
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(assets)
+            .where(
+                visibility_clause(principal),
+                assets.c.valid.is_(True),
+                assets.c.lifecycle.notin_(["deprecated", "archived", "draft"]),
+            )
+            .order_by(assets.c.title)
+        ).fetchall()
+    industries: set[str] = set()
+    tags: set[str] = set()
+    owners: dict[str, str] = {}
+    kinds: set[str] = set()
+    for row in rows:
+        industries.update(json.loads(row.industry_json or "[]"))
+        tags.update(json.loads(row.tags_json or "[]"))
+        kinds.add(row.kind)
+        if row.owner_ref and row.owner_ref not in owners:
+            if row.owner_kind == "department":
+                owners[row.owner_ref] = f"{row.owner_value} 部门"
+            else:
+                name = ""
+                if display_name_of is not None:
+                    try:
+                        name = display_name_of(row.owner_value) or ""
+                    except Exception:  # noqa: BLE001 - 名单里没有这个人就显示账号
+                        name = ""
+                owners[row.owner_ref] = name or row.owner_value
+    return {
+        "kind": [{"value": kind, "label": kind} for kind in sorted(kinds)],
+        "industry": [{"value": item, "label": item} for item in sorted(industries) if item],
+        "tag": [{"value": item, "label": item} for item in sorted(tags) if item],
+        "owner": [
+            {"value": ref, "label": label}
+            for ref, label in sorted(owners.items(), key=lambda pair: pair[1])
+        ],
+        "asset": [
+            {"value": row.asset_id, "label": row.title, "kind": row.kind} for row in rows[:500]
+        ],
+    }

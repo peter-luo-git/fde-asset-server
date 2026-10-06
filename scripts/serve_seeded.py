@@ -21,7 +21,7 @@ from fde_asset.api.app import create_app  # noqa: E402
 from fde_asset.api.deps import build_context  # noqa: E402
 from fde_asset.modules.asset.indexer import index_all  # noqa: E402
 from fde_asset.settings import AssetSettings, load_local_env  # noqa: E402
-from scripts.seed_assets import refresh_directory, seed  # noqa: E402
+from scripts.seed_assets import refresh_directory, refresh_seed_assets, seed  # noqa: E402
 
 
 class _ReadySignal(uvicorn.Server):
@@ -65,6 +65,11 @@ def main() -> int:
             print(
                 f"directory.json 补上了后来才有的 {len(added)} 项：" + "、".join(added), flush=True
             )
+        seeded = refresh_seed_assets(settings)
+        if seeded:
+            print(
+                f"资产仓库补上了后来才有的 {len(seeded)} 份种子：" + "、".join(seeded), flush=True
+            )
     else:
         summary = seed(settings)
         print(f"seeded: {summary}", flush=True)
@@ -76,6 +81,7 @@ def main() -> int:
         context.repo_port,
         context.repos(),
         text_limit=context.settings.index_text_limit,
+        owner_of=context.target_owner,
     )
     print(
         "indexed: " + ", ".join(f"{r.repo}={r.indexed}" for r in reports),

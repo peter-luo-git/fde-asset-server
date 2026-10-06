@@ -353,11 +353,19 @@ def draft_from_upload(
 
 
 def delete_draft(
-    engine: Engine, principal: Principal, candidate_id: str, store: BlobStore | None = None
+    engine: Engine,
+    principal: Principal,
+    candidate_id: str,
+    store: BlobStore | None = None,
+    *,
+    as_owner: bool = False,
 ) -> dict[str, Any]:
-    """删掉一份还没提交的草稿。提交过的不能删——评审记录和仓库里的分支要留着追溯。"""
+    """删掉一份还没提交的草稿。提交过的不能删——评审记录和仓库里的分支要留着追溯。
+
+    `as_owner`：这是针对调用人负责的资产起的修订草稿，虽然不是他建的，也由他处置。
+    """
     candidate = get_candidate(engine, candidate_id)
-    if candidate["created_by"] != principal.user_id:
+    if candidate["created_by"] != principal.user_id and not as_owner:
         raise HarvestError("只能删除自己的草稿")
     if candidate["status"] != "draft":
         raise HarvestError("只有草稿状态的可以删除；已提交评审或已入库的要留着追溯")
@@ -505,6 +513,28 @@ def update_meta(engine: Engine, candidate_id: str, meta: dict[str, Any]) -> dict
     for key in ("suitable", "notSuitable"):
         if key in meta:
             applicability[key] = str(meta[key] or "")
+
+    # 应用：项目来源、成熟度、代码仓库、怎么跑、演示入口。登记一个已经在别处跑着的应用，
+    # 填的就是这几项（运行方式选 url，写上演示地址和在哪能打开）
+    app = meta.get("app")
+    if isinstance(app, dict) and document.get("kind") == "Application":
+        for key, target in (
+            ("source_type", "sourceType"),
+            ("maturity", "maturity"),
+            ("repo", "repo"),
+        ):
+            if key in app:
+                spec[target] = str(app[key] or "")
+        if "runtime_type" in app:
+            runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
+            runtime["type"] = str(app["runtime_type"] or "url")
+            spec["runtime"] = runtime
+        if isinstance(app.get("demo"), dict):
+            demo = spec.get("demo") if isinstance(spec.get("demo"), dict) else {}
+            for key in ("network", "url", "account", "reachable_from", "note"):
+                if key in app["demo"]:
+                    demo[key] = str(app["demo"][key] or "")
+            spec["demo"] = demo
 
     files["asset.yaml"] = yaml.safe_dump(document, allow_unicode=True, sort_keys=False)
     updated = update_candidate(engine, candidate_id, files)

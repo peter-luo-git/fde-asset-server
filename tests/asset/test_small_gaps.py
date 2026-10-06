@@ -253,3 +253,93 @@ def test_reviewers_and_author_are_notified(client) -> None:
     as_user(client, "li").post(f"/api/v1/reviews/{review_id}/decide", json={"approve": True})
     titles = [n["title"] for n in _inbox(as_user(client, "chen")) if n["kind"] == "review"]
     assert sorted(titles) == ["已入库：导入时偶发超时", "被打回：导入时偶发超时"]
+
+
+# ---------- 已评审的记录 ----------
+
+
+def test_decided_reviews_can_be_looked_up_afterwards(client) -> None:
+    """评完之后记录不该凭空消失：评审人能回看自己评过什么，提交人看得到结果。"""
+    chen = as_user(client, "chen")
+    candidate_id = _ready_draft(chen)
+    first = chen.post(f"/api/v1/harvest-candidates/{candidate_id}/submit", json={}).json()
+    as_user(client, "li").post(
+        f"/api/v1/reviews/{first['review_id']}/decide",
+        json={"approve": False, "note": "根因没写清楚"},
+    )
+    second = (
+        as_user(client, "chen")
+        .post(f"/api/v1/harvest-candidates/{candidate_id}/submit", json={})
+        .json()
+    )
+    as_user(client, "li").post(
+        f"/api/v1/reviews/{second['review_id']}/decide", json={"approve": True, "note": "可以了"}
+    )
+
+    def decided(user: str, **params) -> list[dict]:
+        query = {"status": "decided", **params}
+        return as_user(client, user).get("/api/v1/reviews", params=query).json()["items"]
+
+    assert as_user(client, "li").get("/api/v1/reviews", params={"mine": True}).json()["items"] == []
+
+    mine = decided("li", decided_by_me=True)
+    assert [item["status"] for item in mine] == ["merged", "rejected"], "最近评的排前面"
+    assert [item["note"] for item in mine] == ["可以了", "根因没写清楚"]
+    assert all(item["decided_by"] == "li" and item["decided_by_name"] == "小李" for item in mine)
+    assert all(item["submitted_by_name"] == "小陈" and item["decided_at"] for item in mine)
+    # 通过的那条带着入库后的资产，页面可以直接跳过去；打回的没有
+    assert mine[0]["asset_id"] and mine[1]["asset_id"] == ""
+    landed = as_user(client, "li").get(f"/api/v1/assets/{mine[0]['asset_id']}")
+    assert landed.status_code == 200 and landed.json()["title"] == "导入时偶发超时"
+
+    # 管理员没评过，但有这个作用域的评审权：「我评过的」为空，「全部已评审」看得到
+    assert decided("admin", decided_by_me=True) == []
+    assert len(decided("admin")) == 2
+    # 提交人看得到自己那份的结果；不相干的人看不到
+    assert len(decided("chen")) == 2
+    assert decided("zhao") == []
+
+
+# ---------- 「已过时」自动起的修订草稿 ----------
+
+
+def test_owner_can_work_on_the_revision_draft_raised_against_their_asset(client) -> None:
+    """有人说我负责的资产过时了，系统替我起的修订草稿，我得打得开、改得了、删得掉。"""
+    wang = as_user(client, "wang")  # 反馈人：finance 部门，不是这份资产的负责人
+    asset = _asset(wang, "oracle-to-pg-cutover")
+    assert asset["owner_ref"] == "department:data-intel"
+    reported = wang.post(
+        f"/api/v1/assets/{asset['asset_id']}/feedback",
+        json={"verdict": "outdated", "note": "追平步骤还是旧版工具的写法"},
+    ).json()
+    draft_id = reported["candidate_id"]
+    assert draft_id
+
+    # 小陈在 data-intel 部门，是负责人这一侧：打得开，工作台里看得到，能改
+    chen = as_user(client, "chen")
+    assert chen.get(f"/api/v1/harvest-candidates/{draft_id}").status_code == 200
+    drafts = chen.get("/api/v1/workbench").json()["drafts"]
+    assert draft_id in {item["candidate_id"] for item in drafts}
+    signals = chen.get("/api/v1/governance/signals").json()["negative_feedback"]
+    assert signals[0]["candidate_id"] == draft_id, "待办与信号里给的就是这份草稿"
+    patched = chen.patch(
+        f"/api/v1/harvest-candidates/{draft_id}",
+        json={"meta": {"summary": "按新版工具重写追平步骤"}},
+    )
+    assert patched.status_code == 200, patched.text
+
+    # 反馈人自己也还看得到；不相干的人（market 部门的小赵）打不开
+    assert as_user(client, "wang").get(f"/api/v1/harvest-candidates/{draft_id}").status_code == 200
+    zhao = as_user(client, "zhao")
+    assert zhao.get(f"/api/v1/harvest-candidates/{draft_id}").status_code == 403
+    assert draft_id not in {
+        item["candidate_id"] for item in zhao.get("/api/v1/workbench").json()["drafts"]
+    }
+
+    # 负责人觉得不用改，可以直接删；普通草稿仍然只有本人能删
+    other = _draft(as_user(client, "wang"), scope="department", department_code="finance")
+    assert as_user(client, "chen").delete(
+        f"/api/v1/harvest-candidates/{other['candidate_id']}"
+    ).status_code in (403, 404)
+    gone = as_user(client, "chen").delete(f"/api/v1/harvest-candidates/{draft_id}")
+    assert gone.status_code == 200 and gone.json()["deleted"] is True

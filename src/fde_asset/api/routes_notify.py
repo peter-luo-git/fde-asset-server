@@ -24,6 +24,15 @@ def list_subscriptions(
     }
 
 
+@router.get("/subscriptions/options")
+def subscription_options(
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """订阅表单的选项：我看得见的资产里实际出现过的类型、行业、标签、负责人和资产。"""
+    return service.subscription_options(context.engine, principal, context.display_name)
+
+
 @router.post("/subscriptions")
 def subscribe(
     payload: dict[str, Any] = Body(...),

@@ -845,6 +845,19 @@ DIRECTORY: dict[str, Any] = {
             "memberships": [],
         },
         "zhao": {"display_name": "小赵", "department_code": "market", "memberships": []},
+        # finance 部门里不归老王负责的项目要有个负责人，才演示得了「部门主管推送给同事」
+        "sun": {
+            "display_name": "小孙",
+            "department_code": "finance",
+            "memberships": [
+                {
+                    "engagement_slug": "claims-recon",
+                    "department_code": "finance",
+                    "customer_code": "",
+                    "role": "owner",
+                }
+            ],
+        },
         "admin": {
             "display_name": "管理员",
             "department_code": "platform",
@@ -870,6 +883,14 @@ DIRECTORY: dict[str, Any] = {
             "industry": "banking",
             "stage": "调研与方案确认",
             "description": "核心系统从主机下移，双跑比对后割接",
+        },
+        "claims-recon": {
+            "title": "理赔对账自动化",
+            "department_code": "finance",
+            "owner": "sun",
+            "industry": "insurance",
+            "stage": "调研与方案确认",
+            "description": "每日把理赔系统与财务系统的流水自动对账，差异超过阈值就告警",
         },
         "ops-dashboard": {
             "title": "内部运维看板",
@@ -1034,35 +1055,75 @@ def refresh_directory(settings: AssetSettings) -> list[str]:
     return added
 
 
+def seed_repos() -> list[tuple[str, RepoRef, dict[str, bytes], str]]:
+    """种子数据有哪几个仓库、各放什么：（结果里的键, 仓库, 文件, 提交说明）。"""
+    return [
+        (
+            "company",
+            RepoRef(name="company-assets", scope="company"),
+            company_files(),
+            "chore(assets): 公司级种子资产",
+        ),
+        (
+            "department",
+            RepoRef(
+                name="dept-data-intel-assets", scope="department", department_code="data-intel"
+            ),
+            {**department_files(), **application_files()},
+            "chore(assets): 部门级种子资产（含应用）",
+        ),
+        (
+            "customer",
+            RepoRef(name="cust-HUAAN-assets", scope="customer", customer_code="HUAAN"),
+            customer_files(),
+            "chore(assets): 客户级种子资产",
+        ),
+        (
+            "engagement",
+            RepoRef(name="policy-import", scope="engagement", engagement_slug="policy-import"),
+            engagement_files(),
+            "chore(assets): 项目级种子资产",
+        ),
+    ]
+
+
+def refresh_seed_assets(settings: AssetSettings) -> list[str]:
+    """沿用旧数据目录启动时，补上后来才加进种子数据的资产。返回补了哪些。
+
+    和 `refresh_directory` 是一回事：代码往种子里加了新资产（应用、客户级仓库），
+    旧数据目录里的仓库不会自己长出来，页面上就表现为「应用市场是空的」。
+    只补**整份缺失**的资产（它的目录在仓库里完全不存在），已有的文件一个字不动。
+    """
+    git = LocalGitRepo(settings.repos)
+    added: list[str] = []
+    for _key, repo, files, _message in seed_repos():
+        if not git.path_of(repo).exists():
+            git.commit_files(repo, "main", files, "chore(assets): 补上后来才有的种子仓库")
+            added.append(f"{repo.name}（整个仓库）")
+            continue
+        existing = {entry.path for entry in git.list_tree(repo)}
+        asset_dirs = sorted(
+            {path.rsplit("/", 1)[0] for path in files if path.endswith("/asset.yaml")}
+        )
+        missing: dict[str, bytes] = {}
+        for directory in asset_dirs:
+            if any(path == directory or path.startswith(directory + "/") for path in existing):
+                continue
+            for path, content in files.items():
+                if path.startswith(directory + "/"):
+                    missing[path] = content
+            added.append(f"{repo.name}:{directory}")
+        if missing:
+            git.commit_files(repo, "main", missing, "chore(assets): 补上后来才有的种子资产")
+    return added
+
+
 def seed(settings: AssetSettings) -> dict[str, Any]:
     settings.ensure_dirs()
     git = LocalGitRepo(settings.repos)
     result: dict[str, Any] = {}
-
-    company = RepoRef(name="company-assets", scope="company")
-    result["company"] = git.commit_files(
-        company, "main", company_files(), "chore(assets): 公司级种子资产"
-    )
-
-    department = RepoRef(
-        name="dept-data-intel-assets", scope="department", department_code="data-intel"
-    )
-    result["department"] = git.commit_files(
-        department,
-        "main",
-        {**department_files(), **application_files()},
-        "chore(assets): 部门级种子资产（含应用）",
-    )
-
-    customer = RepoRef(name="cust-HUAAN-assets", scope="customer", customer_code="HUAAN")
-    result["customer"] = git.commit_files(
-        customer, "main", customer_files(), "chore(assets): 客户级种子资产"
-    )
-
-    engagement = RepoRef(name="policy-import", scope="engagement", engagement_slug="policy-import")
-    result["engagement"] = git.commit_files(
-        engagement, "main", engagement_files(), "chore(assets): 项目级种子资产"
-    )
+    for key, repo, files, message in seed_repos():
+        result[key] = git.commit_files(repo, "main", files, message)
 
     (settings.root / "directory.json").write_text(
         json.dumps(DIRECTORY, ensure_ascii=False, indent=2), encoding="utf-8"

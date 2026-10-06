@@ -18,6 +18,8 @@ from fde_asset.platform.identity import Principal
 @dataclass
 class CatalogQuery:
     kind: str | None = None
+    #: 不要这几类。资产目录用它把应用挡在外面——应用有自己的页面（应用市场）
+    exclude_kinds: tuple[str, ...] = ()
     scope: str | None = None
     industry: str | None = None
     owner_department: str | None = None
@@ -64,6 +66,8 @@ def base_select(principal: Principal, query: CatalogQuery) -> Select:
     statement = select(assets).where(visibility_clause(principal), assets.c.valid.is_(True))
     if query.kind:
         statement = statement.where(assets.c.kind == query.kind)
+    if query.exclude_kinds:
+        statement = statement.where(assets.c.kind.notin_(query.exclude_kinds))
     if query.scope:
         statement = statement.where(assets.c.scope == query.scope)
     if query.industry:

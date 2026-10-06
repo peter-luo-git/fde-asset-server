@@ -35,13 +35,21 @@ def _target(context: ServiceContext, payload: dict[str, Any]) -> service.Target:
     return target
 
 
-def _may_manage(principal: Principal, target: service.Target) -> bool:
-    """本人负责、同部门的部门主管，或管理员，才能推送与关联。"""
+def _owns(principal: Principal, target: service.Target) -> bool:
+    """这个项目或 Agent 是不是他负责的（管理员视同负责人）。只有负责人能直接关联资产。"""
     if principal.is_admin:
         return True
     if target.owner and target.owner == principal.user_id:
         return True
-    if target.target_type == "engagement" and principal.owns_engagement(target.target_id):
+    return target.target_type == "engagement" and principal.owns_engagement(target.target_id)
+
+
+def _may_manage(principal: Principal, target: service.Target) -> bool:
+    """能不能为它找资产并推送：负责人，或者同部门的部门主管。
+
+    部门主管对同事负责的目标只能推荐，不能替人关联——关联要用 `_owns` 判。
+    """
+    if _owns(principal, target):
         return True
     return principal.is_department_head and principal.department_code == target.department_code
 
@@ -54,6 +62,12 @@ def list_targets(
     """我能为哪些项目和 Agent 找资产：我负责的 + （部门主管）本部门全部。"""
     mine: list[dict[str, Any]] = []
     department: list[dict[str, Any]] = []
+    owner_names: dict[str, str] = {}
+    for user_id in context.directory.users():
+        try:
+            owner_names[user_id] = context.directory.resolve(user_id).display_name or user_id
+        except Exception:  # noqa: BLE001 - 名单里有坏数据就显示账号，不影响主流程
+            owner_names[user_id] = user_id
     for target_type, source in (
         ("engagement", context.directory.engagements()),
         ("agent", context.directory.agents()),
@@ -73,6 +87,9 @@ def list_targets(
             owned = raw.get("owner") == principal.user_id or (
                 target_type == "engagement" and principal.owns_engagement(target_id)
             )
+            # 部门视图里自己负责的和同事负责的走不同流程，页面要分得清
+            item["mine"] = owned
+            item["owner_name"] = owner_names.get(raw.get("owner", ""), raw.get("owner", ""))
             if owned or principal.is_admin:
                 mine.append(item)
             if (principal.is_department_head or principal.is_admin) and raw.get(
@@ -268,7 +285,7 @@ def link(
 ) -> dict[str, Any]:
     """本人直接关联，不走推荐流程。"""
     target = _target(context, payload)
-    if not _may_manage(principal, target):
+    if not _owns(principal, target):
         raise HTTPException(status_code=403, detail="只有目标负责人或管理员能关联资产")
     result = service.link(
         context.engine, principal, target.target_type, target.target_id, payload["asset_id"]

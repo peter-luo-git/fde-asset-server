@@ -24,7 +24,9 @@ from fde_asset.modules.asset import (
 )
 from fde_asset.modules.asset.indexer import index_all
 from fde_asset.modules.asset.manifest import KIND_RULES
+from fde_asset.modules.asset.visibility import visibility_clause
 from fde_asset.modules.harvest import service as harvest_service
+from fde_asset.modules.recommend import service as recommend_service
 from fde_asset.platform.identity import Principal
 from fde_asset.platform import settings_store
 from fde_asset.platform.llm.reranker import build_reranker
@@ -33,9 +35,22 @@ from fde_asset.platform.refs.wiki import parse_refs
 router = APIRouter(prefix="/api/v1", tags=["assets"])
 
 
+def _with_reporter(context: ServiceContext, health: dict[str, Any]) -> dict[str, Any]:
+    """探活结果是某个用户的电脑报的话，带上他的名字，页面好写「由谁的电脑探测」。"""
+    if health.get("checked_by"):
+        return {**health, "checked_by_name": context.display_name(health["checked_by"])}
+    return health
+
+
+def _kinds(value: str | None) -> tuple[str, ...]:
+    return tuple(item.strip() for item in (value or "").split(",") if item.strip())
+
+
 @router.get("/assets")
 def list_assets(
     kind: str | None = None,
+    # 逗号分隔，例如 exclude_kind=Application
+    exclude_kind: str | None = None,
     scope: str | None = None,
     industry: str | None = None,
     owner_department: str | None = None,
@@ -64,6 +79,7 @@ def list_assets(
         owner = None
     query = catalog.CatalogQuery(
         kind=kind,
+        exclude_kinds=_kinds(exclude_kind),
         scope=scope,
         industry=industry,
         owner_department=owner_department,
@@ -106,6 +122,7 @@ def list_invalid(
 def ask_assets(
     q: str,
     kind: str | None = None,
+    exclude_kind: str | None = None,
     scope: str | None = None,
     limit: int = Query(ask.DEFAULT_LIMIT, ge=1, le=50),
     context: ServiceContext = Depends(get_context),
@@ -121,6 +138,7 @@ def ask_assets(
         reranker=build_reranker(),
         kind=kind,
         scope=scope,
+        exclude_kinds=_kinds(exclude_kind),
         limit=limit,
         min_score=int(settings_store.get(context.engine, "search_min_relevance")) / 100,
     )
@@ -206,6 +224,7 @@ def change_lifecycle(
             replaced_by=str(payload.get("replaced_by", "")),
             note=str(payload.get("note", "")),
             text_limit=context.settings.index_text_limit,
+            owner_of=context.target_owner,
         )
     except lifecycle.LifecycleForbidden as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from None
@@ -259,22 +278,63 @@ def post_usages(
     return usage.record_usages(context.engine, items)
 
 
+def _customer_of(context: ServiceContext, engagement_slug: str) -> str:
+    """这个项目是哪个客户的：从成员关系里取（正式环境由 fde-server 的成员关系接口给出）。"""
+    for user_id in context.directory.users():
+        try:
+            principal = context.directory.resolve(user_id)
+        except Exception:  # noqa: BLE001 - 名单里有坏数据不影响主流程
+            continue
+        for membership in principal.memberships:
+            if membership.engagement_slug == engagement_slug and membership.customer_code:
+                return membership.customer_code
+    return ""
+
+
 @router.post("/snapshots")
 def build_snapshot(
     payload: dict[str, Any] = Body(default={}),
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
+    # 给了目标（项目或 Agent）就按它关联的资产挑；部门、客户、行业没传的从名单里补
+    target_type = str(payload.get("target_type", ""))
+    target_id = str(payload.get("target_id", ""))
+    department_code = payload.get("department_code", "")
+    engagement_slug = payload.get("engagement_slug", "")
+    customer_code = payload.get("customer_code", "")
+    industries = tuple(payload.get("industries", []))
+    if target_type or target_id:
+        try:
+            target = recommend_service.target_from_directory(
+                context.directory, target_type, target_id
+            )
+        except recommend_service.RecommendError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        if not target_id:
+            raise HTTPException(status_code=422, detail="target_id 不能为空")
+        department_code = department_code or target.department_code
+        if target_type == "engagement":
+            engagement_slug = engagement_slug or target_id
+        if not industries and target.industry:
+            industries = (target.industry,)
+    if engagement_slug and not customer_code:
+        customer_code = _customer_of(context, engagement_slug)
     result = snapshot.build_snapshot(
         context.engine,
         context.repo_port,
         snapshot_root=context.settings.snapshot_dir,
-        department_code=payload.get("department_code", ""),
-        engagement_slug=payload.get("engagement_slug", ""),
+        department_code=department_code,
+        engagement_slug=engagement_slug,
         index_limit=context.settings.knowledge_index_limit,
-        industries=tuple(payload.get("industries", [])),
+        industries=industries,
+        customer_code=customer_code,
+        target_type=target_type,
+        target_id=target_id,
     )
     return {
+        "selection": result.selection,
+        "linked": result.linked,
         "sha": result.sha,
         "path": str(result.path),
         "reused": result.reused,
@@ -397,12 +457,20 @@ def write_settings(
 
 @router.get("/apps")
 def list_apps(
+    mine: bool = False,
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
-    """应用市场：能跑的东西，带演示入口与在线状态。"""
+    """应用市场：能跑的东西，带演示入口与在线状态。`mine=true` 只要我负责的（我本人或我部门）。"""
+    owner_any = None
+    if mine:
+        owner_any = [f"user:{principal.user_id}"]
+        if principal.department_code:
+            owner_any.append(f"department:{principal.department_code}")
     result = catalog.search(
-        context.engine, principal, catalog.CatalogQuery(kind="Application", limit=200)
+        context.engine,
+        principal,
+        catalog.CatalogQuery(kind="Application", owner_any=owner_any, limit=200),
     )
     health = app_health_module.health_map(context.engine)
     items = []
@@ -418,7 +486,9 @@ def list_apps(
                 "repo": spec.get("repo", ""),
                 "runtime": runtime,
                 "demo": demo,
-                "health": health.get(item["asset_id"], {"status": "unknown"}),
+                "health": _with_reporter(
+                    context, health.get(item["asset_id"], {"status": "unknown"})
+                ),
             }
         )
     return {"total": len(items), "items": items}
@@ -437,6 +507,41 @@ def probe_apps(
     for item in results:
         tally[item.status] = tally.get(item.status, 0) + 1
     return {"checked": len(results), "by_status": tally}
+
+
+@router.post("/apps/health/report")
+def report_app_health(
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """用户的电脑替平台探活后把结果报回来：平台在内网，够不着公网和 VPN 里的应用。
+
+    只收这个人看得见的应用的结果；谁报的、什么时候报的都记下来，页面上会写明。
+    """
+    reports = {
+        str(item.get("asset_id", "")): item
+        for item in payload.get("items") or []
+        if isinstance(item, dict)
+    }
+    if not reports:
+        raise HTTPException(status_code=422, detail="items 不能为空")
+    with context.engine.connect() as conn:
+        rows = conn.execute(
+            select(assets).where(
+                assets.c.asset_id.in_(list(reports)),
+                assets.c.kind == "Application",
+                assets.c.deleted_at.is_(None),
+                visibility_clause(principal),
+            )
+        ).fetchall()
+    results = app_health_module.report_from_browser(
+        context.engine, rows, reports, reporter=principal.user_id
+    )
+    tally: dict[str, int] = {}
+    for item in results:
+        tally[item.status] = tally.get(item.status, 0) + 1
+    return {"recorded": len(results), "by_status": tally}
 
 
 @router.get("/assets/{asset_id}/relations")
@@ -561,6 +666,7 @@ def reindex(
         context.repo_port,
         context.repos(),
         text_limit=context.settings.index_text_limit,
+        owner_of=context.target_owner,
     )
     return {
         "repos": [

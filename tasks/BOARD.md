@@ -4,7 +4,7 @@
 规则：一个切片半天内、生产代码 ≤ 300 行；`make check` 绿 = 完成；评审最多 2 轮。
 
 **整体状态（2026-10-06）**：v0.1 的 21 个切片全部 done；10-01 之后按《资产中心-推荐与应用资产设计》§3.5 的四批排期又做了 15 个切片（见下方「v0.1 之后」）。
-后端全量 **353 通过 / 3 跳过**（跳过的 3 个需要 docker 与 docker compose）、ruff 与 `alembic heads` 通过。
+后端全量 **377 通过 / 3 跳过**（跳过的 3 个需要 docker 与 docker compose）、ruff 与 `alembic heads` 通过。
 还没做的和被 fde-server 卡住的，统一记在 fde-specs《资产中心-后续工作清单》。
 
 | ID | 切片 | 状态 | 验收命令 | 落地位置 |
@@ -82,6 +82,13 @@
 | X-14 | 客户级草稿：带客户代号、进客户仓库、按客户判评审权（迁移 `0007_candidate_customer`） | **done** | `pytest -q tests/platform/test_customer_drafts.py` | `harvest/service.create_draft()`、`api/routes_harvest.py` |
 | X-15 | 推荐理由按需生成，`rerank_enabled` 默认开 | **done** | `pytest -q tests/recommend/test_explain.py` | `POST /api/v1/recommend/explain`、`rerank.explain()` |
 | X-16 | 工作台「粘贴一段文字」 | **done** | `npm run test:asset` | fde-web `pages/AssetWorkbenchPage.tsx` |
+| X-17 | 快照跟着关联走：目标关联过技能或知识就只带关联的，否则作用域内全带；纳入客户级资产 | **done** | `pytest -q tests/asset/test_snapshot_builder.py` | `modules/asset/snapshot.py`、`POST /api/v1/snapshots` |
+| X-18 | 部门视图区分自己负责的与同事负责的；部门主管不能替同事直接关联 | **done** | `pytest -q tests/recommend` | `api/routes_recommend.py` 的 `_owns()` |
+| X-19 | 订阅与通知补齐：订阅选项接口、新资产入库通知、通知发给现任负责人、版本记录按内容去重 | **done** | `pytest -q tests/asset/test_notify_gaps.py tests/asset/test_notify.py` | `notify/service.py`、`indexer.finish_index()`、`GET /api/v1/subscriptions/options` |
+| X-20 | 已评审记录可回看：`status=decided`、我评过的、入库后的资产链接 | **done** | `pytest -q tests/asset/test_small_gaps.py` | `api/routes_harvest.py` 的 `list_reviews()` |
+| X-21 | 「已过时」修订草稿：资产负责人能打开、修改、提交、删除 | **done** | `pytest -q tests/asset/test_small_gaps.py` | `routes_harvest._owns_revised_asset()` |
+| X-22 | 应用理顺：不进资产目录（`exclude_kind`）、我的应用按负责人筛、已部署应用可登记、旧数据补种子资产 | **done** | `pytest -q tests/asset/test_apps_scope.py` | `catalog.CatalogQuery.exclude_kinds`、`GET /apps?mine`、`update_meta()` 的 `app`、`seed_assets.refresh_seed_assets()` |
+| X-23 | 借用户的电脑探活：浏览器代探并回报，记下是谁探的；没连上只记够不着（迁移 `0008_app_health_source`） | **done** | `pytest -q tests/asset/test_browser_probe.py` | `modules/app/health.report_from_browser()`、`POST /api/v1/apps/health/report` |
 
 > 前端对应的页面在 `fde-web` 的 `feat/asset-center-web` 分支（最新提交 `b41ff6e`），仍未合并到 main。
 
