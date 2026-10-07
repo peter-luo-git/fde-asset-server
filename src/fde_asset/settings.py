@@ -19,8 +19,16 @@ class AssetSettings(BaseSettings):
     work_dir: Path | None = None
     index_poll_seconds: int = 30
     server_internal_url: str = "http://127.0.0.1:8000"
-    # dev：按请求头识别身份，成员关系读本地种子文件；oidc：校验 Casdoor 令牌 + 调 fde-server（v0.2）
-    identity_mode: Literal["dev", "oidc"] = "dev"
+    # dev：按请求头识别身份，成员关系读本地名单文件
+    # platform：和平台共用一套账号——拿浏览器带来的平台登录会话去问 fde-server 这是谁，
+    #           用户、部门、项目成员关系也都来自 fde-server
+    # oidc：自己校验 Casdoor 令牌（预留，未实现）
+    identity_mode: Literal["dev", "platform", "oidc"] = "dev"
+    # platform 模式下向 fde-server 读名单用的共享密钥，两边配成一样
+    server_service_key: str = ""
+    # 名单和会话的缓存秒数：平台那边建了项目、改了成员关系，最多过这么久在这里生效。
+    # 设得短是因为人会在平台上建完项目马上来这边用；被移出项目的人也该尽快看不到。
+    platform_cache_seconds: int = 5
     index_text_limit: int = 200_000
     knowledge_index_limit: int = 30_000
     attachment_size_limit: int = 50 * 1024 * 1024

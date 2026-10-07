@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import Depends, Header, HTTPException, Request
@@ -14,7 +14,14 @@ from fastapi import Depends, Header, HTTPException, Request
 from fde_asset.core.db import create_engine_for, init_db
 from fde_asset.modules.leads.rules import LocalActivitySource
 from fde_asset.platform.blobs import BlobStore
-from fde_asset.platform.identity import LocalDirectory, Principal, PrincipalNotFound
+from fde_asset.platform.identity import (
+    LocalDirectory,
+    PlatformDirectory,
+    PlatformUnavailable,
+    Principal,
+    PrincipalNotFound,
+)
+from fde_asset.platform.platform_inbox import NoPlatformInbox, PlatformInbox
 from fde_asset.platform.repo.local_git import LocalGitRepo
 from fde_asset.platform.repo.ports import RepoRef
 from fde_asset.settings import AssetSettings, load_settings
@@ -25,9 +32,11 @@ class ServiceContext:
     settings: AssetSettings
     engine: Any
     repo_port: LocalGitRepo
-    directory: LocalDirectory
+    directory: LocalDirectory | PlatformDirectory
     activity: LocalActivitySource
     blob_store: BlobStore
+    #: 平台工作台的待办；没有和平台共用账号时是个空实现
+    platform_inbox: PlatformInbox | NoPlatformInbox = field(default_factory=NoPlatformInbox)
 
     def target_owner(self, target_type: str, target_id: str) -> str:
         """项目或 Agent 现在的负责人（正式环境由 fde-server 给出，这里读开发名单）。"""
@@ -87,11 +96,24 @@ def build_context(settings: AssetSettings | None = None) -> ServiceContext:
     settings.ensure_dirs()
     engine = create_engine_for(settings.db_path)
     init_db(engine)
+    local_directory = LocalDirectory(settings.root / "directory.json")
+    directory: LocalDirectory | PlatformDirectory = local_directory
+    if settings.identity_mode == "platform":
+        directory = PlatformDirectory(
+            settings.server_internal_url,
+            settings.server_service_key,
+            ttl_seconds=settings.platform_cache_seconds,
+            local=local_directory,
+        )
+    platform_inbox: PlatformInbox | NoPlatformInbox = NoPlatformInbox()
+    if settings.identity_mode == "platform" and settings.server_service_key:
+        platform_inbox = PlatformInbox(settings.server_internal_url, settings.server_service_key)
     return ServiceContext(
         settings=settings,
         engine=engine,
         repo_port=LocalGitRepo(settings.repos),
-        directory=LocalDirectory(settings.root / "directory.json"),
+        platform_inbox=platform_inbox,
+        directory=directory,
         activity=LocalActivitySource(settings.root / "activity.json"),
         blob_store=BlobStore(settings.blob_dir),
     )
@@ -105,12 +127,23 @@ def get_context(request: Request) -> ServiceContext:
 
 
 def get_principal(
+    request: Request,
     context: ServiceContext = Depends(get_context),
     x_fde_user: str | None = Header(default=None, alias="X-FDE-User"),
     authorization: str | None = Header(default=None),
 ) -> Principal:
     if context.settings.identity_mode == "oidc":  # pragma: no cover - v0.2 接 Casdoor
         raise HTTPException(status_code=501, detail="OIDC 身份校验将在接入 Casdoor 后启用")
+    if context.settings.identity_mode == "platform":
+        # 和平台共用账号：只认平台的登录会话，调用方自己报的 X-FDE-User 一律不看
+        try:
+            return context.directory.resolve_session(
+                request.cookies.get(PlatformDirectory.SESSION_COOKIE)
+            )
+        except PrincipalNotFound:
+            raise HTTPException(status_code=401, detail="未登录或登录已失效") from None
+        except PlatformUnavailable:
+            raise HTTPException(status_code=503, detail="暂时无法向平台确认身份") from None
     if not x_fde_user:
         raise HTTPException(status_code=401, detail="缺少身份：开发模式需要 X-FDE-User 请求头")
     try:

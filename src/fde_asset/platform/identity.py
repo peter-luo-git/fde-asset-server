@@ -1,12 +1,17 @@
 """身份与成员关系。
 
-正式环境只有一套用户（Casdoor）：资产服务自己校验 OIDC 令牌，成员关系向 fde-server 查询。
-本地开发用目录文件 + 请求头，便于无依赖跑通全链路。两种实现共用同一个 Principal。
+两种来源，共用同一个 Principal：
+
+- 本地开发（LocalDirectory）：名单文件 + 请求头，无依赖跑通全链路。
+- 和平台共用账号（PlatformDirectory）：登录只在平台做，这里拿浏览器带来的平台会话去问
+  fde-server「这是谁」；用户、部门、项目成员关系也都从 fde-server 读。
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -165,3 +170,148 @@ class HttpDirectory:
         )
         self._cache[user_id] = (now, principal)
         return principal
+
+
+class PlatformUnavailable(RuntimeError):
+    """问不到 fde-server。身份相关的一律 fail closed：宁可报错，不放行。"""
+
+
+def _principal_from_platform(raw: dict) -> Principal:
+    department = raw.get("department") or {}
+    return Principal(
+        # 资产里记的负责人、评审人、订阅人都是账号名，所以这里用账号名做身份
+        user_id=raw["username"],
+        display_name=raw.get("display_name") or raw["username"],
+        department_code=department.get("code", ""),
+        is_admin=raw.get("system_role") == "admin",
+        is_asset_reviewer=bool(raw.get("is_asset_reviewer")),
+        is_department_head=bool(raw.get("is_department_head")),
+        memberships=tuple(
+            Membership(
+                engagement_slug=m["engagement_slug"],
+                department_code=m.get("department_code", ""),
+                role=m.get("role", "member"),
+                customer_code=m.get("customer_code", ""),
+            )
+            for m in raw.get("memberships", [])
+        ),
+    )
+
+
+class PlatformDirectory:
+    """和平台共用一套账号：身份和名单都来自 fde-server，这里只做短时间缓存。
+
+    - `resolve_session`：一次浏览器请求是谁——把平台的登录会话转给 fde-server 去认。
+    - `users` / `resolve` / `engagements`：没有浏览器参与时也要用的名单（挑评审人、
+      发通知、后台任务），凭共享密钥读。
+    - Agent 清单平台那边还没有对应的接口，暂时仍读本地名单文件。
+    """
+
+    SESSION_COOKIE = "fde_session"
+
+    def __init__(
+        self,
+        base_url: str,
+        service_key: str,
+        *,
+        ttl_seconds: int = 30,
+        client=None,
+        local: LocalDirectory | None = None,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self._service_key = service_key
+        self.ttl = ttl_seconds
+        self._client = client
+        self._local = local
+        self._lock = threading.Lock()
+        self._snapshot: tuple[float, dict] | None = None
+        self._sessions: dict[str, tuple[float, Principal]] = {}
+
+    def _http(self):
+        if self._client is None:
+            import httpx
+
+            self._client = httpx.Client(timeout=5.0)
+        return self._client
+
+    def _get(self, path: str, **kwargs):
+        try:
+            return self._http().get(self.base_url + path, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - 网络层的各种失败都算「问不到」
+            raise PlatformUnavailable(str(exc)) from None
+
+    # ---- 这次请求是谁 ----
+
+    def resolve_session(self, session_cookie: str | None) -> Principal:
+        if not session_cookie:
+            raise PrincipalNotFound("未登录")
+        key = hashlib.sha256(session_cookie.encode()).hexdigest()
+        now = time.monotonic()
+        with self._lock:
+            hit = self._sessions.get(key)
+            if hit and now - hit[0] < self.ttl:
+                return hit[1]
+        response = self._get(
+            "/internal/identity/principal", cookies={self.SESSION_COOKIE: session_cookie}
+        )
+        if response.status_code in (401, 403):
+            with self._lock:
+                self._sessions.pop(key, None)
+            raise PrincipalNotFound("登录已失效")
+        if response.status_code != 200:
+            raise PlatformUnavailable(f"fde-server 返回 {response.status_code}")
+        principal = _principal_from_platform(response.json())
+        with self._lock:
+            # 会话会不断产生新的，顺手清掉过期的，别让缓存只增不减
+            self._sessions = {k: v for k, v in self._sessions.items() if now - v[0] < self.ttl}
+            self._sessions[key] = (now, principal)
+        return principal
+
+    # ---- 名单 ----
+
+    def _directory(self) -> dict:
+        now = time.monotonic()
+        with self._lock:
+            if self._snapshot and now - self._snapshot[0] < self.ttl:
+                return self._snapshot[1]
+        if not self._service_key:
+            raise PlatformUnavailable("没有配置和 fde-server 共用的服务密钥")
+        response = self._get(
+            "/internal/identity/directory", headers={"X-FDE-Service-Key": self._service_key}
+        )
+        if response.status_code != 200:
+            raise PlatformUnavailable(f"fde-server 返回 {response.status_code}")
+        payload = response.json()
+        snapshot = {
+            "users": {raw["username"]: _principal_from_platform(raw) for raw in payload["users"]},
+            "engagements": {
+                raw["slug"]: {
+                    "title": raw.get("name") or raw["slug"],
+                    "department_code": raw.get("department_code", ""),
+                    "customer_code": raw.get("customer_code", ""),
+                    "owner": raw.get("owner", ""),
+                    "industry": raw.get("industry", ""),
+                    "stage": raw.get("stage", ""),
+                    "description": raw.get("description", ""),
+                }
+                for raw in payload["engagements"]
+            },
+        }
+        with self._lock:
+            self._snapshot = (now, snapshot)
+        return snapshot
+
+    def users(self) -> list[str]:
+        return sorted(self._directory()["users"])
+
+    def resolve(self, user_id: str) -> Principal:
+        principal = self._directory()["users"].get(user_id)
+        if principal is None:
+            raise PrincipalNotFound(user_id)
+        return principal
+
+    def engagements(self) -> dict[str, dict]:
+        return self._directory()["engagements"]
+
+    def agents(self) -> dict[str, dict]:
+        return self._local.agents() if self._local is not None else {}

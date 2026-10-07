@@ -197,6 +197,11 @@ def get_candidate(
         or _owns_revised_asset(context, principal, candidate_id)
     ):
         raise HTTPException(status_code=403, detail="草稿只有本人可见；提交后评审人才能打开")
+    if candidate["created_by"] == principal.user_id and candidate["status"] == "merged":
+        # 入库的结果本人已经看到了，平台工作台里那条不用再留着
+        context.platform_inbox.resolve(
+            candidate_id=candidate_id, event="result", usernames=[principal.user_id]
+        )
     return candidate
 
 
@@ -285,7 +290,9 @@ def candidate_review(
         "reviewers": reviewers,
         "current": current,
         "history": history,
-        "can_review_myself": can_review(
+        # 自己提交的不能自己评，哪怕本人正好有这个作用域的评审权（比如项目负责人）
+        "can_review_myself": candidate["created_by"] != principal.user_id
+        and can_review(
             principal,
             candidate["scope"],
             department_code=candidate["department_code"],
@@ -440,9 +447,23 @@ def submit_candidate(
             )
         raise HTTPException(status_code=409, detail=str(exc)) from None
     submitted = service.get_candidate(context.engine, candidate_id)
+    reviewer_ids = [item["user_id"] for item in _reviewers(context, submitted)]
+    review_ref = str((submitted.get("review_id") or ""))
+    # 平台工作台：给评审人开一条待办；提交人之前那条"被打回"随着重新提交收掉
+    context.platform_inbox.resolve(
+        candidate_id=candidate_id, event="result", usernames=[principal.user_id]
+    )
+    context.platform_inbox.open(
+        reviewer_ids,
+        candidate_id=candidate_id,
+        event=f"review:{review_ref}",
+        title=f"资产评审：{submitted['title']}",
+        body=f"{principal.display_name or principal.user_id} 提交了一份草稿，等你评审",
+        engagement_slug=submitted.get("engagement_slug") or "",
+    )
     notify_service.notify_review(
         context.engine,
-        [item["user_id"] for item in _reviewers(context, submitted)],
+        reviewer_ids,
         candidate_id=candidate_id,
         title=f"有草稿等你评审：{submitted['title']}",
         body=(
@@ -524,7 +545,7 @@ def list_reviews(
         data["kind"] = candidate.kind if candidate else ""
         data["name"] = candidate.name if candidate else ""
         # 作用域内的真实归属要从候选上取，否则项目级评审永远算不出有权限
-        data["can_decide"] = can_review(
+        data["can_decide"] = row.submitted_by != principal.user_id and can_review(
             principal,
             row.scope,
             department_code=candidate.department_code if candidate else "",
@@ -601,6 +622,9 @@ def decide_review(
         customer_code=candidate.customer_code,
     ):
         raise HTTPException(status_code=403, detail="没有该作用域的评审权限")
+    if review.submitted_by == principal.user_id:
+        # 评审的意义就是换一个人看。项目负责人、管理员提交的也一样，要由别的评审人来评
+        raise HTTPException(status_code=403, detail="不能评审自己提交的资产，请由其他评审人处理")
     target = context.repo_for(
         review.scope,
         department_code=candidate.department_code,
@@ -619,6 +643,17 @@ def decide_review(
     if not result.get("idempotent"):
         approved = result.get("status") == "merged"
         note = str(payload.get("note", "")).strip()
+        # 平台工作台：评完了，所有评审人名下的那条待办收掉；结果给提交人开一条
+        context.platform_inbox.resolve(candidate_id=candidate.candidate_id, event="review")
+        context.platform_inbox.open(
+            [candidate.created_by],
+            candidate_id=candidate.candidate_id,
+            event=f"result:{review_id}",
+            title=("资产已入库：" if approved else "资产被打回：") + candidate.title,
+            body=note
+            or ("评审通过，已合并进资产仓库" if approved else "评审未通过，请修改后重新提交"),
+            engagement_slug=candidate.engagement_slug or "",
+        )
         notify_service.notify_review(
             context.engine,
             [candidate.created_by],

@@ -17,6 +17,7 @@ from typing import Any
 
 from sqlalchemy import and_, select
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 
 from fde_asset.core.db import (
     asset_notifications,
@@ -135,6 +136,15 @@ def snapshot_version(engine: Engine, row: Any) -> bool:
     同仓库里别的资产一有提交它就变，按它存的话每份资产都会多出一份一模一样的版本。
     """
     sections_json = json.dumps(_sections(row.content_text or ""), ensure_ascii=False)
+    try:
+        return _snapshot_version(engine, row, sections_json)
+    except IntegrityError:
+        # 评审通过时会立刻建一次索引，后台的定时索引可能正好同时扫到同一次提交；
+        # 两边都想存这一版，后到的那个撞上唯一约束——说明已经存好了，不算错。
+        return False
+
+
+def _snapshot_version(engine: Engine, row: Any, sections_json: str) -> bool:
     with engine.begin() as conn:
         latest = conn.execute(
             select(asset_versions)

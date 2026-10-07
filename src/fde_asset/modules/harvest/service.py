@@ -107,8 +107,12 @@ def create_draft(engine: Engine, principal: Principal, data: CandidateInput) -> 
         if lead is None or lead.owner_user != principal.user_id:
             raise HarvestError("线索不存在，或者不是给你的")
         data = replace(data, origin="lead", source={**data.source, "leadId": data.lead_id})
-    if data.scope == "engagement" and not data.engagement_slug:
-        raise HarvestError("项目级候选必须指定 engagement_slug")
+    if data.scope == "engagement":
+        if not data.engagement_slug:
+            raise HarvestError("项目级候选必须指定 engagement_slug")
+        # 和客户级一个道理：不在项目里的人不能往这个项目的仓库里写东西
+        if not principal.is_admin and data.engagement_slug not in principal.engagement_slugs:
+            raise HarvestError(f"你不是项目 {data.engagement_slug} 的成员，不能为它沉淀资产")
     if data.scope == "department" and not data.department_code:
         raise HarvestError("部门级候选必须指定 department_code")
     if data.scope == "customer":

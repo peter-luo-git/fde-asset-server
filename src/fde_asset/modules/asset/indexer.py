@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import json
 import uuid
 from dataclasses import dataclass, field
@@ -112,10 +114,22 @@ def _clean(value: object) -> str:
     return "" if value is None else str(value)
 
 
+#: 建索引是"先查有没有、没有再插"，两处同时扫同一个仓库会互相撞上唯一约束。
+#: 评审通过时会立刻建一次，后台定时任务也会建，所以同一个进程里一次只让一处进行。
+_INDEX_LOCK = threading.RLock()
+
+
 def index_repository(
     engine: Engine, repo_port, repo: RepoRef, *, text_limit: int = 200_000
 ) -> IndexReport:
     """索引一个仓库的全部资产，返回统计与错误清单。"""
+    with _INDEX_LOCK:
+        return _index_repository(engine, repo_port, repo, text_limit=text_limit)
+
+
+def _index_repository(
+    engine: Engine, repo_port, repo: RepoRef, *, text_limit: int = 200_000
+) -> IndexReport:
     report = IndexReport(repo=repo.name)
     report.head = repo_port.get_head(repo)
     entries = [entry.path for entry in repo_port.list_tree(repo)]
