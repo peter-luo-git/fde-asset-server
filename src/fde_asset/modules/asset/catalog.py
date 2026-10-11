@@ -48,6 +48,7 @@ def row_to_dict(row: Any, reuse: int = 0, usage: int = 0) -> dict[str, Any]:
         "source_json",
         "kind_spec_json",
         "attachments_json",
+        "visibility_json",
     ):
         raw = data.pop(field_name)
         data[field_name.removesuffix("_json")] = json.loads(
@@ -96,11 +97,12 @@ def base_select(principal: Principal, query: CatalogQuery) -> Select:
         like = f"%{query.q}%"
         statement = statement.where(
             or_(
-                assets.c.name.like(like),
-                assets.c.title.like(like),
-                assets.c.summary.like(like),
-                assets.c.tags_json.like(like),
-                assets.c.content_text.like(like),
+                # 不分大小写：搜 oracle 要能找到 Oracle（SQLite 的 like 本来就不分，PostgreSQL 分）
+                assets.c.name.ilike(like),
+                assets.c.title.ilike(like),
+                assets.c.summary.ilike(like),
+                assets.c.tags_json.ilike(like),
+                assets.c.content_text.ilike(like),
             )
         )
     return statement

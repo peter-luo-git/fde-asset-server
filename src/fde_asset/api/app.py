@@ -30,10 +30,16 @@ def create_app(settings: AssetSettings | None = None) -> FastAPI:
 
     @app.get("/health/ready")
     async def ready() -> dict[str, object]:
+        try:
+            with context.engine.connect() as conn:
+                conn.exec_driver_sql("SELECT 1")
+            database = True
+        except Exception:  # noqa: BLE001 - 探活只关心连不连得上
+            database = False
         checks = {
             "data_dir": context.settings.root.exists(),
             "repo_dir": context.settings.repos.exists(),
-            "database": context.settings.db_path.exists(),
+            "database": database,
         }
         return {"status": "ok" if all(checks.values()) else "degraded", "checks": checks}
 

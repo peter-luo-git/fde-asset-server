@@ -1,4 +1,9 @@
-"""测试夹具：每个用例一套独立的本地仓库 + SQLite，互不干扰。"""
+"""测试夹具：每个用例一套独立的本地仓库 + 数据库，互不干扰。
+
+默认用 SQLite。设了 `FDE_ASSET_TEST_DATABASE_URL`（指向一个有建库权限的 PostgreSQL 账号，
+例如 postgresql://postgres:test@127.0.0.1:55432/postgres）就改用 PostgreSQL：
+每个用例在那台服务器上建一个临时库，跑完删掉。
+"""
 
 from __future__ import annotations
 
@@ -35,11 +40,39 @@ def _env_does_not_leak():
     os.environ.update(before)
 
 
+POSTGRES_URL = os.environ.get("FDE_ASSET_TEST_DATABASE_URL", "")
+
+
 @pytest.fixture()
-def settings(tmp_path: Path) -> AssetSettings:
-    value = AssetSettings(data_dir=tmp_path / "data")
+def settings(tmp_path: Path):
+    if not POSTGRES_URL:
+        value = AssetSettings(data_dir=tmp_path / "data")
+        value.ensure_dirs()
+        yield value
+        return
+
+    import uuid
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.engine import make_url
+
+    server = make_url(POSTGRES_URL).set(drivername="postgresql+psycopg")
+    name = "asset_test_" + uuid.uuid4().hex[:12]
+    admin = create_engine(server, isolation_level="AUTOCOMMIT")
+    with admin.connect() as conn:
+        conn.exec_driver_sql(f'CREATE DATABASE "{name}"')
+    value = AssetSettings(
+        data_dir=tmp_path / "data",
+        database_url=server.set(database=name).render_as_string(hide_password=False),
+    )
     value.ensure_dirs()
-    return value
+    try:
+        yield value
+    finally:
+        with admin.connect() as conn:
+            # 用例里建的连接池可能还开着，强制断开再删
+            conn.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        admin.dispose()
 
 
 @pytest.fixture()
@@ -55,7 +88,7 @@ def context(seeded: AssetSettings):
 
 @pytest.fixture()
 def indexed(context):
-    index_all(context.engine, context.repo_port, context.repos())
+    index_all(context.engine, context.repo_port, context.repos(), file_store=context.file_store)
     return context
 
 
@@ -66,6 +99,16 @@ def client(seeded: AssetSettings):
         test_client.headers.update({"X-FDE-User": "admin"})
         test_client.post("/api/v1/admin/assets/reindex")
         yield test_client
+
+
+def asset_dir(context, name: str) -> str:
+    """资产在仓库里的目录（`assets/<资产编号>`）。目录按编号放，测试里按标识来找。"""
+    from sqlalchemy import select
+
+    from fde_asset.core.db import assets
+
+    with context.engine.connect() as conn:
+        return conn.execute(select(assets.c.path).where(assets.c.name == name)).scalar_one()
 
 
 def as_user(client: TestClient, user: str) -> TestClient:

@@ -79,6 +79,7 @@ def change(
     note: str = "",
     text_limit: int = 200_000,
     owner_of: Any = None,
+    file_store: Any = None,
 ) -> dict[str, Any]:
     if lifecycle not in ALLOWED:
         raise LifecycleError(f"生命周期只能是：{'、'.join(ALLOWED)}")
@@ -102,9 +103,6 @@ def change(
         if replaced_by == f"{row.kind.lower()}/{row.name}":
             raise LifecycleError("不能被自己取代")
 
-    if row.path.endswith(".md"):
-        # 规范是单个 Markdown 文件，没有元数据可改
-        raise LifecycleError("规范没有生命周期字段；要撤掉一条规范，请在仓库里删除或改写它")
     repo = next((item for item in repos if item.name == row.repo), None)
     if repo is None:
         raise LifecycleError(f"找不到资产所在的仓库：{row.repo}")
@@ -121,7 +119,7 @@ def change(
         author_name=principal.display_name or principal.user_id,
         author_email=f"{principal.user_id}@fde.local",
     )
-    index_repository(engine, repo_port, repo, text_limit=text_limit)
+    index_repository(engine, repo_port, repo, text_limit=text_limit, file_store=file_store)
     finish_index(engine, owner_of=owner_of)
     with engine.begin() as conn:
         record_event(

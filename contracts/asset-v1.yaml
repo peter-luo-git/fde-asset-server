@@ -983,6 +983,54 @@ paths:
       summary: Get Asset
       tags:
       - assets
+  /api/v1/assets/{asset_id}/attachments/{filename}:
+    get:
+      description: 下载已入库资产的附件原件。附件不在仓库里，按 asset.yaml 里记的哈希从文件存储取。
+      operationId: download_asset_attachment_api_v1_assets__asset_id__attachments__filename__get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: path
+        name: filename
+        required: true
+        schema:
+          title: Filename
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: {}
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Download Asset Attachment
+      tags:
+      - assets
   /api/v1/assets/{asset_id}/changes:
     get:
       description: 这份资产最近一次更新改了什么，章节级。
@@ -1401,6 +1449,60 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
           description: Validation Error
       summary: Get Sop Step
+      tags:
+      - assets
+  /api/v1/assets/{asset_id}/visibility:
+    post:
+      description: '调整可见范围（升级、降级、分享）：改仓库里的 asset.yaml 并提交，再重建索引。
+
+
+        `visibility` 是调整后的完整列表，每项是 company，或 department:/customer:/engagement:/user: 加代号。'
+      operationId: change_visibility_api_v1_assets__asset_id__visibility_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Change Visibility Api V1 Assets  Asset Id  Visibility Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Change Visibility
       tags:
       - assets
   /api/v1/dev/identities:

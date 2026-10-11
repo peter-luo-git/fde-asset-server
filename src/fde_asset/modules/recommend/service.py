@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import and_, select, update
+
+from fde_asset.modules.asset.manifest import owner_slug
 from sqlalchemy.engine import Engine
 
 from fde_asset.core.db import (
@@ -418,6 +420,9 @@ def decide(
                         target_id=row.target_id,
                         asset_id=row.asset_id,
                         source="recommendation",
+                        mount_name=mount_name_for(
+                            conn, row.target_type, row.target_id, row.asset_id
+                        ),
                         created_by=principal.user_id,
                     )
                 )
@@ -434,6 +439,40 @@ def decide(
             },
         )
     return {"recommendation_id": recommendation_id, "status": status}
+
+
+def mount_name_for(conn: Any, target_type: str, target_id: str, asset_id: str) -> str:
+    """这份资产关联到这个目标以后，在 Agent 那里叫什么。
+
+    Agent 是按名字认技能的。不同负责人名下可以有同名资产，都关联到同一个目标就会撞名：
+    先关联的保持原名，后关联的加上负责人。同一负责人名下不重名，所以加完一定不撞；
+    定下来就记在关联关系上，以后先关联的那份被移除、资产换了负责人，这个名字都不变。
+    """
+    asset = conn.execute(
+        select(assets.c.kind, assets.c.name, assets.c.owner_value).where(
+            assets.c.asset_id == asset_id
+        )
+    ).first()
+    if asset is None:
+        return ""
+    taken = {
+        row.mount_name or row.name
+        for row in conn.execute(
+            select(target_assets.c.mount_name, assets.c.name)
+            .join(assets, assets.c.asset_id == target_assets.c.asset_id)
+            .where(
+                target_assets.c.target_type == target_type,
+                target_assets.c.target_id == target_id,
+                target_assets.c.asset_id != asset_id,
+                assets.c.kind == asset.kind,
+            )
+        )
+    }
+    if asset.name not in taken:
+        return asset.name
+    candidate = f"{asset.name}-{owner_slug(asset.owner_value)}"
+    # 负责人后来换过的话，加了负责人仍可能撞上；再不行就带上编号的前几位
+    return candidate if candidate not in taken else f"{candidate}-{asset_id[:8]}"
 
 
 def link(
@@ -462,6 +501,7 @@ def link(
                 target_id=target_id,
                 asset_id=asset_id,
                 source="manual",
+                mount_name=mount_name_for(conn, target_type, target_id, asset_id),
                 created_by=principal.user_id,
             )
         )
@@ -513,6 +553,8 @@ def linked_assets(
             "title": row.title,
             "summary": row.summary,
             "ref": f"[[{row.kind.lower()}/{row.name}]]",
+            # Agent 那里看到的名字；和标识不一样说明关联时遇到了重名
+            "mount_name": row.mount_name or row.name,
             "source": row.source,
             "created_by": row.created_by,
         }

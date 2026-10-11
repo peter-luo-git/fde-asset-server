@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,8 @@ from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
 from fde_asset.core.db import assets, target_assets
-from fde_asset.modules.asset.manifest import KIND_RULES, SHORT_BY_KIND
+from fde_asset.modules.asset.manifest import KIND_RULES, SHORT_BY_KIND, owner_slug
+from fde_asset.modules.asset.visibility import audience_clause
 from fde_asset.platform.extract import extract_text
 from fde_asset.platform.repo.ports import RepoRef
 
@@ -55,20 +57,28 @@ def _layer_order(scope: str) -> int:
     return {"company": 0, "department": 1, "customer": 2, "engagement": 3}.get(scope, 4)
 
 
-def build_snapshot(
+@dataclass
+class Selection:
+    """给某个项目或 Agent 带哪些资产，以及每份在 Agent 那里叫什么。"""
+
+    rows: list[Any]
+    #: {资产编号: 挂载名}，同类型内不重名
+    mounted: dict[str, str]
+    #: linked = 按目标关联的资产挑；scope = 可见范围内全带
+    selection: str
+    linked: int
+    not_carried: list[dict[str, Any]]
+
+
+def select_assets(
     engine: Engine,
-    repo_port,
     *,
-    snapshot_root: Path,
     department_code: str = "",
     engagement_slug: str = "",
-    index_limit: int = 30_000,
-    industries: tuple[str, ...] = (),
     customer_code: str = "",
     target_type: str = "",
     target_id: str = "",
-) -> SnapshotResult:
-    """生成或复用快照目录，返回内容寻址的 sha。"""
+) -> Selection:
     with engine.connect() as conn:
         rows = conn.execute(
             select(assets).where(
@@ -76,20 +86,28 @@ def build_snapshot(
                 assets.c.valid.is_(True),
                 assets.c.restricted.is_(False),
                 assets.c.lifecycle.notin_(["deprecated", "archived", "draft"]),
+                # 全公司的，加上可见范围里点到这个部门、客户、项目的
+                audience_clause(
+                    department_codes=[department_code],
+                    customer_codes=[customer_code],
+                    engagement_slugs=[engagement_slug],
+                ),
             )
         ).fetchall()
         linked_ids: set[str] = set()
         linked_titles: dict[str, str] = {}
+        #: 关联时定下的挂载名
+        recorded_names: dict[str, str] = {}
         if target_type and target_id:
-            linked_ids = {
-                row.asset_id
-                for row in conn.execute(
-                    select(target_assets.c.asset_id).where(
-                        target_assets.c.target_type == target_type,
-                        target_assets.c.target_id == target_id,
-                    )
+            for row in conn.execute(
+                select(target_assets.c.asset_id, target_assets.c.mount_name).where(
+                    target_assets.c.target_type == target_type,
+                    target_assets.c.target_id == target_id,
                 )
-            }
+            ):
+                linked_ids.add(row.asset_id)
+                if row.mount_name:
+                    recorded_names[row.asset_id] = row.mount_name
             if linked_ids:
                 linked_titles = {
                     row.asset_id: row.title
@@ -100,19 +118,8 @@ def build_snapshot(
                     )
                 }
 
-    in_scope = [
-        row
-        for row in rows
-        if row.scope == "company"
-        or (
-            row.scope == "department" and department_code and row.department_code == department_code
-        )
-        or (row.scope == "customer" and customer_code and row.customer_code == customer_code)
-        or (
-            row.scope == "engagement" and engagement_slug and row.engagement_slug == engagement_slug
-        )
-    ]
-    in_scope.sort(key=lambda row: (_layer_order(row.scope), row.kind, row.name))
+    in_scope = list(rows)
+    in_scope.sort(key=lambda row: (_layer_order(row.scope), row.kind, row.name, row.asset_id))
 
     # 关联过技能或知识，就按关联的来；一份都没关联过，退回作用域内全带
     picked = {
@@ -140,11 +147,49 @@ def build_snapshot(
         for asset_id in sorted(linked_ids - carried)
     ]
 
+    return Selection(
+        rows=selected,
+        mounted=_mount_names(selected, recorded_names),
+        selection=selection,
+        linked=len(picked),
+        not_carried=not_carried,
+    )
+
+
+def build_snapshot(
+    engine: Engine,
+    repo_port,
+    *,
+    snapshot_root: Path,
+    department_code: str = "",
+    engagement_slug: str = "",
+    index_limit: int = 30_000,
+    industries: tuple[str, ...] = (),
+    customer_code: str = "",
+    target_type: str = "",
+    target_id: str = "",
+    file_store: Any = None,
+) -> SnapshotResult:
+    """生成或复用快照目录，返回内容寻址的 sha。
+
+    `file_store` 是附件原件的存放处；不给就不带附件里的文字。
+    """
+    chosen = select_assets(
+        engine,
+        department_code=department_code,
+        engagement_slug=engagement_slug,
+        customer_code=customer_code,
+        target_type=target_type,
+        target_id=target_id,
+    )
+    selected, mounted, selection = chosen.rows, chosen.mounted, chosen.selection
+    not_carried = chosen.not_carried
+
     fingerprint = hashlib.sha256()
     fingerprint.update(f"selection={selection}|".encode())
     for row in selected:
         fingerprint.update(
-            f"{row.scope}|{row.kind}|{row.name}|{row.commit_sha}|{row.updated_at}".encode()
+            f"{row.asset_id}|{row.kind}|{mounted[row.asset_id]}|{row.commit_sha}|{row.updated_at}".encode()
         )
     sha = fingerprint.hexdigest()[:16]
     target = Path(snapshot_root).expanduser() / sha
@@ -156,39 +201,50 @@ def build_snapshot(
             counts=_count(selected),
             skipped=not_carried,
             selection=selection,
-            linked=len(picked),
+            linked=chosen.linked,
         )
 
-    # 同名覆盖：后写的（部门 → 项目）覆盖先写的（公司）
     staging = target.with_suffix(".tmp")
     if staging.exists():
         _rmtree(staging)
     index_rows: dict[tuple[str, str], dict[str, Any]] = {}
     skipped: list[dict[str, Any]] = list(not_carried)
 
+    carried_manifest: list[dict[str, Any]] = []
     for row in selected:
-        repo = RepoRef(
-            name=row.repo,
-            scope=row.scope,
-            department_code=row.department_code or "",
-            customer_code=row.customer_code or "",
-            engagement_slug=row.engagement_slug or "",
+        repo = RepoRef(name=row.repo)
+        mount = mounted[row.asset_id]
+        carried_manifest.append(
+            {
+                "asset_id": row.asset_id,
+                "kind": row.kind,
+                "name": row.name,
+                "mount_name": mount,
+                "owner": row.owner_ref,
+                "version": row.version,
+                "commit_sha": row.commit_sha,
+            }
         )
         if row.kind in LAYER_DIR:
             sub = LAYER_DIR[row.kind]
             if row.kind == "Rule":
-                destination = staging / sub / Path(row.path).name
-                _write(destination, repo_port.read_file(repo, row.path))
+                # 规范在快照里仍是 rules/<名字>.md 一个文件，Agent 那边按这个形状读
+                destination = staging / sub / f"{mount}.md"
+                main_file = KIND_RULES["Rule"].main_file
+                _write(destination, repo_port.read_file(repo, f"{row.path}/{main_file}"))
             else:
                 main_file = KIND_RULES[row.kind].main_file
-                destination = staging / sub / row.name / main_file
-                _write(destination, repo_port.read_file(repo, f"{row.path}/{main_file}"))
+                destination = staging / sub / mount / main_file
+                content = repo_port.read_file(repo, f"{row.path}/{main_file}")
+                if mount != row.name:
+                    content = _renamed(content, row.name, mount)
+                _write(destination, content)
                 _write(
                     destination.parent / "asset.yaml",
                     repo_port.read_file(repo, f"{row.path}/asset.yaml"),
                 )
         elif row.kind in KNOWLEDGE_KINDS:
-            destination = staging / "knowledge" / SHORT_BY_KIND[row.kind] / row.name / "README.md"
+            destination = staging / "knowledge" / SHORT_BY_KIND[row.kind] / mount / "README.md"
             _write(destination, repo_port.read_file(repo, f"{row.path}/README.md"))
             for attachment in json.loads(row.attachments_json or "[]"):
                 if attachment.get("text_extraction") != "ok":
@@ -200,24 +256,40 @@ def build_snapshot(
                         }
                     )
                     continue
-                blob = repo_port.read_file(repo, f"{row.path}/{attachment['path']}")
+                blob = (
+                    file_store.get(attachment.get("sha256", "")) if file_store is not None else None
+                )
+                if blob is None:
+                    skipped.append(
+                        {
+                            "asset": row.name,
+                            "attachment": attachment.get("path"),
+                            "reason": "missing",
+                        }
+                    )
+                    continue
                 text = extract_text(attachment["path"], blob).text
                 name = Path(attachment["path"]).name + ".txt"
                 _write(destination.parent / "attachments-text" / name, text.encode("utf-8"))
             applicability = json.loads(row.applicability_json or "{}")
-            index_rows[(row.kind, row.name)] = {
+            index_rows[(row.kind, mount)] = {
                 "ref": f"[[{SHORT_BY_KIND[row.kind]}/{row.name}]]",
                 "kind": KIND_RULES[row.kind].label,
                 "title": row.title,
                 "summary": row.summary,
                 "suitable": applicability.get("suitable", ""),
-                "path": f"knowledge/{SHORT_BY_KIND[row.kind]}/{row.name}/README.md",
+                "path": f"knowledge/{SHORT_BY_KIND[row.kind]}/{mount}/README.md",
                 "industry": json.loads(row.industry_json or "[]"),
                 "scope": row.scope,
             }
 
     index_text, truncated = _render_index(list(index_rows.values()), index_limit, industries)
     _write(staging / "knowledge" / "INDEX.md", index_text.encode("utf-8"))
+    # 快照里每个名字对应哪份资产的哪个版本：用了什么要按编号报回来，名字可能是加过负责人的
+    _write(
+        staging / ".fde-assets.json",
+        json.dumps({"assets": carried_manifest}, ensure_ascii=False, indent=2).encode("utf-8"),
+    )
     staging.rename(target)
     return SnapshotResult(
         sha=sha,
@@ -228,8 +300,47 @@ def build_snapshot(
         index_truncated=truncated,
         skipped=skipped,
         selection=selection,
-        linked=len(picked),
+        linked=chosen.linked,
     )
+
+
+def _mount_names(selected: list[Any], recorded: dict[str, str]) -> dict[str, str]:
+    """快照里每份资产叫什么：{资产编号: 名字}，同类型内不重名。
+
+    关联时定下的名字优先占位；其余的用自己的标识，撞了名就加上负责人
+    （规范、流程这些不靠关联、整层都带的资产，也可能来自不同负责人而同名）。
+    """
+    names: dict[str, str] = {}
+    used: dict[str, set[str]] = {}
+    for row in selected:
+        name = recorded.get(row.asset_id)
+        if name and name not in used.setdefault(row.kind, set()):
+            names[row.asset_id] = name
+            used[row.kind].add(name)
+    for row in selected:
+        if row.asset_id in names:
+            continue
+        taken = used.setdefault(row.kind, set())
+        name = row.name
+        if name in taken:
+            name = f"{row.name}-{owner_slug(row.owner_value)}"
+        if name in taken:
+            name = f"{name}-{row.asset_id[:8]}"
+        names[row.asset_id] = name
+        taken.add(name)
+    return names
+
+
+_FRONT_MATTER_NAME = re.compile(r"\A(---\n(?:.*\n)*?)name:[ \t]*\S+[ \t]*\n", re.M)
+
+
+def _renamed(content: bytes, original: str, mount: str) -> bytes:
+    """技能文件开头写着自己的名字，Agent 按它认技能；目录改了名，这里也要跟着改。"""
+    text = content.decode("utf-8", errors="replace")
+    match = _FRONT_MATTER_NAME.match(text)
+    if match is None or f"name: {original}" not in match.group(0):
+        return content
+    return (match.group(1) + f"name: {mount}\n" + text[match.end() :]).encode("utf-8")
 
 
 def _render_index(

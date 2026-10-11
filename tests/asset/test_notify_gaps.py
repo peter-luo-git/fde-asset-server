@@ -7,7 +7,7 @@ from sqlalchemy import select
 from fde_asset.core.db import asset_versions, assets, target_assets
 from fde_asset.modules.asset.indexer import index_all
 from fde_asset.modules.notify import service as notify
-from tests.conftest import as_user
+from tests.conftest import as_user, asset_dir
 
 README = (
     "# 导入时偶发超时\n\n## 结论\n批次过大，分批提交。\n\n## 现象\n偶发超时。\n\n"
@@ -129,8 +129,8 @@ def test_versions_are_kept_by_content_not_by_commit(indexed) -> None:
     before = counts()
     assert before and set(before.values()) == {1}
 
-    repo = next(item for item in indexed.repos() if item.name == "company-assets")
-    path = "knowledge/cases/oracle-to-pg-sequence-gap/asset.yaml"
+    (repo,) = indexed.repos()
+    path = asset_dir(indexed, "oracle-to-pg-sequence-gap") + "/asset.yaml"
     text = indexed.repo_port.read_file(repo, path).decode("utf-8")
     changed = text.replace("序列缓存导致跳号", "改过的结论：序列缓存导致跳号")
     indexed.repo_port.commit_files(repo, "main", {path: changed.encode("utf-8")}, "改摘要")

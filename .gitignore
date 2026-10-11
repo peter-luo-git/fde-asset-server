@@ -13,3 +13,4 @@ data/
 # 本地模型密钥，绝不提交
 .env.local
 .env
+.demo-data.bak-*/

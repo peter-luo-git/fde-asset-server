@@ -47,7 +47,7 @@ def test_only_owner_can_unsubscribe(indexed) -> None:
 
 def test_diff_is_section_level(indexed) -> None:
     """改了什么要能说清楚是哪一节，否则通知等于没说。"""
-    row = _first(indexed.engine, kind="Case")
+    row = _first(indexed.engine, name="oracle-to-pg-sequence-gap")
     notify.snapshot_version(indexed.engine, row)
 
     with indexed.engine.begin() as conn:
@@ -69,14 +69,14 @@ def test_diff_is_section_level(indexed) -> None:
 
 
 def test_snapshot_is_not_duplicated(indexed) -> None:
-    row = _first(indexed.engine, kind="Case")
+    row = _first(indexed.engine, name="oracle-to-pg-sequence-gap")
     assert notify.snapshot_version(indexed.engine, row) in (True, False)
     assert notify.snapshot_version(indexed.engine, row) is False, "同一个 commit 不重复存"
 
 
 def test_subscribers_get_notified_about_new_assets(indexed) -> None:
     notify.subscribe(indexed.engine, LI, "kind", "Case")
-    row = _first(indexed.engine, kind="Case")
+    row = _first(indexed.engine, name="oracle-to-pg-sequence-gap")
     result = notify.announce_new(indexed.engine, row.asset_id, author="chen")
     assert result["delivered"] >= 1
 
@@ -87,14 +87,14 @@ def test_subscribers_get_notified_about_new_assets(indexed) -> None:
 
 def test_author_is_not_notified_about_own_change(indexed) -> None:
     notify.subscribe(indexed.engine, CHEN, "kind", "Case")
-    row = _first(indexed.engine, kind="Case")
+    row = _first(indexed.engine, name="oracle-to-pg-sequence-gap")
     notify.announce_new(indexed.engine, row.asset_id, author="chen")
     assert notify.inbox(indexed.engine, CHEN) == [], "自己改的不用通知自己"
 
 
 def test_change_notice_says_what_changed(indexed) -> None:
     notify.subscribe(indexed.engine, LI, "kind", "Case")
-    row = _first(indexed.engine, kind="Case")
+    row = _first(indexed.engine, name="oracle-to-pg-sequence-gap")
     notify.snapshot_version(indexed.engine, row)
     with indexed.engine.begin() as conn:
         conn.execute(
@@ -115,7 +115,7 @@ def test_change_notice_says_what_changed(indexed) -> None:
 
 def test_mark_read_removes_from_unread(indexed) -> None:
     notify.subscribe(indexed.engine, LI, "kind", "Case")
-    row = _first(indexed.engine, kind="Case")
+    row = _first(indexed.engine, name="oracle-to-pg-sequence-gap")
     notify.announce_new(indexed.engine, row.asset_id, author="chen")
     item = notify.inbox(indexed.engine, LI)[0]
     assert notify.mark_read(indexed.engine, LI, item["notification_id"]) is True

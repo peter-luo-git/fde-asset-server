@@ -89,6 +89,22 @@ class LocalGitRepo:
             raise FileNotFoundError(f"{repo.name}:{path} 不存在")
         return result.stdout
 
+    def tree_shas(self, repo: RepoRef, prefix: str) -> dict[str, str]:
+        path = self.ensure_repo(repo)
+        if not self.get_head(repo):
+            return {}
+        try:
+            output = self._git(["ls-tree", self.default_branch, prefix.rstrip("/") + "/"], path)
+        except GitCommandError:
+            return {}
+        found: dict[str, str] = {}
+        for line in output.splitlines():
+            meta, entry_path = line.split("\t", 1)
+            parts = meta.split()
+            if len(parts) >= 3 and parts[1] == "tree":
+                found[entry_path.rsplit("/", 1)[-1]] = parts[2]
+        return found
+
     # ---------- 写 ----------
 
     def create_branch(self, repo: RepoRef, branch: str, base: str = "") -> None:

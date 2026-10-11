@@ -11,16 +11,20 @@ from fde_asset.core.db import asset_events, asset_leads, assets
 from fde_asset.modules.app import health as app_health
 from fde_asset.platform import settings_store
 from fde_asset.scheduler import Task, build_tasks, run_due, run_forever
-
-CASE_YAML = "knowledge/cases/oracle-to-pg-sequence-gap/asset.yaml"
+from tests.conftest import asset_dir
 
 
 def _task(context, name: str) -> Task:
     return next(task for task in build_tasks(context) if task.name == name)
 
 
-def _company(context):
-    return next(repo for repo in context.repos() if repo.name == "company-assets")
+def _repo(context):
+    (repo,) = context.repos()
+    return repo
+
+
+def _case_yaml(context) -> str:
+    return asset_dir(context, "oracle-to-pg-sequence-gap") + "/asset.yaml"
 
 
 def _index_events(context) -> int:
@@ -40,14 +44,15 @@ def test_reindex_only_runs_when_a_repo_has_new_commits(indexed) -> None:
     assert _index_events(indexed) == events, "没有新提交就不该重建，也不该刷索引事件"
 
     # 有人绕过平台直接改了仓库里的文件（这正是 v0.1 的编辑路径）
-    repo = _company(indexed)
-    text = indexed.repo_port.read_file(repo, CASE_YAML).decode("utf-8")
+    repo = _repo(indexed)
+    case_yaml = _case_yaml(indexed)
+    text = indexed.repo_port.read_file(repo, case_yaml).decode("utf-8")
     assert "序列缓存导致跳号" in text
     changed = text.replace("序列缓存导致跳号", "定时任务看见了这次改动：序列缓存导致跳号")
-    indexed.repo_port.commit_files(repo, "main", {CASE_YAML: changed.encode("utf-8")}, "改摘要")
+    indexed.repo_port.commit_files(repo, "main", {case_yaml: changed.encode("utf-8")}, "改摘要")
 
     result = task.run()
-    assert result["changed"] == ["company-assets"]
+    assert result["changed"] == ["assets"]
     with indexed.engine.connect() as conn:
         summary = conn.execute(
             select(assets.c.summary).where(assets.c.name == "oracle-to-pg-sequence-gap")

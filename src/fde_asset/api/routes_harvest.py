@@ -18,7 +18,11 @@ from fde_asset.core.db import (
     assets,
     harvest_candidates,
 )
-from fde_asset.modules.asset.indexer import finish_index, index_repository
+from fde_asset.modules.asset.indexer import (
+    asset_id_for_candidate,
+    finish_index,
+    index_repository,
+)
 from fde_asset.modules.asset.visibility import can_review, visibility_clause
 from fde_asset.modules.asset.manifest import KIND_RULES
 from fde_asset.modules.harvest import service
@@ -431,6 +435,7 @@ def submit_candidate(
             scan_context=_scan_context(context),
             medium_risk_confirmed=bool(payload.get("medium_risk_confirmed")),
             blob_store=context.blob_store,
+            file_store=context.file_store,
         )
     except service.HarvestError as exc:
         # 提交失败时把作用域回滚为原值，避免草稿状态与实际不符
@@ -575,24 +580,25 @@ def _landed_asset_id(context: ServiceContext, principal: Principal, candidate: A
     """评审通过的草稿入库后是哪份资产；看不到或已经不在了就返回空，页面只给草稿链接。"""
     if candidate is None:
         return ""
-    # 草稿上可能带着和它的作用域无关的归属（比如项目级草稿也记着起草人的部门），
-    # 入库后的资产只按自己那一层的归属存，所以只比对这一层
-    owner_match = {
-        "department": assets.c.department_code == (candidate.department_code or ""),
-        "engagement": assets.c.engagement_slug == (candidate.engagement_slug or ""),
-        "customer": assets.c.customer_code == (candidate.customer_code or ""),
-    }.get(candidate.scope)
+    # 资产编号是由草稿编号算出来的，不用再按层级和名字去猜
     conditions = [
-        assets.c.kind == candidate.kind,
-        assets.c.name == candidate.name,
-        assets.c.scope == candidate.scope,
+        assets.c.asset_id == asset_id_for_candidate(candidate.candidate_id),
         assets.c.deleted_at.is_(None),
         visibility_clause(principal),
     ]
-    if owner_match is not None:
-        conditions.append(owner_match)
     with context.engine.connect() as conn:
         row = conn.execute(select(assets.c.asset_id).where(*conditions)).first()
+        if row is None:
+            # 仓库合并之前入库的资产，编号是按层级和名字算的，和草稿编号对不上
+            row = conn.execute(
+                select(assets.c.asset_id).where(
+                    assets.c.kind == candidate.kind,
+                    assets.c.name == candidate.name,
+                    assets.c.scope == candidate.scope,
+                    assets.c.deleted_at.is_(None),
+                    visibility_clause(principal),
+                )
+            ).first()
     return row.asset_id if row else ""
 
 
@@ -664,7 +670,11 @@ def decide_review(
         )
     if result.get("status") == "merged":
         report = index_repository(
-            context.engine, context.repo_port, target, text_limit=context.settings.index_text_limit
+            context.engine,
+            context.repo_port,
+            target,
+            text_limit=context.settings.index_text_limit,
+            file_store=context.file_store,
         )
         # 只索引了这一个仓库，收尾（关系、版本、通知订阅的人有新资产）要另外做
         finish_index(context.engine, owner_of=context.target_owner)

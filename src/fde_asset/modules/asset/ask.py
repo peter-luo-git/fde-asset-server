@@ -38,12 +38,16 @@ def _keyword_scores(rows: list[Any], question: str) -> list[tuple[int, float]]:
     """没有重排模型时的退路：按切词命中数排，命中不了的不出。"""
     tokens = tokenize(question)
     scored: list[tuple[int, float]] = []
+    headline_hits: dict[int, int] = {}
     for index, row in enumerate(rows):
-        haystack = f"{document(row)} {row.name} {row.content_text or ''}".lower()
+        headline = document(row).lower()
+        haystack = f"{headline} {row.name} {row.content_text or ''}".lower()
         hits = sum(1 for token in tokens if token in haystack)
         if hits:
             scored.append((index, float(hits)))
-    scored.sort(key=lambda pair: pair[1], reverse=True)
+            headline_hits[index] = sum(1 for token in tokens if token in headline)
+    # 命中数一样时，标题、摘要、结论里就提到的排前面：正文里顺带提一句的不该压过专讲这件事的
+    scored.sort(key=lambda pair: (pair[1], headline_hits[pair[0]]), reverse=True)
     return scored
 
 

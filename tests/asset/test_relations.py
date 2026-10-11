@@ -53,7 +53,7 @@ def test_application_links_what_the_project_produced(indexed) -> None:
     """应用是项目的壳，它产出了什么要单独标出来。"""
     relations.auto_link(indexed.engine)
     with indexed.engine.connect() as conn:
-        app = conn.execute(select(assets).where(assets.c.kind == "Application")).first()
+        app = conn.execute(select(assets).where(assets.c.name == "policy-import-console")).first()
     graph = relations.neighbours(indexed.engine, CHEN, app.asset_id)
     assert graph["outgoing"] or graph["incoming"], "应用该跟项目里的其它资产有关系"
 

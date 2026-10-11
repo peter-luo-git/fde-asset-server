@@ -21,7 +21,13 @@ from fde_asset.api.app import create_app  # noqa: E402
 from fde_asset.api.deps import build_context  # noqa: E402
 from fde_asset.modules.asset.indexer import index_all  # noqa: E402
 from fde_asset.settings import AssetSettings, load_local_env  # noqa: E402
-from scripts.seed_assets import refresh_directory, refresh_seed_assets, seed  # noqa: E402
+from scripts.seed_assets import (  # noqa: E402
+    has_data,
+    refresh_directory,
+    refresh_seed_assets,
+    seed,
+    write_seed_files,
+)
 
 
 class _ReadySignal(uvicorn.Server):
@@ -47,6 +53,11 @@ def main() -> int:
         help="沿用数据目录里已有的资产，不重新灌种子（保住手工造的数据）",
     )
     parser.add_argument(
+        "--seed-if-new",
+        action="store_true",
+        help="只在这套数据还没用起来时灌种子；已经有数据就原样沿用（容器启动用这个）",
+    )
+    parser.add_argument(
         "--with-worker",
         action="store_true",
         help="在本进程里顺带跑定时任务（索引轮询、线索扫描、探活）；自动化测试不开，结果才确定",
@@ -58,8 +69,14 @@ def main() -> int:
     data_dir = args.data_dir or Path(tempfile.mkdtemp(prefix="fde-asset-e2e-"))
     settings = AssetSettings(data_dir=data_dir)
     settings.ensure_dirs()
-    if args.no_seed:
+    # 先装配一次：数据目录里要是还留着以前按层级分开的旧仓库，这一步会把它们并进资产仓库。
+    # 必须赶在补种子之前，否则种子会抢先占住同一批资产编号，旧仓库里改过的内容就搬不过来了
+    context = build_context(settings)
+    if args.no_seed or (args.seed_if_new and has_data(settings)):
         print("reusing existing data dir, skip seeding", flush=True)
+        restored = write_seed_files(settings)
+        if restored:
+            print("数据目录里补上了缺的文件：" + "、".join(restored), flush=True)
         added = refresh_directory(settings)
         if added:
             print(
@@ -75,13 +92,13 @@ def main() -> int:
         print(f"seeded: {summary}", flush=True)
 
     # 直接在进程内建索引，调用方一连上就能看到资产，不必先发管理接口。
-    context = build_context(settings)
     reports = index_all(
         context.engine,
         context.repo_port,
         context.repos(),
         text_limit=context.settings.index_text_limit,
         owner_of=context.target_owner,
+        file_store=context.file_store,
     )
     print(
         "indexed: " + ", ".join(f"{r.repo}={r.indexed}" for r in reports),

@@ -109,10 +109,10 @@ def run_demo(data_dir: Path, *, verbose: bool = True) -> list[StepResult]:
         # 1 种子仓库
         def step1() -> list[str]:
             repos = sorted(p.name for p in settings.repos.glob("*.git"))
-            _check(len(repos) == 4, f"应有四类仓库（公司/部门/客户/项目），实际 {repos}")
+            _check(repos == ["assets.git"], f"所有资产应在同一个仓库里，实际 {repos}")
             return [
-                f"本地裸仓库：{', '.join(repos)}",
-                "八种类型的种子资产已写入（含应用资产、pdf / docx / xlsx / pptx 附件）",
+                f"本地裸仓库：{', '.join(repos)}（公司、部门、客户、项目各层的资产都在里面）",
+                "八种类型的种子资产已写入（含应用资产；pdf / docx / xlsx / pptx 附件在文件存储里）",
             ]
 
         # 2 索引
@@ -120,20 +120,24 @@ def run_demo(data_dir: Path, *, verbose: bool = True) -> list[StepResult]:
             response = admin.post("/api/v1/admin/assets/reindex")
             _check(response.status_code == 200, f"索引失败 {response.text}")
             report = {item["repo"]: item for item in response.json()["repos"]}
-            _check(
-                report["company-assets"]["indexed"] == 9,
-                f"公司级入库数异常：{report['company-assets']}",
-            )
-            _check(report["company-assets"]["invalid"] == 2, "应识别出 2 个无效资产")
+            _check(report["assets"]["indexed"] > 0, f"入库数异常：{report['assets']}")
+            _check(report["assets"]["invalid"] >= 2, "应识别出种子里故意放的无效资产")
             invalid = admin.get("/api/v1/assets/invalid").json()["items"]
             codes = sorted({item["code"] for item in invalid})
             _check(
                 "summary_missing" in codes and "section_missing_company" in codes,
                 f"错误类型不符：{codes}",
             )
+            totals = {
+                scope: admin.get("/api/v1/assets", params={"scope": scope, "limit": 1}).json()[
+                    "total"
+                ]
+                for scope in ("company", "department", "customer", "engagement")
+            }
+            _check(all(totals.values()), f"四层都应该有资产：{totals}")
             return [
-                f"公司级 {report['company-assets']['indexed']} 个、部门级 {report['dept-data-intel-assets']['indexed']} 个、"
-                f"项目级 {report['policy-import']['indexed']} 个",
+                f"公司级 {totals['company']} 个、部门级 {totals['department']} 个、"
+                f"客户级 {totals['customer']} 个、项目级 {totals['engagement']} 个",
                 f"无效资产 {len(invalid)} 条，原因：{', '.join(codes)}（缺一句话结论 / 公司级缺回滚预案）",
             ]
 

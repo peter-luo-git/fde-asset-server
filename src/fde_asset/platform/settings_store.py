@@ -12,10 +12,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
-from fde_asset.core.db import system_settings
+from fde_asset.core.db import system_settings, upsert
 
 
 @dataclass(frozen=True)
@@ -123,14 +122,11 @@ def update(engine: Engine, changes: dict[str, Any], *, updated_by: str = "") -> 
                 text = "true" if value in (True, "true", "1", 1, "on") else "false"
             else:
                 text = str(value)
-            statement = sqlite_insert(system_settings).values(
-                key=key, value=text, updated_by=updated_by, updated_at=now
-            )
-            conn.execute(
-                statement.on_conflict_do_update(
-                    index_elements=[system_settings.c.key],
-                    set_={"value": text, "updated_by": updated_by, "updated_at": now},
-                )
+            upsert(
+                conn,
+                system_settings,
+                {"key": key, "value": text, "updated_by": updated_by, "updated_at": now},
+                ["key"],
             )
     return all_settings(engine)
 

@@ -15,6 +15,10 @@ class AssetSettings(BaseSettings):
 
     data_dir: Path = Path("./data")
     database_path: Path | None = None
+    # 填了就用 PostgreSQL（形如 postgresql://账号@主机:5432/库名），不填用数据目录下的 SQLite 文件
+    database_url: str = ""
+    #: 数据库口令放在文件里时给路径，连接串里就不用写口令
+    database_password_file: Path | None = None
     repo_dir: Path | None = None
     work_dir: Path | None = None
     index_poll_seconds: int = 30
@@ -32,6 +36,17 @@ class AssetSettings(BaseSettings):
     index_text_limit: int = 200_000
     knowledge_index_limit: int = 30_000
     attachment_size_limit: int = 50 * 1024 * 1024
+    # 资产仓库放在哪。填了 Gitea 的地址就以 Gitea 上的 <gitea_owner>/assets 为准，
+    # 本机 repo_dir 只当缓存；不填就用本机裸仓库（本地开发和自动化测试）
+    gitea_url: str = ""
+    gitea_owner: str = "fde-assets"
+    gitea_token: str = ""
+    #: 令牌放在文件里时给路径，优先于上面那一项
+    gitea_token_file: Path | None = None
+    #: 多久去 Gitea 看一次有没有新提交
+    gitea_sync_seconds: float = 20.0
+    #: 附件原件的存放目录；不填就在数据目录下
+    file_root: Path | None = None
 
     @property
     def root(self) -> Path:
@@ -40,6 +55,18 @@ class AssetSettings(BaseSettings):
     @property
     def db_path(self) -> Path:
         return (self.database_path or self.root / "asset.db").expanduser()
+
+    def database_target(self) -> str | Path:
+        """连哪个数据库：PostgreSQL 的连接串，或者 SQLite 文件的路径。"""
+        if not self.database_url:
+            return self.db_path
+        from sqlalchemy.engine import make_url
+
+        url = make_url(self.database_url)
+        if self.database_password_file is not None:
+            secret = self.database_password_file.expanduser().read_text(encoding="utf-8").strip()
+            url = url.set(password=secret)
+        return url.render_as_string(hide_password=False)
 
     @property
     def repos(self) -> Path:
@@ -66,8 +93,23 @@ class AssetSettings(BaseSettings):
 
     @property
     def blob_dir(self) -> Path:
-        """附件原件目录（本地对象存储；接 Gitea 后换 LFS）。"""
+        """草稿阶段的原件，按草稿编号和文件名存；入库后的在 file_dir。"""
         return self.root / "blobs"
+
+    @property
+    def file_dir(self) -> Path:
+        """已入库资产的附件原件（按内容哈希存，不进 Git 仓库）。"""
+        return (self.file_root or self.root / "files").expanduser()
+
+    @property
+    def bundle_dir(self) -> Path:
+        """给平台拼好的 Agent 资产包存档：平台重试一次运行时按版本号来取同一份。"""
+        return self.root / "bundles"
+
+    def gitea_access_token(self) -> str:
+        if self.gitea_token_file is not None:
+            return self.gitea_token_file.expanduser().read_text(encoding="utf-8").strip()
+        return self.gitea_token
 
     def ensure_dirs(self) -> None:
         for directory in (
@@ -76,6 +118,7 @@ class AssetSettings(BaseSettings):
             self.work,
             self.snapshot_dir,
             self.blob_dir,
+            self.file_dir,
             self.workspaces,
         ):
             directory.mkdir(parents=True, exist_ok=True)

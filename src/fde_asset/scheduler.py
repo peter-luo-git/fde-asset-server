@@ -75,6 +75,7 @@ def build_tasks(context: ServiceContext) -> list[Task]:
             context.repos(),
             text_limit=context.settings.index_text_limit,
             owner_of=context.target_owner,
+            file_store=context.file_store,
         )
         return {"changed": changed, "indexed": sum(report.indexed for report in reports)}
 

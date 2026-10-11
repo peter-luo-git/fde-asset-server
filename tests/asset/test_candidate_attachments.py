@@ -119,21 +119,27 @@ def test_submit_writes_real_bytes_not_placeholder(context, store) -> None:
             cid,
             target_repo=target,
             blob_store=store,
+            file_store=context.file_store,
         )
     except service.HarvestError as exc:  # pragma: no cover - 校验通不过就是真失败
         raise AssertionError(f"草稿未通过格式校验：{exc}") from exc
 
-    written = context.repo_port.read_file(
-        target, f"{_prefix(context, cid)}/attachments/原件.md", ref=result["branch"]
-    )
-    assert written == original
+    # 附件不进仓库：分支上只有正文和 asset.yaml，原件按哈希在文件存储里，asset.yaml 记着它
+    import yaml
 
+    from fde_asset.modules.asset.indexer import asset_id_for_candidate
 
-def _prefix(context, candidate_id: str) -> str:
-    candidate = service.get_candidate(context.engine, candidate_id)
-    return service._target_prefix(
-        candidate["kind"], candidate["name"], candidate["scope"], candidate["files"]
+    prefix = f"assets/{asset_id_for_candidate(cid)}"
+    document = yaml.safe_load(
+        context.repo_port.read_file(target, f"{prefix}/asset.yaml", ref=result["branch"])
     )
+    assert document["metadata"]["id"] == asset_id_for_candidate(cid)
+    assert document["spec"]["visibility"] == ["department:data-intel"]
+    (attachment,) = document["spec"]["attachments"]
+    assert attachment["name"] == "原件.md"
+    assert context.file_store.get(attachment["sha256"]) == original
+    with pytest.raises(FileNotFoundError):
+        context.repo_port.read_file(target, f"{prefix}/attachments/原件.md", ref=result["branch"])
 
 
 def test_update_meta_rewrites_asset_yaml(context) -> None:

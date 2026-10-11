@@ -2,37 +2,62 @@
 
 from __future__ import annotations
 
-from sqlalchemy import and_, or_
+from collections.abc import Iterable
+
+from sqlalchemy import and_, exists, or_, true
 from sqlalchemy.sql.elements import ColumnElement
 
-from fde_asset.core.db import assets
+from fde_asset.core.db import asset_audiences, assets
 from fde_asset.platform.identity import Principal
 
 
-def visibility_clause(principal: Principal) -> ColumnElement[bool]:
-    """公司级全员可见；部门级看部门集合；项目级看项目成员；受限资产单独判定。"""
-    clauses = [assets.c.scope == "company"]
+def audience_clause(
+    *,
+    department_codes: Iterable[str] = (),
+    customer_codes: Iterable[str] = (),
+    engagement_slugs: Iterable[str] = (),
+    user_id: str = "",
+) -> ColumnElement[bool]:
+    """资产的可见范围里，有没有哪一项覆盖到给定的这些部门、客户、项目、个人。
 
-    departments = principal.department_codes
+    全公司可见的始终算覆盖到。一份资产可以有多项可见范围，任意一项对上就行。
+    """
+    matches = [asset_audiences.c.audience == "company"]
+    departments = sorted(code for code in department_codes if code)
     if departments:
-        clauses.append(
-            and_(assets.c.scope == "department", assets.c.department_code.in_(departments))
+        matches.append(
+            and_(
+                asset_audiences.c.audience == "department", asset_audiences.c.code.in_(departments)
+            )
         )
-
-    customers = principal.customer_codes
+    customers = sorted(code for code in customer_codes if code)
     if customers:
         # 同一客户的多个项目之间复用最密集，而且常常跨部门
-        clauses.append(and_(assets.c.scope == "customer", assets.c.customer_code.in_(customers)))
-
-    slugs = principal.engagement_slugs
-    if slugs:
-        clauses.append(and_(assets.c.scope == "engagement", assets.c.engagement_slug.in_(slugs)))
-
-    visible = or_(*clauses)
-    if principal.is_admin:
-        visible = or_(
-            visible, assets.c.scope.in_(["company", "department", "customer", "engagement"])
+        matches.append(
+            and_(asset_audiences.c.audience == "customer", asset_audiences.c.code.in_(customers))
         )
+    slugs = sorted(code for code in engagement_slugs if code)
+    if slugs:
+        matches.append(
+            and_(asset_audiences.c.audience == "engagement", asset_audiences.c.code.in_(slugs))
+        )
+    if user_id:
+        matches.append(
+            and_(asset_audiences.c.audience == "user", asset_audiences.c.code == user_id)
+        )
+    return exists().where(asset_audiences.c.asset_id == assets.c.asset_id, or_(*matches))
+
+
+def visibility_clause(principal: Principal) -> ColumnElement[bool]:
+    """公司级全员可见；部门、客户、项目看成员关系；点名给个人的看本人；受限资产单独判定。"""
+    visible = audience_clause(
+        department_codes=principal.department_codes,
+        customer_codes=principal.customer_codes,
+        engagement_slugs=principal.engagement_slugs,
+        user_id=principal.user_id,
+    )
+    if principal.is_admin:
+        visible = true()
 
     # 受限资产：只有资产所有人与负责部门的部门主管可见，管理员也不例外
     restricted_ok = or_(

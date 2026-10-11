@@ -18,15 +18,19 @@ from fde_asset.core.db import (
     harvest_candidates,
     record_event,
 )
+from fde_asset.modules.asset.indexer import asset_id_for_candidate
 from fde_asset.modules.asset.manifest import (
+    ASSET_ROOT,
     KIND_RULES,
     NAME_PATTERN,
     SHORT_BY_KIND,
     parse_manifest,
     validate_asset,
+    visibility_entry,
 )
 from fde_asset.modules.harvest.templates import render_template
 from fde_asset.platform.blobs import BlobStore, safe_name
+from fde_asset.platform.files import FileStore
 from fde_asset.platform.extract import extract_text
 from fde_asset.platform.identity import Principal
 from fde_asset.platform.repo.ports import RepoRef
@@ -563,22 +567,35 @@ def run_checks(
     rule = KIND_RULES[candidate["kind"]]
     findings: list[dict[str, str]] = []
 
-    if candidate["kind"] == "Rule":
-        main_text = next(iter(files.values()), "")
+    files = _normalized_files(candidate, files)
+    main_text = files.get(rule.main_file, "")
+    raw_yaml = files.get("asset.yaml", "")
+    manifest, parse_findings = parse_manifest(raw_yaml)
+    if manifest is None:
+        findings.extend({"code": f.code, "message": f.message} for f in parse_findings)
     else:
-        main_text = files.get(rule.main_file, "")
-        raw_yaml = files.get("asset.yaml", "")
-        manifest, parse_findings = parse_manifest(raw_yaml)
-        if manifest is None:
-            findings.extend({"code": f.code, "message": f.message} for f in parse_findings)
-        else:
-            parsed = validate_asset(
-                manifest,
-                main_text=main_text,
-                scope=candidate["scope"],
-                directory_name=candidate["name"],
+        parsed = validate_asset(
+            manifest,
+            main_text=main_text,
+            scope=candidate["scope"],
+            directory_name=candidate["name"],
+        )
+        findings.extend({"code": f.code, "message": f.message} for f in parsed.findings)
+        taken = _name_taken(
+            engine,
+            owner=manifest.spec.owner,
+            kind=candidate["kind"],
+            name=candidate["name"],
+            asset_id=asset_id_for_candidate(candidate_id),
+        )
+        if taken:
+            findings.append(
+                {
+                    "code": "name_duplicate",
+                    "message": f"{manifest.spec.owner} 名下已经有一份同类型、标识也是 "
+                    f"{candidate['name']} 的资产，请换一个标识",
+                }
             )
-            findings.extend({"code": f.code, "message": f.message} for f in parsed.findings)
 
     hits = scan_files(
         {name: text for name, text in files.items() if isinstance(text, str)},
@@ -623,8 +640,13 @@ def submit(
     scan_context: ScanContext | None = None,
     medium_risk_confirmed: bool = False,
     blob_store: BlobStore | None = None,
+    file_store: FileStore | None = None,
 ) -> dict[str, Any]:
-    """提交候选：建分支、提交文件、生成评审记录。高危必须清零。"""
+    """提交候选：建分支、提交文件、生成评审记录。高危必须清零。
+
+    仓库里只进文字：正文和 asset.yaml 写到 `assets/<资产编号>/`；附件原件存进文件存储，
+    asset.yaml 里记文件名和哈希。
+    """
     candidate = get_candidate(engine, candidate_id)
     if candidate["status"] != "draft":
         raise HarvestError("只有草稿状态的候选可以提交")
@@ -637,20 +659,28 @@ def submit(
         raise HarvestError("存在中危结果，需要勾选确认后提交")
 
     rule = KIND_RULES[candidate["kind"]]
-    prefix = _target_prefix(
-        candidate["kind"], candidate["name"], target_repo.scope, candidate["files"]
-    )
+    asset_id = asset_id_for_candidate(candidate_id)
+    prefix = f"{ASSET_ROOT}/{asset_id}"
     files: dict[str, bytes] = {}
-    for path, content in candidate["files"].items():
-        if not isinstance(content, str):
+    attachments: list[dict[str, Any]] = []
+    for path, content in _normalized_files(candidate, candidate["files"]).items():
+        if not isinstance(content, str) or path == "asset.yaml":
             continue
-        target = f"{prefix}/{path}" if prefix else path
-        if content == ATTACHMENT_PLACEHOLDER and blob_store is not None:
-            original = blob_store.get(candidate_id, path[len(ATTACHMENT_PREFIX) :])
-            # 原件丢了也不拦提交，写回占位，评审时能看出来
-            files[target] = original if original is not None else content.encode("utf-8")
-        else:
-            files[target] = content.encode("utf-8")
+        if path.startswith(ATTACHMENT_PREFIX):
+            name = path[len(ATTACHMENT_PREFIX) :]
+            original = blob_store.get(candidate_id, name) if blob_store is not None else None
+            if original is None or file_store is None:
+                raise HarvestError(f"附件 {name} 的原件找不到了，请删掉它重新上传")
+            # 草稿原件平时就在同一个文件存储里，这一步只是登记；不在的（旧数据、测试）才真的写
+            sha256 = blob_store.sha256(candidate_id, name) if blob_store is not None else None
+            if sha256 is None or not file_store.exists(sha256):
+                sha256 = file_store.put(original)
+            attachments.append({"name": name, "sha256": sha256, "bytes": len(original)})
+            continue
+        files[f"{prefix}/{path}"] = content.encode("utf-8")
+    files[f"{prefix}/asset.yaml"] = _landed_manifest(
+        candidate, asset_id=asset_id, attachments=attachments
+    ).encode("utf-8")
     branch = f"asset/{candidate['name']}-{candidate_id[:6]}"
     repo_port.create_branch(target_repo, branch)
     sha = repo_port.commit_files(
@@ -760,24 +790,68 @@ def decide(
     return {"review_id": review_id, "status": status, "commit": merged_sha}
 
 
-def _target_prefix(kind: str, name: str, scope: str, files: dict[str, str]) -> str:
-    rule = KIND_RULES[kind]
-    if kind == "Rule":
-        return "rules"
-    if scope == "engagement":
-        return (
-            f".agents/skills/{name}"
-            if kind == "Skill"
-            else f".fde/assets/{rule.directory.split('/')[-1]}/{name}"
+def _normalized_files(candidate: dict[str, Any], files: dict[str, str]) -> dict[str, str]:
+    """把草稿的文件清单整理成入库的形状。
+
+    规范以前是孤零零一个 `<标识>.md`、没有 asset.yaml；现在和别的资产一样是
+    主文件加 asset.yaml。旧草稿在这里补齐，新草稿原样返回。
+    """
+    if candidate["kind"] != "Rule":
+        return files
+    main_file = KIND_RULES["Rule"].main_file
+    result = dict(files)
+    if main_file not in result:
+        legacy = next((path for path in result if path.endswith(".md")), None)
+        if legacy is not None:
+            result[main_file] = result.pop(legacy)
+    if "asset.yaml" not in result:
+        owner = f"user:{candidate['created_by']}"
+        result["asset.yaml"] = render_template(
+            "Rule", name=candidate["name"], title=candidate["title"], owner=owner
+        )["asset.yaml"]
+    return result
+
+
+def _landed_manifest(
+    candidate: dict[str, Any], *, asset_id: str, attachments: list[dict[str, Any]]
+) -> str:
+    """入库用的 asset.yaml：编号、可见范围、附件清单以这里算出来的为准，其余照草稿。"""
+    import yaml
+
+    raw = _normalized_files(candidate, candidate["files"]).get("asset.yaml", "")
+    document = yaml.safe_load(raw) or {}
+    metadata = document.setdefault("metadata", {})
+    spec = document.setdefault("spec", {})
+    # 编号放在最前面，打开文件第一眼就能看到
+    document["metadata"] = {"id": asset_id, **{k: v for k, v in metadata.items() if k != "id"}}
+    spec["visibility"] = [
+        visibility_entry(
+            candidate["scope"],
+            department_code=candidate.get("department_code") or "",
+            customer_code=candidate.get("customer_code") or "",
+            engagement_slug=candidate.get("engagement_slug") or "",
         )
-    if kind == "Sop":
-        layer = "l2"
-        raw = files.get("asset.yaml", "")
-        for line in raw.splitlines():
-            if line.strip().startswith("layer:"):
-                layer = line.split(":", 1)[1].strip().lower()
-        return f"sops/{layer}/{name}"
-    return f"{rule.directory}/{name}"
+    ]
+    if attachments:
+        spec["attachments"] = attachments
+    else:
+        spec.pop("attachments", None)
+    return yaml.safe_dump(document, allow_unicode=True, sort_keys=False)
+
+
+def _name_taken(engine: Engine, *, owner: str, kind: str, name: str, asset_id: str) -> bool:
+    """同一个负责人名下，同类型的标识是不是已经被别的资产占了。"""
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(assets.c.asset_id).where(
+                assets.c.owner_ref == owner,
+                assets.c.kind == kind,
+                assets.c.name == name,
+                assets.c.asset_id != asset_id,
+                assets.c.deleted_at.is_(None),
+            )
+        ).first()
+    return row is not None
 
 
 def _slugify(text: str, *, fallback: str | None = None) -> str:

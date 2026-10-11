@@ -215,12 +215,10 @@ description: <一句话说明这个技能在什么时候用、能做什么>
 def render_template(
     kind: str, *, name: str, title: str, owner: str, date: str = ""
 ) -> dict[str, str]:
-    """返回 {文件相对路径: 内容}。Rule 只有一个 Markdown，不带 asset.yaml。"""
+    """返回 {文件相对路径: 内容}：主文件加 asset.yaml。"""
     if kind not in KIND_RULES:
         raise ValueError(f"不支持的 kind：{kind}")
     body = _BODY[kind].format(title=title, name=name, date=date or "")
-    if kind == "Rule":
-        return {f"{name}.md": body}
     main_file = KIND_RULES[kind].main_file
     manifest = _COMMON_YAML.format(
         kind=kind, name=name, title=title, owner=owner, extra=_EXTRA.get(kind, "")

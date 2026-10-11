@@ -97,7 +97,8 @@ def test_customer_draft_lands_in_the_customer_repo_after_review(client) -> None:
     )
     landed = [item for item in visible.json()["items"] if item["title"] == "华安对账口径约定"]
     assert landed, "入库后在客户级资产里"
-    assert landed[0]["repo"] == "cust-HUAAN-assets" and landed[0]["customer_code"] == "HUAAN"
+    assert landed[0]["repo"] == "assets" and landed[0]["customer_code"] == "HUAAN"
+    assert landed[0]["visibility"] == ["customer:HUAAN"]
 
     hidden = as_user(client, "zhao").get("/api/v1/assets", params={"limit": 200}).json()["items"]
     assert all(item["title"] != "华安对账口径约定" for item in hidden)

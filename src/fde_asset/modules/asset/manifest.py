@@ -17,8 +17,15 @@ API_VERSION = "fde.asset/v1"
 NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
 OWNER_PATTERN = re.compile(r"^(department|user):[A-Za-z0-9._-]+$")
-
-Scope = Literal["company", "department", "engagement"]
+ID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+#: 可见范围的一项：全公司，或某个部门、客户、项目、个人
+VISIBILITY_PATTERN = re.compile(
+    r"^(company|(department|customer|engagement|user):[A-Za-z0-9._-]+)$"
+)
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+#: 所有资产都在同一个仓库的这个目录下，一个资产一个以编号命名的子目录
+ASSET_ROOT = "assets"
+Scope = Literal["company", "department", "customer", "engagement"]
 Lifecycle = Literal["draft", "experimental", "stable", "deprecated", "archived"]
 Quality = Literal["bronze", "silver", "gold"]
 Nature = Literal["fact", "rule", "judgment", "skill"]
@@ -49,9 +56,35 @@ class AssetRelation(BaseModel):
     target: str
 
 
+class AttachmentRef(BaseModel):
+    """附件不进仓库：这里只记文件名和内容哈希，原件按哈希存在文件存储里。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    sha256: str
+    bytes: int = 0
+
+    @field_validator("name")
+    @classmethod
+    def check_name(cls, value: str) -> str:
+        if not value or "/" in value or "\\" in value or value in {".", ".."} or len(value) > 180:
+            raise ValueError("附件名不合法")
+        return value
+
+    @field_validator("sha256")
+    @classmethod
+    def check_sha(cls, value: str) -> str:
+        if not SHA256_PATTERN.match(value):
+            raise ValueError("附件的 sha256 必须是 64 位十六进制")
+        return value
+
+
 class AssetMetadata(BaseModel):
     model_config = ConfigDict(extra="allow")
 
+    #: 资产编号：创建时生成，之后不变；仓库里的目录名就是它。草稿阶段可以还没有
+    id: str = ""
     name: str
     title: str
     summary: str = ""
@@ -62,6 +95,13 @@ class AssetMetadata(BaseModel):
     def check_name(cls, value: str) -> str:
         if not NAME_PATTERN.match(value) or len(value) > 64:
             raise ValueError("metadata.name 必须是 kebab-case 且不超过 64 字符")
+        return value
+
+    @field_validator("id")
+    @classmethod
+    def check_id(cls, value: str) -> str:
+        if value and not ID_PATTERN.match(value):
+            raise ValueError("metadata.id 必须是资产中心生成的编号，不要手改")
         return value
 
     @field_validator("title")
@@ -89,6 +129,20 @@ class AssetSpec(BaseModel):
     effectiveDate: str = ""
     source: AssetSource = Field(default_factory=AssetSource)
     relations: list[AssetRelation] = Field(default_factory=list)
+    #: 谁能看到、能用上这份资产。写在文件里跟着仓库走，改范围就是一次提交
+    visibility: list[str] = Field(default_factory=list)
+    attachments: list[AttachmentRef] = Field(default_factory=list)
+
+    @field_validator("visibility")
+    @classmethod
+    def check_visibility(cls, value: list[str]) -> list[str]:
+        for item in value:
+            if not VISIBILITY_PATTERN.match(item):
+                raise ValueError(
+                    "spec.visibility 的每一项必须是 company，"
+                    "或 department:/customer:/engagement:/user: 加代号"
+                )
+        return value
 
     @field_validator("owner")
     @classmethod
@@ -142,7 +196,7 @@ KIND_RULES: dict[str, KindRule] = {
     "Rule": KindRule(
         kind="Rule",
         label="规范",
-        main_file="",
+        main_file="RULE.md",
         directory="rules",
         nature="rule",
         requires_summary=False,
@@ -294,14 +348,73 @@ def parse_manifest(raw_yaml: str) -> tuple[AssetManifest | None, list[Finding]]:
     return manifest, []
 
 
+def owner_slug(owner_value: str) -> str:
+    """负责人的账号或部门代号，整理成能放进挂载名的写法。"""
+    return re.sub(r"[^a-z0-9]+", "-", (owner_value or "").lower()).strip("-") or "owner"
+
+
+def visibility_entry(
+    scope: str, *, department_code: str = "", customer_code: str = "", engagement_slug: str = ""
+) -> str:
+    """把「作用域 + 归属」写成可见范围的一项。"""
+    if scope == "department":
+        return f"department:{department_code}"
+    if scope == "customer":
+        return f"customer:{customer_code}"
+    if scope == "engagement":
+        return f"engagement:{engagement_slug}"
+    return "company"
+
+
+@dataclass(frozen=True)
+class ScopeFields:
+    scope: str = ""
+    department_code: str = ""
+    customer_code: str = ""
+    engagement_slug: str = ""
+
+
+#: 范围从大到小。一份资产有多项可见范围时，索引表上的「作用域」取其中最大的那一项
+AUDIENCE_ORDER = ("company", "department", "customer", "engagement", "user")
+
+
+def audiences(visibility: list[str]) -> list[tuple[str, str]]:
+    """可见范围 → [(类型, 代号)]，去重，按范围从大到小排。"""
+    pairs = {tuple(item.partition(":")[::2]) for item in visibility}
+    known = [pair for pair in pairs if pair[0] in AUDIENCE_ORDER]
+    return sorted(known, key=lambda pair: (AUDIENCE_ORDER.index(pair[0]), pair[1]))
+
+
+def scope_fields(visibility: list[str]) -> ScopeFields | None:
+    """可见范围 → 索引表上的作用域：取范围最大的那一项。一项都没有返回 None。
+
+    只对个人可见的资产，作用域是 `user`，几个归属列都空着。
+    """
+    listed = audiences(visibility)
+    if not listed:
+        return None
+    audience, code = listed[0]
+    if audience == "department":
+        return ScopeFields(scope="department", department_code=code)
+    if audience == "customer":
+        return ScopeFields(scope="customer", customer_code=code)
+    if audience == "engagement":
+        return ScopeFields(scope="engagement", engagement_slug=code)
+    return ScopeFields(scope=audience)
+
+
 def validate_asset(
     manifest: AssetManifest,
     *,
     main_text: str,
     scope: str,
-    directory_name: str,
+    directory_name: str | None = None,
 ) -> ParsedAsset:
-    """按 kind 校验主文件章节与专属字段，返回带 findings 的解析结果。"""
+    """按 kind 校验主文件章节与专属字段，返回带 findings 的解析结果。
+
+    `directory_name`：草稿阶段传草稿的标识，用来核对 asset.yaml 里的 name 没被改岔；
+    仓库里的目录名是资产编号，和 name 无关，索引时不传。
+    """
     rule = KIND_RULES.get(manifest.kind)
     if rule is None:
         empty = KindRule(kind=manifest.kind, label=manifest.kind, main_file="", directory="")
@@ -310,7 +423,7 @@ def validate_asset(
         )
 
     findings: list[Finding] = []
-    if directory_name != manifest.metadata.name:
+    if directory_name is not None and directory_name != manifest.metadata.name:
         findings.append(
             Finding(
                 "name_mismatch",

@@ -65,13 +65,13 @@ def test_member_gets_company_and_own_project_assets_only(service) -> None:
 
     assert {item["scope"] for item in items} == {"company", "engagement"}
     assert {item["kind"] for item in items} <= {"Skill", "Case", "Rule"}
-    # 部门级、客户级的不给 Agent
+    # 这份清单只报「公司的」和「他参与的项目的」；部门级、客户级的走按项目拼的资产包
     assert all(item["scope"] in ("company", "engagement") for item in items)
     project = [item for item in items if item["scope"] == "engagement"]
     assert project and {item["engagement_slug"] for item in project} == {"policy-import"}
 
     skill = next(item for item in items if item["name"] == "insurance-policy-import")
-    assert skill["main_file"] == "SKILL.md" and skill["path"] == "skills/insurance-policy-import"
+    assert skill["main_file"] == "SKILL.md" and skill["path"] == f"assets/{skill['asset_id']}"
     assert len(skill["commit_sha"]) == 40 and len(skill["content_sha256"]) == 64
     assert skill["byte_size"] > 0 and skill["title"]
 

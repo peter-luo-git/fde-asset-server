@@ -170,16 +170,13 @@ def test_only_owner_or_reviewer_may_change_lifecycle(client) -> None:
     )
     assert hidden.status_code == 404
 
-    # 规范是单个 Markdown，没有生命周期字段
+    # 规范现在和别的资产一样带 asset.yaml，也能下架、恢复
     rule = _asset(as_user(client, "admin"), "00-security-redlines")
     admin = as_user(client, "admin")
-    assert admin.get(f"/api/v1/assets/{rule['asset_id']}").json()["can_manage"] is False
-    assert (
-        admin.post(
-            f"/api/v1/assets/{rule['asset_id']}/lifecycle", json={"lifecycle": "archived"}
-        ).status_code
-        == 422
-    )
+    assert admin.get(f"/api/v1/assets/{rule['asset_id']}").json()["can_manage"] is True
+    url = f"/api/v1/assets/{rule['asset_id']}/lifecycle"
+    assert admin.post(url, json={"lifecycle": "archived"}).status_code == 200
+    assert admin.post(url, json={"lifecycle": "stable"}).status_code == 200
 
 
 # ---------- 应用可以被引用 ----------

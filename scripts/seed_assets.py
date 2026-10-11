@@ -9,7 +9,9 @@ import io
 import json
 from typing import Any
 
-from fde_asset.platform.repo.local_git import LocalGitRepo
+from fde_asset.modules.asset.legacy_layout import convert_legacy
+from fde_asset.modules.asset.manifest import ASSET_ROOT
+from fde_asset.platform.files import FileStore
 from fde_asset.platform.repo.ports import RepoRef
 from fde_asset.settings import AssetSettings
 
@@ -1087,54 +1089,88 @@ def seed_repos() -> list[tuple[str, RepoRef, dict[str, bytes], str]]:
     ]
 
 
+def _seed_ports(settings: AssetSettings) -> tuple[Any, FileStore]:
+    """种子资产写到哪：配了 Gitea 就写 Gitea 上的资产仓库，否则写本机裸仓库。"""
+    from fde_asset.api.deps import build_repo_port
+
+    return build_repo_port(settings), FileStore(settings.file_dir)
+
+
+def seed_assets_by_id(file_store: FileStore) -> dict[str, tuple[str, dict[str, bytes]]]:
+    """全部种子资产，转成仓库里的样子：{资产编号: (来自哪一组, {路径: 内容})}。
+
+    种子内容是按「一层一个仓库」的旧布局写的，这里转成现在的布局：
+    都在同一个仓库的 `assets/<资产编号>/` 下，层级写进 asset.yaml，附件进文件存储。
+    """
+    result: dict[str, tuple[str, dict[str, bytes]]] = {}
+    for key, repo, files, _message in seed_repos():
+        for asset_id, members in convert_legacy(repo, files, file_store).items():
+            result[asset_id] = (key, members)
+    return result
+
+
 def refresh_seed_assets(settings: AssetSettings) -> list[str]:
     """沿用旧数据目录启动时，补上后来才加进种子数据的资产。返回补了哪些。
 
-    和 `refresh_directory` 是一回事：代码往种子里加了新资产（应用、客户级仓库），
-    旧数据目录里的仓库不会自己长出来，页面上就表现为「应用市场是空的」。
-    只补**整份缺失**的资产（它的目录在仓库里完全不存在），已有的文件一个字不动。
+    和 `refresh_directory` 是一回事：代码往种子里加了新资产，旧数据目录里的仓库不会自己长出来，
+    页面上就表现为「应用市场是空的」。只补**整份缺失**的资产，已有的一个字不动。
     """
-    git = LocalGitRepo(settings.repos)
+    git, file_store = _seed_ports(settings)
+    repo = RepoRef()
+    existing = set(git.tree_shas(repo, ASSET_ROOT))
+    missing: dict[str, bytes] = {}
     added: list[str] = []
-    for _key, repo, files, _message in seed_repos():
-        if not git.path_of(repo).exists():
-            git.commit_files(repo, "main", files, "chore(assets): 补上后来才有的种子仓库")
-            added.append(f"{repo.name}（整个仓库）")
+    for asset_id, (key, members) in seed_assets_by_id(file_store).items():
+        if asset_id in existing:
             continue
-        existing = {entry.path for entry in git.list_tree(repo)}
-        asset_dirs = sorted(
-            {path.rsplit("/", 1)[0] for path in files if path.endswith("/asset.yaml")}
-        )
-        missing: dict[str, bytes] = {}
-        for directory in asset_dirs:
-            if any(path == directory or path.startswith(directory + "/") for path in existing):
-                continue
-            for path, content in files.items():
-                if path.startswith(directory + "/"):
-                    missing[path] = content
-            added.append(f"{repo.name}:{directory}")
-        if missing:
-            git.commit_files(repo, "main", missing, "chore(assets): 补上后来才有的种子资产")
+        missing.update(members)
+        added.append(f"{key}:{asset_id}")
+    if missing:
+        git.commit_files(repo, "main", missing, "chore(assets): 补上后来才有的种子资产")
     return added
 
 
 def seed(settings: AssetSettings) -> dict[str, Any]:
     settings.ensure_dirs()
-    git = LocalGitRepo(settings.repos)
-    result: dict[str, Any] = {}
-    for key, repo, files, message in seed_repos():
-        result[key] = git.commit_files(repo, "main", files, message)
+    git, file_store = _seed_ports(settings)
+    files: dict[str, bytes] = {}
+    counts: dict[str, int] = {}
+    for _asset_id, (key, members) in seed_assets_by_id(file_store).items():
+        files.update(members)
+        counts[key] = counts.get(key, 0) + 1
+    sha = git.commit_files(RepoRef(), "main", files, "chore(assets): 种子资产")
+    result: dict[str, Any] = {"commit": sha, **{key: str(count) for key, count in counts.items()}}
 
-    (settings.root / "directory.json").write_text(
-        json.dumps(DIRECTORY, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    (settings.root / "compliance.json").write_text(
-        json.dumps(COMPLIANCE, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    (settings.root / "activity.json").write_text(
-        json.dumps(ACTIVITY, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    write_seed_files(settings, overwrite=True)
     return result
+
+
+def write_seed_files(settings: AssetSettings, *, overwrite: bool = False) -> list[str]:
+    """数据目录里的名单、合规词、活动数据三个文件。`overwrite=False` 时只补缺的，返回补了哪些。"""
+    written: list[str] = []
+    for name, content in (
+        ("directory.json", DIRECTORY),
+        ("compliance.json", COMPLIANCE),
+        ("activity.json", ACTIVITY),
+    ):
+        target = settings.root / name
+        if target.exists() and not overwrite:
+            continue
+        target.write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
+        written.append(name)
+    return written
+
+
+def has_data(settings: AssetSettings) -> bool:
+    """这套数据是不是已经用起来了：名单文件在，或者资产仓库里已经有资产。
+
+    数据库换成 PostgreSQL、仓库放到 Gitea 之后，数据目录里不一定还有什么文件，
+    所以不能只看本地文件，要去问仓库。
+    """
+    if (settings.root / "directory.json").exists():
+        return True
+    git, _file_store = _seed_ports(settings)
+    return bool(git.tree_shas(RepoRef(), ASSET_ROOT))
 
 
 def main() -> None:
@@ -1143,8 +1179,8 @@ def main() -> None:
     settings = load_settings()
     result = seed(settings)
     print("种子资产已写入：")
-    for key, sha in result.items():
-        print(f"  {key}: {sha[:10]}")
+    for key, value in result.items():
+        print(f"  {key}: {value[:10]}")
     print(f"  目录文件：{settings.root}/directory.json、compliance.json、activity.json")
 
 

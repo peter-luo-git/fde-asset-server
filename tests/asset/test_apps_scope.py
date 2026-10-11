@@ -105,30 +105,31 @@ def test_registering_an_app_that_already_runs_elsewhere(client) -> None:
 
 
 def test_old_data_dir_gets_the_seed_assets_added_later(settings) -> None:
-    """十月一日建的演示库里没有应用和客户仓库；沿用它启动时要补上，已有的文件不动。"""
+    """旧的演示库里没有后来才加的种子资产；沿用它启动时要补上，已有的资产一个字不动。"""
+    from fde_asset.modules.asset.indexer import legacy_asset_id
+
     git = LocalGitRepo(settings.repos)
-    department = RepoRef(
-        name="dept-data-intel-assets", scope="department", department_code="data-intel"
-    )
+    repo = RepoRef()
+    kept = legacy_asset_id("department", "data-intel", "", "Skill", "pg-vacuum-tuning")
     # 旧仓库：只有一份部门资产，而且被人改过
     git.commit_files(
-        department,
+        repo,
         "main",
         {
-            "skills/pg-vacuum-tuning/asset.yaml": b"edited: by hand\n",
-            "skills/pg-vacuum-tuning/SKILL.md": b"# mine\n",
+            f"assets/{kept}/asset.yaml": b"edited: by hand\n",
+            f"assets/{kept}/SKILL.md": b"# mine\n",
         },
         "old",
     )
 
     added = refresh_seed_assets(settings)
 
-    assert "dept-data-intel-assets:applications/policy-import-console" in added
-    assert "dept-data-intel-assets:applications/quick-labeler" in added
-    assert "cust-HUAAN-assets（整个仓库）" in added
-    assert not any("pg-vacuum-tuning" in item for item in added)
-    paths = {entry.path for entry in git.list_tree(department)}
-    assert "applications/quick-labeler/asset.yaml" in paths
-    assert git.read_file(department, "skills/pg-vacuum-tuning/asset.yaml") == b"edited: by hand\n"
+    labeler = legacy_asset_id("department", "data-intel", "", "Application", "quick-labeler")
+    assert f"department:{labeler}" in added
+    assert any(item.startswith("customer:") for item in added)
+    assert not any(kept in item for item in added)
+    paths = {entry.path for entry in git.list_tree(repo)}
+    assert f"assets/{labeler}/asset.yaml" in paths
+    assert git.read_file(repo, f"assets/{kept}/asset.yaml") == b"edited: by hand\n"
 
     assert refresh_seed_assets(settings) == [], "补过一次就不该再动"

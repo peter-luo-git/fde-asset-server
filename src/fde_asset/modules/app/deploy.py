@@ -12,10 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
-from fde_asset.core.db import app_deployments, assets, record_event
+from fde_asset.core.db import app_deployments, assets, record_event, upsert
 from fde_asset.modules.app import bundle as bundle_module
 from fde_asset.modules.app import compose as compose_module
 from fde_asset.platform.blobs import BlobStore, safe_name
@@ -59,12 +58,7 @@ def container_port_of(row: Any) -> int:
 
 def _upsert(engine: Engine, asset_id: str, values: dict[str, Any]) -> dict[str, Any]:
     with engine.begin() as conn:
-        statement = sqlite_insert(app_deployments).values(asset_id=asset_id, **values)
-        conn.execute(
-            statement.on_conflict_do_update(
-                index_elements=[app_deployments.c.asset_id], set_=values
-            )
-        )
+        upsert(conn, app_deployments, {"asset_id": asset_id, **values}, ["asset_id"])
     return get(engine, asset_id)
 
 

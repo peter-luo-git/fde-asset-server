@@ -7,7 +7,11 @@ from fde_asset.modules.asset.snapshot import build_snapshot
 
 def _build(context, **kwargs):
     return build_snapshot(
-        context.engine, context.repo_port, snapshot_root=context.settings.snapshot_dir, **kwargs
+        context.engine,
+        context.repo_port,
+        snapshot_root=context.settings.snapshot_dir,
+        file_store=context.file_store,
+        **kwargs,
     )
 
 

@@ -24,9 +24,9 @@ def main() -> None:
         settings.snapshot_dir,
     ):
         directory.expanduser().mkdir(parents=True, exist_ok=True)
-    ensure_bare_repo(settings.repo_dir.expanduser() / "company-assets.git")
+    ensure_bare_repo(settings.repo_dir.expanduser() / "assets.git")
     print("本地资产环境就绪：")
-    print(f"  裸仓库   {settings.repo_dir.expanduser() / 'company-assets.git'}")
+    print(f"  裸仓库   {settings.repo_dir.expanduser() / 'assets.git'}")
     print(f"  数据目录 {settings.data_dir.expanduser()}")
     print(f"  快照目录 {settings.snapshot_dir.expanduser()}")
 

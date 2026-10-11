@@ -11,6 +11,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Float,
+    Index,
     Integer,
     MetaData,
     String,
@@ -21,7 +22,7 @@ from sqlalchemy import (
     inspect,
     literal,
 )
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 
 metadata = MetaData()
 
@@ -61,19 +62,31 @@ assets = Table(
     Column("attachments_json", Text, nullable=False, default="[]"),
     Column("content_text", Text, nullable=False, default=""),
     Column("commit_sha", String(64), nullable=False, default=""),
+    # 资产目录的内容哈希：目录里任何文件变了它才变，用来判断这份资产是不是真的有新版本
+    Column("tree_sha", String(64), nullable=False, default=""),
+    # asset.yaml 里写的可见范围原样存一份，页面展示用；判断谁看得见查的是 asset_audiences
+    Column("visibility_json", Text, nullable=False, default="[]"),
     Column("restricted", Boolean, nullable=False, default=False),
     Column("valid", Boolean, nullable=False, default=True),
     Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
     Column("updated_at", DateTime(timezone=True), nullable=False, default=_now),
     Column("deleted_at", DateTime(timezone=True)),
-    UniqueConstraint(
-        "scope",
-        "department_code",
-        "engagement_slug",
-        "kind",
-        "name",
-        name="uq_assets_scope_kind_name",
-    ),
+    # 同一个负责人名下同类型不重名，由写入和索引时检查，不靠数据库约束：
+    # 索引是从仓库重建出来的，仓库里真出现了重名也得能建完索引，再把重名的那份标成无效
+    Index("ix_assets_owner_kind_name", "owner_ref", "kind", "name"),
+)
+
+#: 一份资产对谁可见：每一项一行。任何一项覆盖到某个人，他就看得见这份资产。
+#: assets 表上的 scope 和几个归属列只记其中范围最大的那一项，给展示、排序、评审分派用。
+asset_audiences = Table(
+    "asset_audiences",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("asset_id", String(64), nullable=False),
+    Column("audience", String(16), nullable=False),  # company|department|customer|engagement|user
+    Column("code", String(64), nullable=False, default=""),
+    UniqueConstraint("asset_id", "audience", "code", name="uq_asset_audience"),
+    Index("ix_asset_audiences_lookup", "audience", "code"),
 )
 
 asset_index_findings = Table(
@@ -235,6 +248,9 @@ target_assets = Table(
     Column("target_id", String(64), nullable=False),
     Column("asset_id", String(64), nullable=False),
     Column("source", String(16), nullable=False, default="manual"),  # manual | recommendation
+    # 这份资产在这个目标的 Agent 那里叫什么。关联时定下来，之后不变：
+    # 平时就是资产的标识；目标已经有同类型同标识的另一份时，后来的这份加上负责人
+    Column("mount_name", String(200), nullable=False, default=""),
     Column("created_by", String(64), nullable=False, default=""),
     Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
     UniqueConstraint("target_type", "target_id", "asset_id", name="uq_target_asset"),
@@ -368,19 +384,67 @@ work_item_assets = Table(
 
 
 def create_engine_for(db_path: Path | str, echo: bool = False) -> Engine:
+    """给一个 PostgreSQL 连接串就连 PostgreSQL，给一个路径就用那个 SQLite 文件。"""
     if str(db_path).startswith("postgresql"):
-        url = str(db_path)
-    else:
-        path = Path(db_path).expanduser()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        url = f"sqlite+pysqlite:///{path}"
-    engine = create_engine(url, echo=echo, future=True)
-    return engine
+        # 代码用的是同步连接，驱动固定用 psycopg；连接串里没写驱动或写了别的都按它来
+        url = make_url(str(db_path)).set(drivername="postgresql+psycopg")
+        # 连接放久了可能被数据库或中间网络断掉，取用前先探一下
+        return create_engine(url, echo=echo, future=True, pool_pre_ping=True)
+    path = Path(db_path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return create_engine(f"sqlite+pysqlite:///{path}", echo=echo, future=True)
+
+
+def upsert(conn: Any, table: Table, values: dict[str, Any], key: list[str]) -> None:
+    """有这一行就更新，没有就插入。`key` 是用来判断「有没有」的列，要有唯一约束或是主键。"""
+    from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    insert = postgresql_insert if conn.dialect.name == "postgresql" else sqlite_insert
+    statement = insert(table).values(**values)
+    conn.execute(
+        statement.on_conflict_do_update(
+            index_elements=[table.c[name] for name in key],
+            set_={name: value for name, value in values.items() if name not in key},
+        )
+    )
+
+
+def clean_text(value: str) -> str:
+    """去掉文字里的空字符。
+
+    从 PDF、Office 文件里抽出来的正文偶尔带着它，PostgreSQL 的文本列不收，整条写入会失败。
+    """
+    return value.replace("\x00", "") if "\x00" in value else value
 
 
 def init_db(engine: Engine) -> None:
     metadata.create_all(engine)
     add_missing_columns(engine)
+    drop_legacy_asset_constraint(engine)
+
+
+def drop_legacy_asset_constraint(engine: Engine) -> bool:
+    """旧库的资产表带着「同一层级内同类型不重名」的唯一约束，去掉它。返回这次有没有动。
+
+    现在的规则是同一个负责人名下不重名，不同负责人的同名资产可以在同一层；
+    留着旧约束，这种资产一入库建索引就会整个失败。SQLite 去不掉表上的约束，只能重建表。
+    """
+    if engine.dialect.name != "sqlite":
+        return False
+    with engine.begin() as conn:
+        ddl = conn.exec_driver_sql(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'assets'"
+        ).scalar()
+        if not ddl or "uq_assets_scope_kind_name" not in ddl:
+            return False
+        columns = ", ".join(f'"{column.name}"' for column in assets.columns)
+        conn.exec_driver_sql("ALTER TABLE assets RENAME TO assets_legacy")
+        conn.exec_driver_sql("DROP INDEX IF EXISTS ix_assets_owner_kind_name")
+        assets.create(conn)
+        conn.exec_driver_sql(f"INSERT INTO assets ({columns}) SELECT {columns} FROM assets_legacy")
+        conn.exec_driver_sql("DROP TABLE assets_legacy")
+    return True
 
 
 def _default_literal(engine: Engine, column: Column) -> str | None:

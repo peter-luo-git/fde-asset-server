@@ -25,10 +25,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
-from fde_asset.core.db import app_health, assets
+from fde_asset.core.db import app_health, assets, upsert
 
 #: 本机应用不探；平台跟它不在一个网络里
 SKIP_NETWORKS = {"local"}
@@ -142,13 +141,7 @@ def probe_all(
                 "checked_via": "server",
                 "checked_by": "",
             }
-            statement = sqlite_insert(app_health).values(**values)
-            conn.execute(
-                statement.on_conflict_do_update(
-                    index_elements=[app_health.c.asset_id],
-                    set_={k: v for k, v in values.items() if k != "asset_id"},
-                )
-            )
+            upsert(conn, app_health, values, ["asset_id"])
     return results
 
 
@@ -226,13 +219,7 @@ def report_from_browser(
                 "checked_via": "browser",
                 "checked_by": reporter,
             }
-            statement = sqlite_insert(app_health).values(**values)
-            conn.execute(
-                statement.on_conflict_do_update(
-                    index_elements=[app_health.c.asset_id],
-                    set_={k: v for k, v in values.items() if k != "asset_id"},
-                )
-            )
+            upsert(conn, app_health, values, ["asset_id"])
             results.append(result)
     return results
 

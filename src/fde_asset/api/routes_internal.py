@@ -10,11 +10,13 @@ import hashlib
 import hmac
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from sqlalchemy import and_, or_, select
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+from sqlalchemy import select
 
 from fde_asset.api.deps import ServiceContext, get_context
-from fde_asset.core.db import assets
+from fde_asset.core.db import asset_audiences, assets
+from fde_asset.modules.asset import agent_bundle as agent_bundle_module
+from fde_asset.modules.asset.visibility import audience_clause
 from fde_asset.modules.asset.manifest import KIND_RULES
 from fde_asset.platform.identity import PlatformUnavailable, PrincipalNotFound
 from fde_asset.platform.repo.ports import RepoRef
@@ -58,48 +60,58 @@ def agent_catalog(
     slugs = principal.engagement_slugs
     if engagement_slug:
         slugs = slugs & {engagement_slug}
-    visible = [assets.c.scope == "company"]
-    if slugs:
-        visible.append(
-            and_(assets.c.scope == "engagement", assets.c.engagement_slug.in_(sorted(slugs)))
-        )
     with context.engine.connect() as conn:
         rows = conn.execute(
             select(assets)
             .where(
                 assets.c.deleted_at.is_(None),
                 assets.c.valid.is_(True),
-                assets.c.scope.in_(AGENT_SCOPES),
                 assets.c.kind.in_(AGENT_KINDS),
-                or_(*visible),
+                # 全公司可见的，加上可见范围里点到他参与的项目的
+                audience_clause(engagement_slugs=slugs),
             )
             .order_by(assets.c.kind, assets.c.name)
         ).all()
+        reach: dict[str, list[tuple[str, str]]] = {}
+        for item in conn.execute(
+            select(asset_audiences).where(
+                asset_audiences.c.asset_id.in_([row.asset_id for row in rows] or [""]),
+                asset_audiences.c.audience.in_(AGENT_SCOPES),
+            )
+        ):
+            reach.setdefault(item.asset_id, []).append((item.audience, item.code))
 
     items: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
     for row in rows:
         main_file = KIND_RULES[row.kind].main_file
-        # 单文件资产（如规范）的路径就是那个文件；目录型资产读目录下的主文件
-        file_path = row.path if row.path.endswith(".md") else f"{row.path}/{main_file}"
-        repo = RepoRef(
-            name=row.repo,
-            scope=row.scope,
-            department_code=row.department_code or "",
-            customer_code=row.customer_code or "",
-            engagement_slug=row.engagement_slug or "",
-        )
+        file_path = f"{row.path}/{main_file}"
+        repo = RepoRef(name=row.repo)
         try:
             # 按索引时的那次提交读，内容和 commit_sha 才对得上
             content = context.repo_port.read_file(repo, file_path, ref=row.commit_sha or "")
         except FileNotFoundError:
             skipped.append({"asset_id": row.asset_id, "reason": "main_file_missing"})
             continue
+        # 平台那边只分「公司的」和「某个项目的」两种：全公司可见就算公司的，
+        # 否则算到他参与的、可见范围点到的那个项目头上
+        audiences_here = reach.get(row.asset_id, [])
+        via_company = ("company", "") in audiences_here
+        via_slug = min(
+            (
+                code
+                for audience, code in audiences_here
+                if audience == "engagement" and code in slugs
+            ),
+            default="",
+        )
+        if not via_company and not via_slug:
+            continue
         items.append(
             {
                 "asset_id": row.asset_id,
-                "scope": row.scope,
-                "engagement_slug": row.engagement_slug or "",
+                "scope": "company" if via_company else "engagement",
+                "engagement_slug": "" if via_company else via_slug,
                 "kind": row.kind,
                 "name": row.name,
                 "version": row.version or "",
@@ -115,3 +127,53 @@ def agent_catalog(
             }
         )
     return {"username": principal.user_id, "items": items, "skipped": skipped}
+
+
+@router.post("/agent-bundle", dependencies=[Depends(require_service_key)])
+def agent_bundle(
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+) -> dict[str, Any]:
+    """某个用户在某个项目里启动 Agent 时该带的资产，拼成平台认的目录形状。
+
+    给了 `revision` 就原样返回以前拼好的那一份（平台重试同一次运行时用）；
+    没给就按现在的资产和关联关系新拼一份。
+    """
+    revision = str(payload.get("revision") or "")
+    if revision:
+        try:
+            return agent_bundle_module.load_bundle(
+                context.settings.bundle_dir, revision
+            ).as_payload()
+        except agent_bundle_module.BundleNotFound:
+            raise HTTPException(status_code=404, detail="没有这个版本的资产包") from None
+
+    username = str(payload.get("username") or "")
+    engagement_slug = str(payload.get("engagement_slug") or "")
+    if not username or not engagement_slug:
+        raise HTTPException(status_code=422, detail="要给出用户和项目")
+    try:
+        principal = context.directory.resolve(username)
+    except PrincipalNotFound:
+        raise HTTPException(status_code=404, detail="没有这个用户") from None
+    except PlatformUnavailable:
+        raise HTTPException(status_code=503, detail="暂时无法向平台确认身份") from None
+    membership = next(
+        (m for m in principal.memberships if m.engagement_slug == engagement_slug), None
+    )
+    if membership is None and not principal.is_admin:
+        raise HTTPException(status_code=403, detail="这个用户不在这个项目里")
+    project = context.directory.engagements().get(engagement_slug, {})
+    bundle = agent_bundle_module.build_bundle(
+        context.engine,
+        context.repo_port,
+        bundle_root=context.settings.bundle_dir,
+        # 项目归哪个部门、哪个客户，决定了部门级和客户级资产带不带
+        department_code=str(project.get("department_code", ""))
+        or (membership.department_code if membership else ""),
+        customer_code=membership.customer_code if membership else "",
+        engagement_slug=engagement_slug,
+        target_type="engagement",
+        target_id=engagement_slug,
+    )
+    return bundle.as_payload()

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from urllib.parse import quote
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
 from sqlalchemy import select
 
 from fde_asset.api.deps import ServiceContext, get_context, get_principal
@@ -18,6 +21,7 @@ from fde_asset.modules.asset import (
     lifecycle,
     matching,
     relations,
+    sharing,
     snapshot,
     sop,
     usage,
@@ -201,8 +205,69 @@ def get_asset(
     with context.engine.connect() as conn:
         row = conn.execute(select(assets).where(assets.c.asset_id == asset_id)).first()
     # 页面据此决定要不要显示下架、废弃、恢复
-    data["can_manage"] = lifecycle.may_manage(principal, row) and not row.path.endswith(".md")
+    data["can_manage"] = lifecycle.may_manage(principal, row)
     return data
+
+
+@router.get("/assets/{asset_id}/attachments/{filename}")
+def download_asset_attachment(
+    asset_id: str,
+    filename: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> Response:
+    """下载已入库资产的附件原件。附件不在仓库里，按 asset.yaml 里记的哈希从文件存储取。"""
+    data = catalog.get_asset(context.engine, principal, asset_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="资产不存在或无权查看")
+    entry = next((item for item in data["attachments"] if item.get("name") == filename), None)
+    content = context.file_store.get(entry.get("sha256", "")) if entry else None
+    if content is None:
+        raise HTTPException(status_code=404, detail="附件不存在")
+    # 中文文件名不能直接塞进 HTTP 头（头只认 latin-1），按 RFC 5987 编码
+    quoted = quote(filename)
+    return Response(
+        content=content,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{quoted}\"; filename*=UTF-8''{quoted}",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.post("/assets/{asset_id}/visibility")
+def change_visibility(
+    asset_id: str,
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """调整可见范围（升级、降级、分享）：改仓库里的 asset.yaml 并提交，再重建索引。
+
+    `visibility` 是调整后的完整列表，每项是 company，或 department:/customer:/engagement:/user: 加代号。
+    """
+    compliance = context.settings.root / "compliance.json"
+    terms = json.loads(compliance.read_text(encoding="utf-8")) if compliance.exists() else {}
+    try:
+        return sharing.change(
+            context.engine,
+            context.repo_port,
+            principal,
+            asset_id,
+            payload.get("visibility") or [],
+            note=str(payload.get("note", "")),
+            customer_names=tuple(terms.get("customer_names", [])),
+            sensitive_terms=tuple(terms.get("sensitive_terms", [])),
+            text_limit=context.settings.index_text_limit,
+            owner_of=context.target_owner,
+            file_store=context.file_store,
+        )
+    except sharing.SharingForbidden as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from None
+    except sharing.SharingError as exc:
+        status = 404 if "无权查看" in str(exc) else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from None
 
 
 @router.post("/assets/{asset_id}/lifecycle")
@@ -225,6 +290,7 @@ def change_lifecycle(
             note=str(payload.get("note", "")),
             text_limit=context.settings.index_text_limit,
             owner_of=context.target_owner,
+            file_store=context.file_store,
         )
     except lifecycle.LifecycleForbidden as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from None
@@ -331,6 +397,7 @@ def build_snapshot(
         customer_code=customer_code,
         target_type=target_type,
         target_id=target_id,
+        file_store=context.file_store,
     )
     return {
         "selection": result.selection,
@@ -667,6 +734,7 @@ def reindex(
         context.repos(),
         text_limit=context.settings.index_text_limit,
         owner_of=context.target_owner,
+        file_store=context.file_store,
     )
     return {
         "repos": [
