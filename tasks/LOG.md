@@ -21,3 +21,6 @@
 | 2026-10-06 | X-14 ~ X-16 | 2026-10-06 的第三次提交；fde-web 同日提交 | 绿（后端 353 通过 / 3 跳过；前端全量 437；契约 E2E 40、浏览器 E2E 51 步，接真实模型 41 / 52） | 自检 | 客户级草稿此前走不通，已修；推荐理由按需生成（实测 15–30 秒，超时放到 90 秒）；工作台粘贴文字；修掉测试导入时泄漏模型配置的问题 |
 | 2026-10-06 | X-17 ~ X-23 | 2026-10-06 的第四次提交；fde-web 同日提交 | 绿（后端 377 通过 / 3 跳过；前端全量 461；契约 E2E 44、浏览器 E2E 60 步，接真实模型 45 / 61） | 自检 | 快照跟着关联走；部门视图区分自己与同事负责的；订阅多选与新资产通知；已评审记录；修订草稿负责人可打开；应用理顺与登记；借用户电脑探活；页面地址统一到 /assets 下 |
 | 2026-10-11 | asset-latest-compat | 基线 18023df；待Root提交 | 通过（定向14通过/1 PostgreSQL跳过） | qa_agent_environment | agent_bundle HTTP40hex/base64、2规范全文/旧ID内容、范围与revision复读、legacy附件/storage；无模型/现场变更，详细证据见独立贡献 |
+| 2026-10-12 | full-test-fixes-20261012 | 基线d511a7a；待Root提交 | 通过（原生make check：423通过/2条件跳过；PG迁移单项1通过） | implementer_specs_asset_fixes；待Root文审 | 两条真实Docker测试独立UUID资源、动态localhost及归属清理，保留镜像/volume；4边界回归、真实Docker2条定向通过；无模型/原服务/原库变化，完整证据见本轮贡献 |
+| 2026-10-12 | full-test-fixes-20261012 文审 | 基线d511a7a；待Root提交 | 通过（文档窄验证；未重跑make check） | implementer_runtime_deploy_fixes；待Root验收 | docs-impact-control核对最终diff，README0.4补条件锁检查与Docker构建/跳过前提；产品代码和测试未改，报告见本轮文审贡献 |
+| 2026-10-12 | full-test-fixes-20261012 锁后继文审 | 基线d511a7a；待Root提交 | 通过（online/offline锁检查与隔离build；文审窄验证） | implementer_specs_asset_fixes实现；implementer_runtime_deploy_fixes文审；待Root验收 | 首轮共享PATH无uv未跑条件门禁，Root缺锁红证据保留；真实45包uv.lock补齐，19直接pin/原pyproject不变，未sync共享venv或重跑423项；README0.5及文审贡献记录后继证据 |

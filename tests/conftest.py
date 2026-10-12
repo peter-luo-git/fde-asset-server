@@ -114,3 +114,13 @@ def asset_dir(context, name: str) -> str:
 def as_user(client: TestClient, user: str) -> TestClient:
     client.headers.update({"X-FDE-User": user})
     return client
+
+
+@pytest.fixture()
+def docker_resources(monkeypatch):
+    from fde_asset.platform.runner import docker_runner
+    from tests.docker_resources import OwnedDockerResources
+
+    with OwnedDockerResources() as resources:
+        monkeypatch.setattr(docker_runner, "NETWORK", resources.network)
+        yield resources

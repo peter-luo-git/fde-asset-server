@@ -9,7 +9,6 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -21,6 +20,7 @@ from fde_asset.platform.blobs import BlobStore
 from fde_asset.platform.runner.docker_runner import LocalDockerRunner
 from fde_asset.platform.runner.ports import LoadedImage, RunnerError, RunningContainer
 from tests.conftest import as_user
+from tests.docker_resources import OwnedDockerRunner
 
 DOCKER = LocalDockerRunner()
 HAS_DOCKER = DOCKER.available()
@@ -202,9 +202,10 @@ def test_full_state_machine_with_fake_runner(client, indexed, store) -> None:
 
 
 @pytest.mark.skipif(not HAS_DOCKER, reason="本机没有可用的 docker")
-def test_real_container_runs_and_serves(client, indexed, store) -> None:
+def test_real_container_runs_and_serves(client, indexed, store, tmp_path, docker_resources) -> None:
     """真·集成测试：造一个最小镜像，走完上传 → 审核 → 启动 → 访问 → 停止。"""
-    work = Path(tempfile.mkdtemp())
+    work = tmp_path
+    runner = OwnedDockerRunner(docker_resources)
     (work / "Dockerfile").write_text(
         "FROM busybox\n"
         'RUN mkdir -p /site && echo "<h1>hello from demo app</h1>" > /site/index.html\n'
@@ -212,9 +213,12 @@ def test_real_container_runs_and_serves(client, indexed, store) -> None:
         'CMD ["httpd", "-f", "-p", "7001", "-h", "/site"]\n',
         encoding="utf-8",
     )
-    tag = "fde-demo-test:latest"
+    tag = docker_resources.tag
     build = subprocess.run(
-        ["docker", "build", "-t", tag, str(work)], capture_output=True, text=True, timeout=600
+        ["docker", "build", "--network", "none", "--pull=false", "-t", tag, str(work)],
+        capture_output=True,
+        text=True,
+        timeout=600,
     )
     if build.returncode != 0:
         pytest.skip(f"构建镜像失败（多半是没网拉不到 busybox）：{build.stderr[-300:]}")
@@ -236,7 +240,7 @@ def test_real_container_runs_and_serves(client, indexed, store) -> None:
     record = deploy.start(
         context.engine,
         asset_id=asset_id,
-        runner=DOCKER,
+        runner=runner,
         store=context.blob_store,
         started_by="chen",
     )
@@ -252,11 +256,11 @@ def test_real_container_runs_and_serves(client, indexed, store) -> None:
                 time.sleep(0.5)
         assert "hello from demo app" in body, f"没从 {url} 读到内容"
 
-        logs = deploy.logs(context.engine, asset_id=asset_id, runner=DOCKER)
+        assert url.startswith("http://127.0.0.1:")
+        logs = deploy.logs(context.engine, asset_id=asset_id, runner=runner)
         assert isinstance(logs, str)
     finally:
-        deploy.stop(context.engine, asset_id=asset_id, runner=DOCKER, stopped_by="chen")
-        subprocess.run(["docker", "rmi", "-f", tag], capture_output=True, timeout=120)
+        deploy.stop(context.engine, asset_id=asset_id, runner=runner, stopped_by="chen")
 
     after = deploy.get(context.engine, asset_id)
     assert after["run_status"] == "stopped"

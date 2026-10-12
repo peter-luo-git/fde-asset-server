@@ -9,9 +9,7 @@ from __future__ import annotations
 import io
 import subprocess
 import tarfile
-import tempfile
 import time
-from pathlib import Path
 
 import httpx
 import pytest
@@ -21,6 +19,7 @@ from fde_asset.modules.app import bundle as bundle_module
 from fde_asset.modules.app import compose as compose_module
 from fde_asset.modules.app.compose import ComposeError, dump, validate_and_rewrite
 from fde_asset.platform.runner.compose_runner import LocalComposeRunner
+from tests.docker_resources import OWNER_LABEL, OwnedComposeRunner
 
 COMPOSE_RUNNER = LocalComposeRunner()
 HAS_COMPOSE = COMPOSE_RUNNER.available()
@@ -207,9 +206,10 @@ def test_path_traversal_in_bundle_is_blocked(tmp_path) -> None:
 
 
 @pytest.mark.skipif(not HAS_COMPOSE, reason="本机没有 docker compose")
-def test_real_two_container_app_serves(tmp_path) -> None:
+def test_real_two_container_app_serves(tmp_path, docker_resources) -> None:
     """两个服务：一个对外的 web，一个只在内部网络的 sidecar。只有 web 能被访问到。"""
-    work = Path(tempfile.mkdtemp())
+    work = tmp_path
+    runner = OwnedComposeRunner(docker_resources)
     (work / "Dockerfile").write_text(
         "FROM busybox\n"
         'RUN mkdir -p /site && echo "<h1>compose demo ok</h1>" > /site/index.html\n'
@@ -217,9 +217,12 @@ def test_real_two_container_app_serves(tmp_path) -> None:
         'CMD ["httpd", "-f", "-p", "8080", "-h", "/site"]\n',
         encoding="utf-8",
     )
-    tag = "fde-compose-test:latest"
+    tag = docker_resources.tag
     build = subprocess.run(
-        ["docker", "build", "-t", tag, str(work)], capture_output=True, text=True, timeout=600
+        ["docker", "build", "--network", "none", "--pull=false", "-t", tag, str(work)],
+        capture_output=True,
+        text=True,
+        timeout=600,
     )
     if build.returncode != 0:
         pytest.skip(f"构建镜像失败：{build.stderr[-300:]}")
@@ -235,18 +238,23 @@ services:
 """
     plan = compose_module.validate_and_rewrite(
         text,
-        app_name="composetest",
+        app_name=docker_resources.owner,
         main_service="web",
         container_port=8080,
         host_port=LocalComposeRunner.pick_port(),
+        memory="128m",
+        cpus="0.25",
     )
+    plan.document["networks"] = {"default": {"external": True, "name": docker_resources.network}}
+    for service in plan.document["services"].values():
+        service["labels"] = {OWNER_LABEL: docker_resources.owner}
     compose_file = work / "fde-compose.yml"
     compose_file.write_text(dump(plan), encoding="utf-8")
     published = plan.document["services"]["web"]["ports"][0].split(":")[1]
 
-    COMPOSE_RUNNER.up(str(compose_file), plan.project_name)
+    runner.up(str(compose_file), plan.project_name)
     try:
-        assert COMPOSE_RUNNER.status(str(compose_file), plan.project_name) == "running"
+        assert runner.status(str(compose_file), plan.project_name) == "running"
         body = ""
         for _ in range(20):
             try:
@@ -255,13 +263,12 @@ services:
             except httpx.HTTPError:
                 time.sleep(0.5)
         assert "compose demo ok" in body, "主服务该能访问到"
-        logs = COMPOSE_RUNNER.logs(str(compose_file), plan.project_name)
+        logs = runner.logs(str(compose_file), plan.project_name)
         assert isinstance(logs, str)
     finally:
-        COMPOSE_RUNNER.down(str(compose_file), plan.project_name)
-        subprocess.run(["docker", "rmi", "-f", tag], capture_output=True, timeout=120)
+        runner.down(str(compose_file), plan.project_name)
 
-    assert COMPOSE_RUNNER.status(str(compose_file), plan.project_name) == "stopped"
+    assert runner.status(str(compose_file), plan.project_name) == "stopped"
 
 
 @pytest.mark.parametrize(
