@@ -21,17 +21,20 @@ router = APIRouter(prefix="/api/v1", tags=["recommend"])
 EXPLAIN_TIMEOUT_SECONDS = 90.0
 
 
-def _target(context: ServiceContext, payload: dict[str, Any]) -> service.Target:
+def _target(
+    context: ServiceContext, payload: dict[str, Any], *, override_context: bool = True
+) -> service.Target:
     try:
         target = service.target_from_directory(
             context.directory, payload.get("target_type", ""), payload.get("target_id", "")
         )
     except service.RecommendError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
-    # 调用方可以覆盖上下文（试验台那种手填场景）
-    for field in ("title", "description", "industry", "department_code", "stage", "role"):
-        if payload.get(field):
-            setattr(target, field, payload[field])
+    # 只读匹配允许试验台覆盖上下文；写操作必须用目录归属授权。
+    if override_context:
+        for field in ("title", "description", "industry", "department_code", "stage", "role"):
+            if payload.get(field):
+                setattr(target, field, payload[field])
     return target
 
 
@@ -51,7 +54,11 @@ def _may_manage(principal: Principal, target: service.Target) -> bool:
     """
     if _owns(principal, target):
         return True
-    return principal.is_department_head and principal.department_code == target.department_code
+    if target.target_type == "agent" and not target.owner:
+        return False
+    return bool(target.department_code) and (
+        principal.is_department_head and principal.department_code == target.department_code
+    )
 
 
 @router.get("/recommend/targets")
@@ -92,9 +99,11 @@ def list_targets(
             item["owner_name"] = owner_names.get(raw.get("owner", ""), raw.get("owner", ""))
             if owned or principal.is_admin:
                 mine.append(item)
-            if (principal.is_department_head or principal.is_admin) and raw.get(
-                "department_code"
-            ) == principal.department_code:
+            if (
+                (principal.is_department_head or principal.is_admin)
+                and raw.get("department_code")
+                and raw["department_code"] == principal.department_code
+            ):
                 department.append(item)
     return {"mine": mine, "department": department}
 
@@ -196,7 +205,7 @@ def send(
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     """部门管理员推送给负责人；负责人自己保存时 status 传 suggested。"""
-    target = _target(context, payload)
+    target = _target(context, payload, override_context=False)
     if not _may_manage(principal, target):
         raise HTTPException(status_code=403, detail="只有目标负责人、本部门主管或管理员能推送")
     status = payload.get("status", "sent")
@@ -284,7 +293,7 @@ def link(
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     """本人直接关联，不走推荐流程。"""
-    target = _target(context, payload)
+    target = _target(context, payload, override_context=False)
     if not _owns(principal, target):
         raise HTTPException(status_code=403, detail="只有目标负责人或管理员能关联资产")
     result = service.link(

@@ -85,3 +85,117 @@ def test_cleanup_handles_owned_container_auto_removed_after_listing(monkeypatch)
     monkeypatch.setattr(subprocess, "run", command)
     OwnedDockerResources().cleanup_containers()
     assert remaining == {"foreign"}
+
+
+@pytest.mark.parametrize(
+    "race_error",
+    [
+        "Error response from daemon: removal of container owned-id is already in progress",
+        "Error response from daemon: No such container: owned-id",
+    ],
+)
+def test_cleanup_confirms_exact_owned_container_is_gone_after_remove_race(monkeypatch, race_error):
+    from tests.docker_resources import OWNER_LABEL, OwnedDockerResources
+
+    resources = OwnedDockerResources()
+    inspections = 0
+    removed = []
+
+    def command(args, **kwargs):
+        nonlocal inspections
+        if args[1:3] == ["ps", "-a"]:
+            return subprocess.CompletedProcess(args, 0, "owned-id\n", "")
+        if args[1:3] == ["container", "inspect"]:
+            inspections += 1
+            if inspections == 3:
+                return subprocess.CompletedProcess(
+                    args, 1, "", "Error: No such container: owned-id"
+                )
+            return subprocess.CompletedProcess(
+                args, 0, json.dumps({OWNER_LABEL: resources.owner}), ""
+            )
+        if args[1:3] == ["rm", "-f"]:
+            removed.append(args[-1])
+            return subprocess.CompletedProcess(args, 1, "", race_error)
+        raise AssertionError(f"不允许访问其他资源：{args}")
+
+    monkeypatch.setattr(subprocess, "run", command)
+    resources.cleanup_containers()
+    assert inspections == 3  # Removal was confirmed, not merely ignored.
+    assert removed == ["owned-id"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "permission denied while removing owned-id",
+        "Error response from daemon: removal of container another-id is already in progress",
+        "Error response from daemon: No such container: owned-id-extra",
+    ],
+)
+def test_cleanup_preserves_remove_errors_unrelated_to_exact_owned_container(monkeypatch, error):
+    from tests.docker_resources import OWNER_LABEL, OwnedDockerResources
+
+    resources = OwnedDockerResources()
+
+    def command(args, **kwargs):
+        if args[1:3] == ["ps", "-a"]:
+            return subprocess.CompletedProcess(args, 0, "owned-id\n", "")
+        if args[1:3] == ["container", "inspect"]:
+            return subprocess.CompletedProcess(
+                args, 0, json.dumps({OWNER_LABEL: resources.owner}), ""
+            )
+        if args[1:3] == ["rm", "-f"]:
+            return subprocess.CompletedProcess(args, 1, "", error)
+        raise AssertionError(f"不允许访问其他资源：{args}")
+
+    monkeypatch.setattr(subprocess, "run", command)
+    with pytest.raises(RuntimeError) as caught:
+        resources.cleanup_containers()
+    assert str(caught.value) == error
+
+
+@pytest.mark.parametrize(
+    "after_error",
+    [
+        "permission denied",
+        "Error: No such container: owned-id-extra",
+        "owner-changed",
+        "still-present",
+    ],
+)
+def test_cleanup_remove_race_does_not_hide_failed_absence_or_ownership_check(
+    monkeypatch, after_error
+):
+    from tests.docker_resources import OWNER_LABEL, OwnedDockerResources
+
+    resources = OwnedDockerResources()
+    inspections = 0
+    race_error = "Error response from daemon: removal of container owned-id is already in progress"
+
+    def command(args, **kwargs):
+        nonlocal inspections
+        if args[1:3] == ["ps", "-a"]:
+            return subprocess.CompletedProcess(args, 0, "owned-id\n", "")
+        if args[1:3] == ["container", "inspect"]:
+            inspections += 1
+            if inspections > 1 and after_error not in {"owner-changed", "still-present"}:
+                return subprocess.CompletedProcess(args, 1, "", after_error)
+            owner = (
+                "another-owner"
+                if inspections > 1 and after_error == "owner-changed"
+                else resources.owner
+            )
+            return subprocess.CompletedProcess(args, 0, json.dumps({OWNER_LABEL: owner}), "")
+        if args[1:3] == ["rm", "-f"]:
+            return subprocess.CompletedProcess(args, 1, "", race_error)
+        raise AssertionError(f"不允许访问其他资源：{args}")
+
+    monkeypatch.setattr(subprocess, "run", command)
+    with pytest.raises(RuntimeError) as caught:
+        resources.cleanup_containers()
+    assert inspections > 1
+    if after_error in {"permission denied", "Error: No such container: owned-id-extra"}:
+        assert str(caught.value) == after_error
+    if after_error == "still-present":
+        assert inspections <= 12  # Polling must remain bounded when removal never finishes.

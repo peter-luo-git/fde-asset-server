@@ -41,6 +41,24 @@ ADMIN = {
 }
 DIRECTORY = {
     "users": [WANG, ADMIN],
+    "agents": [
+        {
+            "key": "platform-coder",
+            "title": "平台开发",
+            "description": "导入与超时处理",
+            "role": "coding_agent",
+            "owner": "wang",
+            "department_code": "finance",
+        },
+        {
+            "key": "coder-default",
+            "title": "阿码",
+            "description": "通用开发",
+            "role": "coding_agent",
+            "owner": "",
+            "department_code": "",
+        },
+    ],
     "engagements": [
         {
             "slug": "policy-import",
@@ -62,6 +80,8 @@ class _Response:
         self._payload = payload
 
     def json(self):
+        if isinstance(self._payload, ValueError):
+            raise self._payload
         return self._payload
 
 
@@ -73,10 +93,12 @@ class FakePlatform:
         self.service_key = service_key
         self.calls: list[str] = []
         self.down = False
+        self.directory_payload = DIRECTORY
+        self.failure_message = "fde-server 连不上"
 
     def get(self, url: str, *, cookies=None, headers=None):
         if self.down:
-            raise ConnectionError("fde-server 连不上")
+            raise ConnectionError(self.failure_message)
         path = url.split("//", 1)[-1].split("/", 1)[-1]
         self.calls.append(path)
         if path == "internal/identity/principal":
@@ -85,7 +107,7 @@ class FakePlatform:
         if path == "internal/identity/directory":
             if (headers or {}).get("X-FDE-Service-Key") != self.service_key:
                 return _Response(404)
-            return _Response(200, DIRECTORY)
+            return _Response(200, self.directory_payload)
         return _Response(404)
 
 
@@ -191,3 +213,177 @@ def test_api_reports_platform_outage_as_unavailable(seeded) -> None:
         platform.down = True
         client.cookies.set("fde_session", "cookie-wang")
         assert client.get("/api/v1/assets").status_code == 503
+
+
+def test_agents_use_the_authenticated_platform_snapshot_and_safe_fields(tmp_path) -> None:
+    from fde_asset.platform.identity import LocalDirectory
+
+    local = LocalDirectory(tmp_path / "directory.json")
+    local.write({"agents": {"demo-agent": {"owner": "wang"}}})
+    platform = FakePlatform({})
+    platform.directory_payload = {
+        **DIRECTORY,
+        "agents": [
+            {**DIRECTORY["agents"][0], "model_alias": "private", "instructions_md": "secret"}
+        ],
+    }
+    source = directory(platform, local=local)
+    assert source.agents() == {
+        "platform-coder": {
+            "title": "平台开发",
+            "description": "导入与超时处理",
+            "role": "coding_agent",
+            "owner": "wang",
+            "department_code": "finance",
+        }
+    }
+    assert source.users() == ["admin", "wang"]
+    assert platform.calls == ["internal/identity/directory"]
+    with pytest.raises(PlatformUnavailable):
+        directory(platform, service_key="wrong-key", local=local).agents()
+
+
+def test_expired_agent_snapshot_fails_closed_and_refreshes(monkeypatch) -> None:
+    now = [100.0]
+    monkeypatch.setattr("fde_asset.platform.identity.time.monotonic", lambda: now[0])
+    platform = FakePlatform({})
+    source = directory(platform, ttl_seconds=30)
+    assert "platform-coder" in source.agents()
+    platform.directory_payload = {**DIRECTORY, "agents": []}
+    now[0] = 129.0
+    assert "platform-coder" in source.agents()
+    now[0] = 130.0
+    platform.down = True
+    with pytest.raises(PlatformUnavailable):
+        source.agents()
+    platform.down = False
+    assert source.agents() == {}
+
+
+@pytest.mark.parametrize("agents", [None, {}, [{"title": "missing-key"}]])
+def test_missing_or_invalid_agent_contract_is_an_explicit_dependency_failure(agents) -> None:
+    platform = FakePlatform({})
+    platform.directory_payload = {**DIRECTORY}
+    if agents is None:
+        platform.directory_payload.pop("agents")
+    else:
+        platform.directory_payload["agents"] = agents
+    with pytest.raises(PlatformUnavailable, match="Agent"):
+        directory(platform).agents()
+
+
+def test_platform_recommend_targets_use_real_agent_owners_and_builtin_admin_management(
+    seeded,
+) -> None:
+    app = create_app(seeded.model_copy(update={"identity_mode": "platform"}))
+    with TestClient(app) as client:
+        app.state.context.directory = directory(FakePlatform({"wang": WANG, "admin": ADMIN}))
+        client.cookies.set("fde_session", "wang")
+        body = client.get("/api/v1/recommend/targets").json()
+        mine = {row["target_id"]: row for row in body["mine"] if row["target_type"] == "agent"}
+        assert set(mine) == {"platform-coder"}
+        assert mine["platform-coder"]["owner_name"] == "老王"
+        assert mine["platform-coder"]["role"] == "coding_agent"
+        assert mine["platform-coder"]["description"] == "导入与超时处理"
+        assert (
+            client.post(
+                "/api/v1/recommend/link",
+                json={
+                    "target_type": "agent",
+                    "target_id": "coder-default",
+                    "asset_id": "any-asset",
+                },
+            ).status_code
+            == 403
+        )
+        client.cookies.set("fde_session", "admin")
+        body = client.get("/api/v1/recommend/targets").json()
+        assert {row["target_id"] for row in body["mine"] if row["target_type"] == "agent"} == {
+            "platform-coder",
+            "coder-default",
+        }
+
+
+def test_recommend_targets_report_old_server_agent_contract_as_unavailable(seeded) -> None:
+    app = create_app(seeded.model_copy(update={"identity_mode": "platform"}))
+    with TestClient(app, raise_server_exceptions=False) as client:
+        platform = FakePlatform({"wang": WANG})
+        platform.directory_payload = {
+            key: value for key, value in DIRECTORY.items() if key != "agents"
+        }
+        app.state.context.directory = directory(platform)
+        client.cookies.set("fde_session", "wang")
+        assert client.get("/api/v1/recommend/targets").status_code == 503
+
+
+def test_recommend_directory_outage_is_503_without_internal_error_details(seeded) -> None:
+    app = create_app(seeded.model_copy(update={"identity_mode": "platform"}))
+    with TestClient(app, raise_server_exceptions=False) as client:
+        platform = FakePlatform({"wang": WANG})
+        source = directory(platform)
+        # Authentication remains valid in its short cache while a new directory
+        # request fails; this exercises the route failure, not auth handling.
+        source.resolve_session("wang")
+        platform.down = True
+        platform.failure_message = "http://internal-server/?service_key=private-service-secret"
+        app.state.context.directory = source
+        client.cookies.set("fde_session", "wang")
+        response = client.get("/api/v1/recommend/targets")
+        assert response.status_code == 503
+        assert "private-service-secret" not in response.text
+        assert "internal-server" not in response.text
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ValueError("private-response-data"),
+        {"agents": [], "users": None, "engagements": []},
+        {"agents": [], "users": [{"display_name": "missing-username"}], "engagements": []},
+    ],
+)
+def test_malformed_platform_directory_is_a_safe_dependency_failure(payload) -> None:
+    platform = FakePlatform({})
+    platform.directory_payload = payload
+    with pytest.raises(PlatformUnavailable, match="目录") as caught:
+        directory(platform).agents()
+    assert "private-response-data" not in str(caught.value)
+
+
+@pytest.mark.parametrize("empty_department", [True, False])
+def test_department_head_cannot_manage_unowned_builtin_or_spoof_target_department(
+    seeded, empty_department
+) -> None:
+    head = {**WANG, "department": None} if empty_department else WANG
+    platform = FakePlatform({"head": head})
+    target = {"target_type": "agent", "target_id": "coder-default"}
+    if not empty_department:
+        platform.directory_payload = {
+            **DIRECTORY,
+            "agents": [
+                {
+                    "key": "other-department-coder",
+                    "title": "其他部门Agent",
+                    "description": "",
+                    "role": "coding_agent",
+                    "owner": "admin",
+                    "department_code": "engineering",
+                }
+            ],
+        }
+        target = {
+            "target_type": "agent",
+            "target_id": "other-department-coder",
+            "department_code": "finance",
+        }
+    app = create_app(seeded.model_copy(update={"identity_mode": "platform"}))
+    with TestClient(app) as client:
+        app.state.context.directory = directory(platform)
+        client.cookies.set("fde_session", "head")
+        if empty_department:
+            targets = client.get("/api/v1/recommend/targets").json()
+            assert not [row for row in targets["department"] if row["target_type"] == "agent"]
+        # Empty items would return 422 after successful permission checking;
+        # this must be rejected at the authorization boundary first.
+        response = client.post("/api/v1/recommend/send", json={**target, "items": []})
+        assert response.status_code == 403

@@ -4,6 +4,14 @@
 
 FDE 协同平台的**资产中心服务**：索引、目录、沉淀、评审、分发与复用计量。
 
+## 平台Agent推荐目录后继（2026-10-13）
+
+platform身份模式通过 `X-FDE-Service-Key`读取Server内部目录，Agent与用户/项目共用默认30秒TTL；只消费 `key/title/description/role/owner/department_code` 六安全字段，不使用本地演示Agent回退或运行配置。合法空agents数组保持空；目录过期后重新请求，密钥/网络/响应或旧Server缺agents失败时安全503，不继续使用过期目录、不回显内部URL/异常正文，原未登录/失效会话401/403保持。
+
+公开coding预设由Server按配置公司及当前可用状态筛选，作者须同公司活跃，部门来自活跃主部门；无主内建Agent仅管理员管理。普通负责人或有明确同部门的主管沿原规则管理，空owner/空部门不构成主管权限；send/link写授权只信目录归属，compute/explain既有只读上下文覆盖不授予写权限。升级应先使Server提供新目录再更新Asset，回退使用兼容的配对版本，不能依靠演示目录维持授权；无新迁移或资产数据重写，也不宣称完整目录多租户已解决。
+
+Root串行完整make check退出0，445通过/2条件跳过/3 warning，真实模型rerank和外部PostgreSQL存储搬迁条件未执行，迁移head为0008_app_health_source；配对Server的v3隔离本机严格API已141项全部通过，最终制品/canonical来源仍待Root收口，详见[文审记录](operations/agent-contributions/quickstart-initialization/reviewer_refresh_docs.md)。真实Docker测试清理只在精确owner容器出现“已不存在/移除中”时有限复查确认缺失，权限错误、错误ID、owner变化或仍存在保持失败；镜像、卷及其他资源保护不变。
+
 ## 能力范围
 
 - 7 种资产类型：`Rule` 规范 · `Sop` 标准作业程序 · `Skill` 技能 · `Solution` 方案 · `Implementation` 实施 · `Case` 问题 · `Experience` 经验

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from fde_asset import __version__
 from fde_asset.api import (
@@ -16,6 +17,7 @@ from fde_asset.api import (
     routes_work_items,
 )
 from fde_asset.api.deps import build_context
+from fde_asset.platform.identity import PlatformUnavailable
 from fde_asset.settings import AssetSettings
 
 
@@ -23,6 +25,15 @@ def create_app(settings: AssetSettings | None = None) -> FastAPI:
     context = build_context(settings)
     app = FastAPI(title="FDE 资产中心服务", version=__version__)
     app.state.context = context
+
+    @app.exception_handler(PlatformUnavailable)
+    async def platform_unavailable(request: Request, exc: PlatformUnavailable) -> JSONResponse:
+        # Directory failures can occur after authentication. Do not expose an
+        # upstream exception, URL or response body in the browser error.
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "暂时无法读取平台目录，请检查服务连接和 Agent 目录版本"},
+        )
 
     @app.get("/health/live")
     async def live() -> dict[str, str]:

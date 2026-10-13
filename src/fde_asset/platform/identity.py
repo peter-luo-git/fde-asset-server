@@ -202,9 +202,8 @@ class PlatformDirectory:
     """和平台共用一套账号：身份和名单都来自 fde-server，这里只做短时间缓存。
 
     - `resolve_session`：一次浏览器请求是谁——把平台的登录会话转给 fde-server 去认。
-    - `users` / `resolve` / `engagements`：没有浏览器参与时也要用的名单（挑评审人、
-      发通知、后台任务），凭共享密钥读。
-    - Agent 清单平台那边还没有对应的接口，暂时仍读本地名单文件。
+    - `users` / `resolve` / `engagements` / `agents`：没有浏览器参与时也要用的名单
+      （挑评审人、发通知、资产推荐），凭共享密钥读同一个短期缓存目录。
     """
 
     SESSION_COOKIE = "fde_session"
@@ -222,7 +221,8 @@ class PlatformDirectory:
         self._service_key = service_key
         self.ttl = ttl_seconds
         self._client = client
-        self._local = local
+        # Keep the argument for existing constructors; platform mode only trusts
+        # the authenticated platform directory, including an empty Agent list.
         self._lock = threading.Lock()
         self._snapshot: tuple[float, dict] | None = None
         self._sessions: dict[str, tuple[float, Principal]] = {}
@@ -281,22 +281,46 @@ class PlatformDirectory:
         )
         if response.status_code != 200:
             raise PlatformUnavailable(f"fde-server 返回 {response.status_code}")
-        payload = response.json()
-        snapshot = {
-            "users": {raw["username"]: _principal_from_platform(raw) for raw in payload["users"]},
-            "engagements": {
-                raw["slug"]: {
-                    "title": raw.get("name") or raw["slug"],
-                    "department_code": raw.get("department_code", ""),
-                    "customer_code": raw.get("customer_code", ""),
-                    "owner": raw.get("owner", ""),
-                    "industry": raw.get("industry", ""),
-                    "stage": raw.get("stage", ""),
-                    "description": raw.get("description", ""),
-                }
-                for raw in payload["engagements"]
-            },
-        }
+        try:
+            payload = response.json()
+        except (ValueError, TypeError):
+            raise PlatformUnavailable("fde-server Agent 推荐目录响应无法解析") from None
+        agents = payload.get("agents") if isinstance(payload, dict) else None
+        if not isinstance(agents, list):
+            raise PlatformUnavailable("fde-server 缺少 Agent 推荐目录，请升级平台服务")
+        agent_snapshot = {}
+        fields = ("title", "description", "role", "owner", "department_code")
+        for raw in agents:
+            if (
+                not isinstance(raw, dict)
+                or not isinstance(raw.get("key"), str)
+                or not raw["key"]
+                or raw["key"] in agent_snapshot
+                or any(not isinstance(raw.get(field), str) for field in fields)
+            ):
+                raise PlatformUnavailable("fde-server Agent 推荐目录格式无效")
+            agent_snapshot[raw["key"]] = {field: raw[field] for field in fields}
+        try:
+            snapshot = {
+                "agents": agent_snapshot,
+                "users": {
+                    raw["username"]: _principal_from_platform(raw) for raw in payload["users"]
+                },
+                "engagements": {
+                    raw["slug"]: {
+                        "title": raw.get("name") or raw["slug"],
+                        "department_code": raw.get("department_code", ""),
+                        "customer_code": raw.get("customer_code", ""),
+                        "owner": raw.get("owner", ""),
+                        "industry": raw.get("industry", ""),
+                        "stage": raw.get("stage", ""),
+                        "description": raw.get("description", ""),
+                    }
+                    for raw in payload["engagements"]
+                },
+            }
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise PlatformUnavailable("fde-server 身份与 Agent 推荐目录格式无效") from None
         with self._lock:
             self._snapshot = (now, snapshot)
         return snapshot
@@ -314,4 +338,4 @@ class PlatformDirectory:
         return self._directory()["engagements"]
 
     def agents(self) -> dict[str, dict]:
-        return self._local.agents() if self._local is not None else {}
+        return self._directory()["agents"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 import uuid
 from dataclasses import replace
 
@@ -67,31 +68,59 @@ class OwnedDockerResources:
         self.network_created = True
         return self
 
+    @staticmethod
+    def _exact_container_error(error: str, message: str) -> bool:
+        return error.strip() in (
+            message,
+            f"Error: {message}",
+            f"Error response from daemon: {message}",
+        )
+
+    def _container_labels(self, container_id: str) -> dict | None:
+        inspected = subprocess.run(
+            ["docker", "container", "inspect", "--format", "{{json .Config.Labels}}", container_id],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if inspected.returncode:
+            if self._exact_container_error(inspected.stderr, f"No such container: {container_id}"):
+                return None
+            raise RuntimeError(inspected.stderr.strip())
+        return json.loads(inspected.stdout)
+
+    def _confirm_container_removed(self, container_id: str, removal_error: RuntimeError) -> None:
+        # --rm can already be removing the exact container after ownership was
+        # verified. Success requires confirmed absence, not a swallowed error.
+        for attempt in range(10):
+            labels = self._container_labels(container_id)
+            if labels is None:
+                return
+            if labels.get(OWNER_LABEL) != self.owner:
+                raise RuntimeError(f"容器归属已变化，拒绝清理：{container_id}")
+            if attempt < 9:
+                time.sleep(0.1)
+        raise removal_error
+
     def cleanup_containers(self) -> None:
         ids = self.command(
             ["ps", "-a", "--filter", f"label={OWNER_LABEL}={self.owner}", "--format", "{{.ID}}"]
         ).splitlines()
         for container_id in ids:
-            inspected = subprocess.run(
-                [
-                    "docker",
-                    "container",
-                    "inspect",
-                    "--format",
-                    "{{json .Config.Labels}}",
-                    container_id,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if inspected.returncode:
-                if f"No such container: {container_id}" in inspected.stderr:
-                    continue  # docker stop --rm 与列举/复核之间的精确清理竞态
-                raise RuntimeError(inspected.stderr.strip())
-            labels = json.loads(inspected.stdout)
-            if labels.get(OWNER_LABEL) == self.owner:
+            labels = self._container_labels(container_id)
+            if labels is None or labels.get(OWNER_LABEL) != self.owner:
+                continue
+            try:
                 self.command(["rm", "-f", container_id])
+            except RuntimeError as exc:
+                if not (
+                    self._exact_container_error(str(exc), f"No such container: {container_id}")
+                    or self._exact_container_error(
+                        str(exc), f"removal of container {container_id} is already in progress"
+                    )
+                ):
+                    raise
+                self._confirm_container_removed(container_id, exc)
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         try:
