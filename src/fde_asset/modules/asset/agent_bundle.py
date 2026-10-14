@@ -6,10 +6,11 @@
 
     rules/<两位序号>-<名字>.md
     skills/<名字>/SKILL.md、asset.yaml 和技能自带的其他文件
-    knowledge/cases/<名字>/README.md、asset.yaml
+    knowledge/cases|solutions|implementations|experiences/<名字>/README.md、asset.yaml
+    knowledge/sops/<名字>/SOP.md、asset.yaml
 
 名字是挂载名：平时就是资产的标识，同一个项目里撞名的那份加了负责人。
-平台现在只认规范、技能、问题案例这三类，其余类型不放进包里。
+应用不放进包里：它是拿来跑的，不是给 Agent 读的。
 
 每份包按内容算出一个版本号并存档。平台记下一次运行用的是哪个版本，重试时按版本号
 来取同一份，不会因为中途有新资产入库而变样。
@@ -32,8 +33,17 @@ from fde_asset.modules.asset.manifest import KIND_RULES
 from fde_asset.modules.asset.snapshot import _renamed, select_assets
 from fde_asset.platform.repo.ports import RepoRef
 
-#: 平台认的类型 → 包里的目录
-BUNDLE_DIR = {"Skill": "skills", "Case": "knowledge/cases"}
+#: 类型 → 包里的目录。规范单独处理（一份一个文件）；应用是拿来跑的，不给 Agent
+BUNDLE_DIR = {
+    "Skill": "skills",
+    "Case": "knowledge/cases",
+    "Solution": "knowledge/solutions",
+    "Implementation": "knowledge/implementations",
+    "Experience": "knowledge/experiences",
+    # 流程也放在 knowledge/ 下：运行镜像里校验资产目录的插件只认 rules、skills、knowledge
+    # 三个顶层目录，多出一个顶层目录 Agent 就起不来
+    "Sop": "knowledge/sops",
+}
 _RULE_NAME = re.compile(r"^[0-9]{2}-[a-z0-9]+(-[a-z0-9]+)*$")
 _REVISION = re.compile(r"^[0-9a-f]{40}$")
 #: 平台认的行业（和 fde-server 里校验用的那份一致）
@@ -130,7 +140,9 @@ def build_bundle(
     customer_code: str = "",
     target_type: str = "",
     target_id: str = "",
+    agent_key: str = "",
 ) -> AgentBundle:
+    """`agent_key`：这次干活的是哪个 Agent；给它关联过的资产和项目关联的合在一起挑。"""
     chosen = select_assets(
         engine,
         department_code=department_code,
@@ -138,6 +150,7 @@ def build_bundle(
         customer_code=customer_code,
         target_type=target_type,
         target_id=target_id,
+        also_targets=(("agent", agent_key),) if agent_key else (),
     )
     files: dict[str, bytes] = {}
     carried: list[dict[str, Any]] = []
@@ -211,3 +224,74 @@ def load_bundle(bundle_root: Path, revision: str) -> AgentBundle:
         assets=payload.get("assets", []),
         skipped=payload.get("skipped", []),
     )
+
+
+def resolve_path(bundle: AgentBundle, path: str) -> tuple[str, str] | None:
+    """资产包里的一个文件路径是哪份资产的。返回（资产编号, 事件），认不出返回 None。
+
+    事件：技能的主文件被读到算「加载」，其余都算「读取」。知识索引这类不属于任何
+    一份资产的文件不计。
+    """
+    parts = [part for part in (path or "").split("/") if part]
+    if len(parts) < 2:
+        return None
+    if parts[0] == "rules":
+        kind, mount = "Rule", parts[1].removesuffix(".md")
+        relative = KIND_RULES["Rule"].main_file
+    else:
+        directory = next(
+            (
+                (kind, len(prefix.split("/")))
+                for kind, prefix in BUNDLE_DIR.items()
+                if path.startswith(prefix + "/")
+            ),
+            None,
+        )
+        if directory is None or len(parts) <= directory[1]:
+            return None
+        kind, depth = directory
+        mount, relative = parts[depth], "/".join(parts[depth + 1 :])
+    for item in bundle.assets:
+        if item.get("kind") == kind and item.get("mount_name") == mount:
+            loaded = kind == "Skill" and relative == KIND_RULES["Skill"].main_file
+            return item["asset_id"], "loaded" if loaded else "read"
+    return None
+
+
+#: Agent 在交付摘要里写引用时用的前缀 → 资产类型。它写得不统一：有照类型写的（skill/x），
+#: 有照目录写的（rules/x、knowledge/cases/x），也有照知识索引里给的写的（company:x）
+_REF_KIND_HINTS = {
+    "rule": "Rule",
+    "rules": "Rule",
+    "skill": "Skill",
+    "skills": "Skill",
+    "case": "Case",
+    "cases": "Case",
+    "sop": "Sop",
+    "sops": "Sop",
+    "solution": "Solution",
+    "solutions": "Solution",
+    "impl": "Implementation",
+    "implementation": "Implementation",
+    "implementations": "Implementation",
+    "exp": "Experience",
+    "experience": "Experience",
+    "experiences": "Experience",
+}
+
+
+def resolve_ref(bundle: AgentBundle, ref: str) -> str | None:
+    """Agent 在交付摘要里写的一处引用，是资产包里的哪份资产。认不出返回 None。
+
+    按最后一段名字去对资产包里的挂载名；同名不同类型时看前缀像哪一类。
+    """
+    pieces = [piece for piece in re.split(r"[/:]", (ref or "").strip().strip("[]")) if piece]
+    if not pieces:
+        return None
+    name = pieces[-1].removesuffix(".md")
+    found = [item for item in bundle.assets if item.get("mount_name") == name]
+    if not found:
+        return None
+    hinted = {_REF_KIND_HINTS.get(piece.lower()) for piece in pieces[:-1]}
+    preferred = [item for item in found if item.get("kind") in hinted]
+    return (preferred or found)[0]["asset_id"]

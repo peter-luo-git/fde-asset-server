@@ -50,8 +50,8 @@ def link_asset(
                     )
                 )
             ).first()
-        if existing and existing.locked:
-            raise HTTPException(status_code=409, detail="工作项已开始会话，不能更换 SOP 步骤")
+        # 不再因为"已经开始过会话"而锁住：一个任务往往要 Agent 干好几轮，
+        # 做完一步要能换到下一步；每次执行带的是当时绑着的那一步
         if existing:
             with context.engine.begin() as conn:
                 conn.execute(
@@ -79,6 +79,34 @@ def link_asset(
             )
         )
     return {"work_item_id": work_item_id, "asset_id": asset_id, "role": role, "sop_step": step}
+
+
+@router.delete("/work-items/{work_item_id}/sop-step")
+def unlink_sop_step(
+    work_item_id: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """这个任务不再按流程走。只有项目成员（或管理员）能解。"""
+    with context.engine.begin() as conn:
+        row = conn.execute(
+            select(work_item_assets).where(
+                and_(
+                    work_item_assets.c.work_item_id == work_item_id,
+                    work_item_assets.c.role == "sop_step",
+                )
+            )
+        ).first()
+        if row is None:
+            return {"work_item_id": work_item_id, "removed": False}
+        if (
+            row.engagement_slug
+            and row.engagement_slug not in principal.engagement_slugs
+            and not principal.is_admin
+        ):
+            raise HTTPException(status_code=403, detail="不是该项目成员")
+        conn.execute(work_item_assets.delete().where(work_item_assets.c.id == row.id))
+    return {"work_item_id": work_item_id, "removed": True}
 
 
 @router.get("/work-items/{work_item_id}/assets")

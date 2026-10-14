@@ -85,7 +85,11 @@ def test_http_bundle_service_auth_and_project_visibility_are_distinct(service):
     assert bundle(service, username="chen").status_code == 422
     payload = bundle(service, **body).json()
     assert "skills/policy-date-parse/SKILL.md" in payload["files"]
-    assert all(item["name"] != "oracle-to-pg-cutover" for item in payload["assets"])
+    # 2026-10-13 起方案、实施、经验、流程也进资产包（以前只有规范、技能、问题案例）；
+    # 仍然不带的是应用——它是拿来跑的，不是给 Agent 读的
+    assert any(item["name"] == "oracle-to-pg-cutover" for item in payload["assets"])
+    assert all(item["kind"] != "Application" for item in payload["assets"])
+    assert {path.split("/")[0] for path in payload["files"]} <= {"rules", "skills", "knowledge"}
     assert "/internal/v1/agent-bundle" not in service.app.openapi()["paths"]
 
 

@@ -78,7 +78,12 @@ def select_assets(
     customer_code: str = "",
     target_type: str = "",
     target_id: str = "",
+    also_targets: tuple[tuple[str, str], ...] = (),
 ) -> Selection:
+    """`also_targets`：还要一并算上谁的关联，例如这次干活的 Agent。
+
+    关联时定下的挂载名以第一个目标（项目）的为准，后面的目标只补它没有的。
+    """
     with engine.connect() as conn:
         rows = conn.execute(
             select(assets).where(
@@ -98,25 +103,30 @@ def select_assets(
         linked_titles: dict[str, str] = {}
         #: 关联时定下的挂载名
         recorded_names: dict[str, str] = {}
-        if target_type and target_id:
+        targets = [(target_type, target_id), *also_targets]
+        for one_type, one_id in targets:
+            if not one_type or not one_id:
+                continue
             for row in conn.execute(
-                select(target_assets.c.asset_id, target_assets.c.mount_name).where(
-                    target_assets.c.target_type == target_type,
-                    target_assets.c.target_id == target_id,
+                select(target_assets.c.asset_id, target_assets.c.mount_name)
+                .where(
+                    target_assets.c.target_type == one_type,
+                    target_assets.c.target_id == one_id,
                 )
+                .order_by(target_assets.c.id)
             ):
                 linked_ids.add(row.asset_id)
                 if row.mount_name:
-                    recorded_names[row.asset_id] = row.mount_name
-            if linked_ids:
-                linked_titles = {
-                    row.asset_id: row.title
-                    for row in conn.execute(
-                        select(assets.c.asset_id, assets.c.title).where(
-                            assets.c.asset_id.in_(linked_ids)
-                        )
+                    recorded_names.setdefault(row.asset_id, row.mount_name)
+        if linked_ids:
+            linked_titles = {
+                row.asset_id: row.title
+                for row in conn.execute(
+                    select(assets.c.asset_id, assets.c.title).where(
+                        assets.c.asset_id.in_(linked_ids)
                     )
-                }
+                )
+            }
 
     in_scope = list(rows)
     in_scope.sort(key=lambda row: (_layer_order(row.scope), row.kind, row.name, row.asset_id))

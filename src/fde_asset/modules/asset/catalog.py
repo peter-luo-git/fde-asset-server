@@ -186,7 +186,12 @@ def reuse_counts(conn) -> dict[str, int]:
     ):
         source = json.loads(row.source_json or "{}")
         source_map[row.asset_id] = source.get("engagementSlug") or row.engagement_slug or ""
-    for row in conn.execute(select(asset_usages.c.asset_id, asset_usages.c.engagement_slug)):
+    # Agent 在交付摘要里自己说参考了什么（cited）另外存着，不计入复用（等级是按复用评的）
+    for row in conn.execute(
+        select(asset_usages.c.asset_id, asset_usages.c.engagement_slug).where(
+            asset_usages.c.event != "cited"
+        )
+    ):
         if row.engagement_slug and row.engagement_slug != source_map.get(row.asset_id, ""):
             counts.setdefault(row.asset_id, set()).add(row.engagement_slug)
     for row in conn.execute(
@@ -199,7 +204,9 @@ def reuse_counts(conn) -> dict[str, int]:
 
 def _usage_counts(conn) -> dict[str, int]:
     rows = conn.execute(
-        select(asset_usages.c.asset_id, func.count()).group_by(asset_usages.c.asset_id)
+        select(asset_usages.c.asset_id, func.count())
+        .where(asset_usages.c.event != "cited")
+        .group_by(asset_usages.c.asset_id)
     ).fetchall()
     return {row[0]: row[1] for row in rows}
 

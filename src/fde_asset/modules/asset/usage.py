@@ -12,7 +12,9 @@ from sqlalchemy.engine import Engine
 from fde_asset.modules.asset.grading import refresh_grades
 from fde_asset.core.db import asset_references, asset_usages, assets, record_event
 
-EVENTS = {"loaded", "read", "applied"}
+#: loaded / read：平台看到 Agent 加载了技能、读了文件；applied：用上了并且有交付（代码交付那边报）；
+#: cited：Agent 在交付摘要里自己说参考了它。cited 只是它自己说的，不计入复用和等级
+EVENTS = {"loaded", "read", "applied", "cited"}
 
 
 @dataclass

@@ -14,8 +14,10 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from sqlalchemy import select
 
 from fde_asset.api.deps import ServiceContext, get_context
-from fde_asset.core.db import asset_audiences, assets
+from fde_asset.core.db import asset_audiences, assets, work_item_assets
 from fde_asset.modules.asset import agent_bundle as agent_bundle_module
+from fde_asset.modules.asset import sop as sop_module
+from fde_asset.modules.asset import usage as usage_module
 from fde_asset.modules.asset.visibility import audience_clause
 from fde_asset.modules.asset.manifest import KIND_RULES
 from fde_asset.platform.identity import PlatformUnavailable, PrincipalNotFound
@@ -175,5 +177,100 @@ def agent_bundle(
         engagement_slug=engagement_slug,
         target_type="engagement",
         target_id=engagement_slug,
+        agent_key=str(payload.get("agent_key") or ""),
     )
     return bundle.as_payload()
+
+
+def _usage(
+    payload: dict[str, Any], revision: str, asset_id: str, event: str
+) -> usage_module.UsageInput:
+    return usage_module.UsageInput(
+        asset_id=asset_id,
+        event=event,
+        session_id=str(payload.get("session_id") or ""),
+        engagement_slug=str(payload.get("engagement_slug") or ""),
+        work_item_id=str(payload.get("work_item_id") or ""),
+        snapshot_sha=revision,
+        actor_type="agent",
+        actor_id=str(payload.get("agent_key") or ""),
+    )
+
+
+@router.post("/agent-usage", dependencies=[Depends(require_service_key)])
+def agent_usage(
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+) -> dict[str, Any]:
+    """平台报上来：某次 Agent 执行读了资产包里的哪些文件，交付摘要里又说参考了哪些。
+
+    `paths`：平台放行读取时记下的路径，客观，记为「加载」或「读取」。
+    `refs`：Agent 自己在交付摘要里写的引用，记为 cited；这是它自己说的，分开存，
+    等级不按它算。
+    平台只知道「哪个版本的资产包」，这里对回是哪份资产。同一次执行对同一份资产的
+    同一种事件只记一次。
+    """
+    revision = str(payload.get("revision") or "")
+    try:
+        bundle = agent_bundle_module.load_bundle(context.settings.bundle_dir, revision)
+    except agent_bundle_module.BundleNotFound:
+        raise HTTPException(status_code=404, detail="没有这个版本的资产包") from None
+    items: list[usage_module.UsageInput] = []
+    unknown: list[str] = []
+    for path in payload.get("paths") or []:
+        found = agent_bundle_module.resolve_path(bundle, str(path))
+        if found is None:
+            unknown.append(str(path))
+            continue
+        items.append(_usage(payload, revision, *found))
+    for ref in payload.get("refs") or []:
+        asset_id = agent_bundle_module.resolve_ref(bundle, str(ref))
+        if asset_id is None:
+            unknown.append(str(ref))
+            continue
+        items.append(_usage(payload, revision, asset_id, "cited"))
+    result = usage_module.record_usages(context.engine, items) if items else {}
+    return {**result, "ignored": unknown}
+
+
+@router.get("/work-items/{work_item_id}/sop-step", dependencies=[Depends(require_service_key)])
+def work_item_sop_step(
+    work_item_id: str, context: ServiceContext = Depends(get_context)
+) -> dict[str, Any]:
+    """这个任务现在绑在哪条流程的第几步，以及给 Agent 看的这一步的说明。
+
+    平台在生成给 Agent 的任务说明时来取。没绑、流程已下架、步骤不存在，都返回 found=false。
+    """
+    with context.engine.connect() as conn:
+        row = conn.execute(
+            select(work_item_assets).where(
+                work_item_assets.c.work_item_id == work_item_id,
+                work_item_assets.c.role == "sop_step",
+            )
+        ).first()
+        asset = (
+            conn.execute(
+                select(assets).where(
+                    assets.c.asset_id == row.asset_id,
+                    assets.c.deleted_at.is_(None),
+                    assets.c.valid.is_(True),
+                    assets.c.lifecycle.notin_(["deprecated", "archived", "draft"]),
+                )
+            ).first()
+            if row is not None
+            else None
+        )
+    if row is None or asset is None:
+        return {"found": False, "work_item_id": work_item_id}
+    summary = sop_module.step_summary(context.engine, row.asset_id, row.sop_step or 1)
+    if not summary.get("found"):
+        return {"found": False, "work_item_id": work_item_id}
+    return {
+        "found": True,
+        "work_item_id": work_item_id,
+        "asset_id": row.asset_id,
+        "title": asset.title,
+        "step": summary["step"],
+        "total_steps": summary["total_steps"],
+        "prompt_md": summary["prompt_md"],
+    }

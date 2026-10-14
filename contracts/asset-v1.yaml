@@ -3204,6 +3204,50 @@ paths:
       summary: Link Asset
       tags:
       - work-items
+  /api/v1/work-items/{work_item_id}/sop-step:
+    delete:
+      description: 这个任务不再按流程走。只有项目成员（或管理员）能解。
+      operationId: unlink_sop_step_api_v1_work_items__work_item_id__sop_step_delete
+      parameters:
+      - in: path
+        name: work_item_id
+        required: true
+        schema:
+          title: Work Item Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Unlink Sop Step Api V1 Work Items  Work Item Id  Sop Step Delete
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Unlink Sop Step
+      tags:
+      - work-items
   /api/v1/work-items/{work_item_id}/sop-step-summary:
     get:
       description: 给 orchestrator 拼提示词用：只返回当前步骤的摘要与检查点。
