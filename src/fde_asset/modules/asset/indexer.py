@@ -17,6 +17,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.engine import Engine
 
 from fde_asset.core.db import (
+    lock_index,
     asset_audiences,
     asset_index_findings,
     asset_relations,
@@ -169,6 +170,7 @@ def _index_repository(
     now = datetime.now(timezone.utc)
 
     with engine.begin() as conn:
+        lock_index(conn)
         previous = {
             row.asset_id: row
             for row in conn.execute(
@@ -432,11 +434,13 @@ def finish_index(engine: Engine, *, owner_of: Any = None) -> None:
     只索引了一个仓库（评审通过、下架恢复）之后也要调它，否则新入库的资产没有版本记录，
     订阅的人收不到「新资产」通知。`owner_of(类型, 标识)` 给出项目或 Agent 现在的负责人。
     """
-    # 等级由复用情况决定，不取 asset.yaml 里写的值；入库后统一重算一次
-    refresh_grades(engine)
-    # 引用在写的时候对方可能还没入库，这里统一解析，并重建自动关系
-    auto_link(engine)
-    _snapshot_and_notify(engine, owner_of)
+    # 和建索引用同一把锁：收尾也要改 assets 和 asset_relations，和另一处正在建的索引交错就会死锁
+    with _INDEX_LOCK:
+        # 等级由复用情况决定，不取 asset.yaml 里写的值；入库后统一重算一次
+        refresh_grades(engine)
+        # 引用在写的时候对方可能还没入库，这里统一解析，并重建自动关系
+        auto_link(engine)
+        _snapshot_and_notify(engine, owner_of)
     # 资产变了，之前算出来的推荐就不作数了
     recommendation_cache.invalidate()
 
