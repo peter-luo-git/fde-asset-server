@@ -122,6 +122,27 @@ def test_decline_requires_a_reason(client) -> None:
     assert ok.json()["status"] == "declined"
 
 
+def test_only_the_target_owner_decides(client) -> None:
+    """接收会写关联，推荐人自己、不相干的人都不能替负责人接收或忽略。"""
+    target = {"target_type": "engagement", "target_id": "claims-recon"}
+    items = as_user(client, "wang").post("/api/v1/recommend/compute", json=target).json()["items"][:1]
+    sent = as_user(client, "wang").post("/api/v1/recommend/send", json={**target, "items": items})
+    assert sent.status_code == 200, sent.text
+    recommendation = as_user(client, "sun").get("/api/v1/recommend/inbox").json()["items"][0]
+    url = f"/api/v1/recommend/{recommendation['recommendation_id']}/decide"
+
+    for outsider in ("wang", "zhao"):
+        assert as_user(client, outsider).post(url, json={"accept": True}).status_code == 403
+        assert (
+            as_user(client, outsider).post(url, json={"accept": False, "note": "不要"}).status_code
+            == 403
+        )
+    linked = as_user(client, "sun").get("/api/v1/recommend/linked", params=target).json()["items"]
+    assert recommendation["asset_id"] not in {item["asset_id"] for item in linked}
+
+    assert as_user(client, "sun").post(url, json={"accept": True}).json()["status"] == "accepted"
+
+
 def test_resend_updates_instead_of_duplicating(client) -> None:
     items = _compute(client, "admin", "engagement", "policy-import")[:2]
     payload = {"target_type": "engagement", "target_id": "policy-import", "items": items}

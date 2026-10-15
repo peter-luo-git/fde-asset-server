@@ -365,6 +365,19 @@ def inbox(engine: Engine, principal: Principal) -> list[dict[str, Any]]:
     return _rows_to_items(engine, principal, rows)
 
 
+def recipient(engine: Engine, recommendation_id: str) -> dict[str, str] | None:
+    """这条推荐推给了谁：目标和推送时记下的负责人。用来判断谁能接收或忽略。"""
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(
+                asset_recommendations.c.target_type,
+                asset_recommendations.c.target_id,
+                asset_recommendations.c.target_owner,
+            ).where(asset_recommendations.c.recommendation_id == recommendation_id)
+        ).first()
+    return dict(row._mapping) if row is not None else None
+
+
 def decide(
     engine: Engine,
     principal: Principal,

@@ -61,6 +61,19 @@ def _may_manage(principal: Principal, target: service.Target) -> bool:
     )
 
 
+def _may_decide(context: ServiceContext, principal: Principal, sent_to: dict[str, str]) -> bool:
+    """推送时记下的负责人，或者目标现在的负责人（项目会换负责人）。"""
+    if principal.is_admin or sent_to["target_owner"] == principal.user_id:
+        return True
+    try:
+        target = service.target_from_directory(
+            context.directory, sent_to["target_type"], sent_to["target_id"]
+        )
+    except Exception:  # noqa: BLE001 - 目标已经不在名单里，只认推送时的负责人
+        return False
+    return _owns(principal, target)
+
+
 @router.get("/recommend/targets")
 def list_targets(
     context: ServiceContext = Depends(get_context),
@@ -272,6 +285,10 @@ def decide(
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
+    # 接收就会写关联（目标是 Agent 时等于改它的资产包），只能由目标负责人或管理员来定
+    sent_to = service.recipient(context.engine, recommendation_id)
+    if sent_to is not None and not _may_decide(context, principal, sent_to):
+        raise HTTPException(status_code=403, detail="只有推荐对象的负责人或管理员能接收或忽略")
     try:
         result = service.decide(
             context.engine,
