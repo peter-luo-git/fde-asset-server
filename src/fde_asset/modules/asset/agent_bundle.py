@@ -14,6 +14,9 @@
 
 每份包按内容算出一个版本号并存档。平台记下一次运行用的是哪个版本，重试时按版本号
 来取同一份，不会因为中途有新资产入库而变样。
+
+平台每轮对话都来要一次。带上上次拿到的版本号时，先只查库、看仓库提交（十几毫秒），
+和上次拼包时一样就回一句「没变」，不再逐个读文件（文件越多越慢）。见 `unchanged`。
 """
 
 from __future__ import annotations
@@ -22,6 +25,8 @@ import base64
 import hashlib
 import json
 import re
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -30,7 +35,7 @@ import yaml
 from sqlalchemy.engine import Engine
 
 from fde_asset.modules.asset.manifest import KIND_RULES
-from fde_asset.modules.asset.snapshot import _renamed, select_assets
+from fde_asset.modules.asset.snapshot import Selection, _renamed, select_assets
 from fde_asset.platform.repo.ports import RepoRef
 
 #: 类型 → 包里的目录。规范单独处理（一份一个文件）；应用是拿来跑的，不给 Agent
@@ -66,8 +71,71 @@ _DROP_METADATA = ("id",)
 _DROP_SPEC = ("visibility", "attachments")
 
 
+#: 版本键 → 拼出来的版本号。键由这次选中了哪些资产（整行）、各叫什么挂载名、
+#: 仓库现在的提交算出：这些都没变，拼出来的包就一模一样。只放内存，重启后第一次照常拼
+_KNOWN: OrderedDict[str, str] = OrderedDict()
+_KNOWN_LIMIT = 1024
+_KNOWN_LOCK = threading.Lock()
+#: 拼包的规则（目录形状、改写 asset.yaml 的方式）变了就加一，旧的键全部作废
+_KEY_FORMAT = 1
+
+
 class BundleNotFound(LookupError):
     pass
+
+
+def _heads(repo_port: Any, chosen: Selection) -> dict[str, str]:
+    return {
+        name: repo_port.get_head(RepoRef(name=name))
+        for name in sorted({row.repo for row in chosen.rows})
+    }
+
+
+def _selection_key(chosen: Selection, heads: dict[str, str], request: dict[str, str]) -> str:
+    material = {
+        "format": _KEY_FORMAT,
+        "request": request,
+        "rows": [dict(row._mapping) for row in chosen.rows],
+        "mounted": chosen.mounted,
+        "not_carried": chosen.not_carried,
+        "heads": heads,
+    }
+    encoded = json.dumps(material, sort_keys=True, default=str, ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def unchanged(engine: Engine, repo_port: Any, known_revision: str, **request: str) -> bool:
+    """平台手上那份 `known_revision` 是不是就是现在该带的：只查库和仓库提交，不读文件。
+
+    拿不准（没拼过、服务重启过、选中的资产或仓库提交有任何变化）一律算变了，照常拼一份。
+    """
+    if not _REVISION.match(known_revision or ""):
+        return False
+    chosen = _select(engine, request)
+    key = _selection_key(chosen, _heads(repo_port, chosen), request)
+    with _KNOWN_LOCK:
+        return _KNOWN.get(key) == known_revision
+
+
+def _select(engine: Engine, request: dict[str, str]) -> Selection:
+    agent_key = request.get("agent_key", "")
+    return select_assets(
+        engine,
+        department_code=request.get("department_code", ""),
+        engagement_slug=request.get("engagement_slug", ""),
+        customer_code=request.get("customer_code", ""),
+        target_type=request.get("target_type", ""),
+        target_id=request.get("target_id", ""),
+        also_targets=(("agent", agent_key),) if agent_key else (),
+    )
+
+
+def _remember(key: str, revision: str) -> None:
+    with _KNOWN_LOCK:
+        _KNOWN[key] = revision
+        _KNOWN.move_to_end(key)
+        while len(_KNOWN) > _KNOWN_LIMIT:
+            _KNOWN.popitem(last=False)
 
 
 @dataclass
@@ -143,15 +211,16 @@ def build_bundle(
     agent_key: str = "",
 ) -> AgentBundle:
     """`agent_key`：这次干活的是哪个 Agent；给它关联过的资产和项目关联的合在一起挑。"""
-    chosen = select_assets(
-        engine,
-        department_code=department_code,
-        engagement_slug=engagement_slug,
-        customer_code=customer_code,
-        target_type=target_type,
-        target_id=target_id,
-        also_targets=(("agent", agent_key),) if agent_key else (),
-    )
+    request = {
+        "department_code": department_code,
+        "engagement_slug": engagement_slug,
+        "customer_code": customer_code,
+        "target_type": target_type,
+        "target_id": target_id,
+        "agent_key": agent_key,
+    }
+    chosen = _select(engine, request)
+    heads = _heads(repo_port, chosen)
     files: dict[str, bytes] = {}
     carried: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = list(chosen.not_carried)
@@ -197,6 +266,9 @@ def build_bundle(
         digest.update(hashlib.sha256(files[path]).digest())
     bundle = AgentBundle(revision=digest.hexdigest(), files=files, assets=carried, skipped=skipped)
     _store(Path(bundle_root), bundle)
+    # 读文件期间仓库有新提交，读到的可能新旧混杂，这一份就不记，下次照常拼
+    if _heads(repo_port, chosen) == heads:
+        _remember(_selection_key(chosen, heads, request), bundle.revision)
     return bundle
 
 

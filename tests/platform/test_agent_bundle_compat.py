@@ -6,9 +6,11 @@ import re
 
 from fastapi.testclient import TestClient
 import pytest
+from sqlalchemy import select
 import yaml
 
 from fde_asset.api.app import create_app
+from fde_asset.core.db import assets, target_assets
 from fde_asset.modules.asset.indexer import index_all, legacy_asset_id
 from fde_asset.modules.asset.legacy_layout import convert_legacy
 from fde_asset.platform.files import FileStore
@@ -91,6 +93,78 @@ def test_http_bundle_service_auth_and_project_visibility_are_distinct(service):
     assert all(item["kind"] != "Application" for item in payload["assets"])
     assert {path.split("/")[0] for path in payload["files"]} <= {"rules", "skills", "knowledge"}
     assert "/internal/v1/agent-bundle" not in service.app.openapi()["paths"]
+
+
+def test_known_revision_skips_reassembly_until_selection_or_content_changes(service):
+    """平台每轮带上上次的版本号：没变只回一句没变；内容、关联、版本号任何一样不对都给完整的。"""
+    body = {"username": "chen", "engagement_slug": "policy-import", "agent_key": "coder-default"}
+    first = bundle(service, **body).json()
+    same = bundle(service, **body, known_revision=first["revision"]).json()
+    assert same == {"revision": first["revision"], "unchanged": True}
+
+    # 乱填的、别人的版本号：照常拼一份完整的
+    for wrong in ("0" * 40, "not-a-revision"):
+        full = bundle(service, **body, known_revision=wrong).json()
+        assert full["revision"] == first["revision"] and full["files"] == first["files"]
+    # 换一个 Agent，同一个版本号也不能当成没变
+    other = bundle(
+        service,
+        username="chen",
+        engagement_slug="policy-import",
+        agent_key="poc-rapid",
+        known_revision=first["revision"],
+    ).json()
+    assert "files" in other
+    # 不在项目里的人带上版本号也照样拒绝
+    assert (
+        bundle(
+            service,
+            username="zhao",
+            engagement_slug="policy-import",
+            known_revision=first["revision"],
+        ).status_code
+        == 403
+    )
+
+    # 给这个 Agent 关联一份技能：选中的资产变了
+    ctx = service.app.state.context
+    with ctx.engine.begin() as conn:
+        asset_id = conn.execute(
+            select(assets.c.asset_id).where(assets.c.name == "policy-import-poc-retro")
+        ).scalar_one()
+        conn.execute(
+            target_assets.insert().values(
+                target_type="agent",
+                target_id="coder-default",
+                asset_id=asset_id,
+                source="manual",
+                created_by="admin",
+            )
+        )
+    linked = bundle(service, **body, known_revision=first["revision"]).json()
+    assert "files" in linked and linked["revision"] != first["revision"]
+    assert (
+        bundle(service, **body, known_revision=linked["revision"]).json().get("unchanged") is True
+    )
+
+    # 绕过资产中心直接改仓库里的文件（库里的记录没变）：仓库提交变了，也要给新的
+    catalog = service.get(
+        "/internal/v1/agent-catalog",
+        params={"username": "chen"},
+        headers={"X-FDE-Service-Key": KEY},
+    ).json()["items"]
+    rule = next(item for item in catalog if item["name"] == "00-security-redlines")
+    ctx.repo_port.commit_files(
+        RepoRef(name=rule["repo"]),
+        "main",
+        {rule["path"] + "/RULE.md": b"# Changed outside the index\n"},
+        "test: change without reindex",
+    )
+    changed = bundle(service, **body, known_revision=linked["revision"]).json()
+    assert changed["revision"] != linked["revision"]
+    assert base64.b64decode(changed["files"]["rules/00-security-redlines.md"]) == (
+        b"# Changed outside the index\n"
+    )
 
 
 def test_legacy_conversion_preserves_rule_bytes_id_visibility_and_attachment_storage(tmp_path):

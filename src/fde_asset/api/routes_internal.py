@@ -140,6 +140,8 @@ def agent_bundle(
 
     给了 `revision` 就原样返回以前拼好的那一份（平台重试同一次运行时用）；
     没给就按现在的资产和关联关系新拼一份。
+    带了 `known_revision`（平台上一轮拿到的版本号）且现在该带的还是这一份，只回
+    `{"revision": ..., "unchanged": true}`，不带文件。身份和项目成员照常每次核对。
     """
     revision = str(payload.get("revision") or "")
     if revision:
@@ -166,18 +168,21 @@ def agent_bundle(
     if membership is None and not principal.is_admin:
         raise HTTPException(status_code=403, detail="这个用户不在这个项目里")
     project = context.directory.engagements().get(engagement_slug, {})
-    bundle = agent_bundle_module.build_bundle(
-        context.engine,
-        context.repo_port,
-        bundle_root=context.settings.bundle_dir,
+    request = {
         # 项目归哪个部门、哪个客户，决定了部门级和客户级资产带不带
-        department_code=str(project.get("department_code", ""))
+        "department_code": str(project.get("department_code", ""))
         or (membership.department_code if membership else ""),
-        customer_code=membership.customer_code if membership else "",
-        engagement_slug=engagement_slug,
-        target_type="engagement",
-        target_id=engagement_slug,
-        agent_key=str(payload.get("agent_key") or ""),
+        "customer_code": membership.customer_code if membership else "",
+        "engagement_slug": engagement_slug,
+        "target_type": "engagement",
+        "target_id": engagement_slug,
+        "agent_key": str(payload.get("agent_key") or ""),
+    }
+    known = str(payload.get("known_revision") or "")
+    if known and agent_bundle_module.unchanged(context.engine, context.repo_port, known, **request):
+        return {"revision": known, "unchanged": True}
+    bundle = agent_bundle_module.build_bundle(
+        context.engine, context.repo_port, bundle_root=context.settings.bundle_dir, **request
     )
     return bundle.as_payload()
 
