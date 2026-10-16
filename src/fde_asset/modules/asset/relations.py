@@ -17,7 +17,7 @@ from typing import Any
 from sqlalchemy import and_, delete, insert, or_, select
 from sqlalchemy.engine import Engine
 
-from fde_asset.core.db import asset_relations, assets
+from fde_asset.core.db import asset_relations, assets, lock_index
 from fde_asset.modules.asset.visibility import visibility_clause
 from fde_asset.platform.identity import Principal
 
@@ -43,29 +43,34 @@ RELATION_LABEL = {
 def resolve_targets(engine: Engine) -> int:
     """把 to_ref（kind/name）解析成 to_asset_id。返回补上的条数。"""
     with engine.begin() as conn:
-        by_ref = {
-            f"{row.kind.lower()}/{row.name}": row.asset_id
-            for row in conn.execute(
-                select(assets.c.asset_id, assets.c.kind, assets.c.name).where(
-                    assets.c.deleted_at.is_(None)
-                )
+        lock_index(conn)
+        return _resolve_targets(conn)
+
+
+def _resolve_targets(conn) -> int:
+    by_ref = {
+        f"{row.kind.lower()}/{row.name}": row.asset_id
+        for row in conn.execute(
+            select(assets.c.asset_id, assets.c.kind, assets.c.name).where(
+                assets.c.deleted_at.is_(None)
             )
-        }
-        rows = conn.execute(
-            select(asset_relations).where(asset_relations.c.to_asset_id.is_(None))
-        ).fetchall()
-        filled = 0
-        for row in rows:
-            ref = (row.to_ref or "").strip().strip("[]")
-            target = by_ref.get(ref.lower())
-            if target is None:
-                continue
-            conn.execute(
-                asset_relations.update()
-                .where(asset_relations.c.id == row.id)
-                .values(to_asset_id=target)
-            )
-            filled += 1
+        )
+    }
+    rows = conn.execute(
+        select(asset_relations).where(asset_relations.c.to_asset_id.is_(None))
+    ).fetchall()
+    filled = 0
+    for row in rows:
+        ref = (row.to_ref or "").strip().strip("[]")
+        target = by_ref.get(ref.lower())
+        if target is None:
+            continue
+        conn.execute(
+            asset_relations.update()
+            .where(asset_relations.c.id == row.id)
+            .values(to_asset_id=target)
+        )
+        filled += 1
     return filled
 
 
@@ -79,6 +84,7 @@ def _engagement_of(row: Any) -> str:
 def auto_link(engine: Engine) -> dict[str, int]:
     """自动建链。先清掉上一轮的自动关系，再重建，所以可以反复跑。"""
     with engine.begin() as conn:
+        lock_index(conn)
         conn.execute(delete(asset_relations).where(asset_relations.c.source == "auto"))
         rows = conn.execute(
             select(assets).where(assets.c.deleted_at.is_(None), assets.c.valid.is_(True))
@@ -125,7 +131,8 @@ def auto_link(engine: Engine) -> dict[str, int]:
                         )
                     )
                     app_links += 1
-    filled = resolve_targets(engine)
+        # 同一个事务里解析引用：分成两个事务，中间就可能插进别处的索引
+        filled = _resolve_targets(conn)
     return {"same_engagement": created, "produced": app_links, "resolved": filled}
 
 

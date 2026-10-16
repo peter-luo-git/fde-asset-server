@@ -424,6 +424,21 @@ def init_db(engine: Engine) -> None:
     drop_legacy_asset_constraint(engine)
 
 
+#: 建索引、重算等级、重建关系共用的 PostgreSQL 事务锁编号（随便取的固定值，"FDEAIDX"）
+INDEX_LOCK_KEY = 0x46444541494458
+
+
+def lock_index(conn) -> None:
+    """在当前事务里拿索引锁，事务结束自动释放。
+
+    评审通过、调整可见范围的请求会就地重建索引，asset-worker 发现仓库有新提交也会重建；
+    两边同时改 assets、asset_relations 的同一批行，顺序不同就会死锁。拿同一把锁让它们排队。
+    SQLite 本来就只有一个写者，不需要。
+    """
+    if conn.dialect.name == "postgresql":
+        conn.exec_driver_sql(f"SELECT pg_advisory_xact_lock({INDEX_LOCK_KEY})")
+
+
 def drop_legacy_asset_constraint(engine: Engine) -> bool:
     """旧库的资产表带着「同一层级内同类型不重名」的唯一约束，去掉它。返回这次有没有动。
 

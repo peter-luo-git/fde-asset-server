@@ -125,7 +125,9 @@ def test_decline_requires_a_reason(client) -> None:
 def test_only_the_target_owner_decides(client) -> None:
     """接收会写关联，推荐人自己、不相干的人都不能替负责人接收或忽略。"""
     target = {"target_type": "engagement", "target_id": "claims-recon"}
-    items = as_user(client, "wang").post("/api/v1/recommend/compute", json=target).json()["items"][:1]
+    items = (
+        as_user(client, "wang").post("/api/v1/recommend/compute", json=target).json()["items"][:1]
+    )
     sent = as_user(client, "wang").post("/api/v1/recommend/send", json={**target, "items": items})
     assert sent.status_code == 200, sent.text
     recommendation = as_user(client, "sun").get("/api/v1/recommend/inbox").json()["items"][0]

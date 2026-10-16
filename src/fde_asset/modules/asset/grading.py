@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
-from fde_asset.core.db import assets
+from fde_asset.core.db import assets, lock_index
 
 BRONZE = "bronze"
 SILVER = "silver"
@@ -58,6 +58,7 @@ def refresh_grades(engine: Engine, *, now: datetime | None = None) -> dict[str, 
     moment = now or datetime.now(timezone.utc)
     tally = {BRONZE: 0, SILVER: 0, GOLD: 0}
     with engine.begin() as conn:
+        lock_index(conn)
         counts = reuse_counts(conn)
         rows = conn.execute(
             select(assets.c.asset_id, assets.c.quality, assets.c.updated_at).where(
