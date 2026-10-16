@@ -5,10 +5,9 @@
 
 带哪些资产分两种情况（`selection`）：
 
-- **linked**：给了目标（项目或 Agent），而且它关联过技能或知识。这时上层（公司、部门、客户）的
-  技能和知识**只带关联过的**——负责人挑过了，就按他挑的来，不再把整层都塞给 Agent。
-- **scope**：没给目标，或者目标还没关联任何技能和知识。退回老办法，作用域内的全带上，
-  免得新项目什么都没有。
+- **linked**：给了目标（项目或 Agent）。上层（公司、部门、客户）的技能和知识**只带关联过的**；
+  一份都没关联，就一份都不带——没有关联就是没有，不拿整层来兜底（2026-10-16 起）。
+- **scope**：没给目标，只是看一个作用域里有什么（不是给哪个 Agent 的），作用域内的全列出来。
 
 不管哪种情况：规范全带（红线不挑场景）；流程全带（分层继承要用到上层）；
 项目自己沉淀的全带（那本来就是它自己的东西）。
@@ -47,7 +46,7 @@ class SnapshotResult:
     index_bytes: int = 0
     index_truncated: bool = False
     skipped: list[dict[str, Any]] = field(default_factory=list)
-    #: linked = 按目标关联的资产挑；scope = 作用域内全带
+    #: linked = 给了目标，按它关联的资产挑；scope = 没给目标，作用域内全列出来
     selection: str = "scope"
     #: 快照里有几份是因为被关联才带上的
     linked: int = 0
@@ -64,7 +63,7 @@ class Selection:
     rows: list[Any]
     #: {资产编号: 挂载名}，同类型内不重名
     mounted: dict[str, str]
-    #: linked = 按目标关联的资产挑；scope = 可见范围内全带
+    #: linked = 给了目标，按它关联的资产挑；scope = 没给目标，可见范围内全列出来
     selection: str
     linked: int
     not_carried: list[dict[str, Any]]
@@ -131,13 +130,13 @@ def select_assets(
     in_scope = list(rows)
     in_scope.sort(key=lambda row: (_layer_order(row.scope), row.kind, row.name, row.asset_id))
 
-    # 关联过技能或知识，就按关联的来；一份都没关联过，退回作用域内全带
+    # 给了目标就只按关联的来，没关联的一份都不带；没给目标才是看整个作用域
     picked = {
         row.asset_id
         for row in in_scope
         if row.asset_id in linked_ids and row.kind in PICKABLE_KINDS
     }
-    selection = "linked" if picked else "scope"
+    selection = "linked" if any(one_type and one_id for one_type, one_id in targets) else "scope"
     selected = [
         row
         for row in in_scope

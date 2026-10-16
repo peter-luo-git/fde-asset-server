@@ -32,7 +32,26 @@ def bundle(client, **body):
     return client.post("/internal/v1/agent-bundle", json=body, headers={"X-FDE-Service-Key": KEY})
 
 
+def _link(service, *names):
+    ctx = service.app.state.context
+    with ctx.engine.begin() as conn:
+        for name in names:
+            asset_id = conn.execute(
+                select(assets.c.asset_id).where(assets.c.name == name)
+            ).scalar_one()
+            conn.execute(
+                target_assets.insert().values(
+                    target_type="engagement",
+                    target_id="policy-import",
+                    asset_id=asset_id,
+                    source="manual",
+                    created_by="admin",
+                )
+            )
+
+
 def test_http_bundle_preserves_rules_ids_and_pinned_revision_after_content_changes(service):
+    _link(service, "insurance-policy-import")
     response = bundle(service, username="chen", engagement_slug="policy-import")
     assert response.status_code == 200
     payload = response.json()
@@ -74,6 +93,7 @@ def test_http_bundle_preserves_rules_ids_and_pinned_revision_after_content_chang
 
 
 def test_http_bundle_service_auth_and_project_visibility_are_distinct(service):
+    _link(service, "oracle-to-pg-cutover")
     body = {"username": "chen", "engagement_slug": "policy-import"}
     assert service.post("/internal/v1/agent-bundle", json=body).status_code == 404
     assert (

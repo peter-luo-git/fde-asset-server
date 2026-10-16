@@ -82,7 +82,7 @@
 | X-14 | 客户级草稿：带客户代号、进客户仓库、按客户判评审权（迁移 `0007_candidate_customer`） | **done** | `pytest -q tests/platform/test_customer_drafts.py` | `harvest/service.create_draft()`、`api/routes_harvest.py` |
 | X-15 | 推荐理由按需生成，`rerank_enabled` 默认开 | **done** | `pytest -q tests/recommend/test_explain.py` | `POST /api/v1/recommend/explain`、`rerank.explain()` |
 | X-16 | 工作台「粘贴一段文字」 | **done** | `npm run test:asset` | fde-web `pages/AssetWorkbenchPage.tsx` |
-| X-17 | 快照跟着关联走：目标关联过技能或知识就只带关联的，否则作用域内全带；纳入客户级资产 | **done** | `pytest -q tests/asset/test_snapshot_builder.py` | `modules/asset/snapshot.py`、`POST /api/v1/snapshots` |
+| X-17 | 快照跟着关联走：目标关联过技能或知识就只带关联的，~~否则作用域内全带~~（2026-10-16 取消：给了目标一律按关联，没关联就不带）；纳入客户级资产 | **done** | `pytest -q tests/asset/test_snapshot_builder.py` | `modules/asset/snapshot.py`、`POST /api/v1/snapshots` |
 | X-18 | 部门视图区分自己负责的与同事负责的；部门主管不能替同事直接关联 | **done** | `pytest -q tests/recommend` | `api/routes_recommend.py` 的 `_owns()` |
 | X-19 | 订阅与通知补齐：订阅选项接口、新资产入库通知、通知发给现任负责人、版本记录按内容去重 | **done** | `pytest -q tests/asset/test_notify_gaps.py tests/asset/test_notify.py` | `notify/service.py`、`indexer.finish_index()`、`GET /api/v1/subscriptions/options` |
 | X-20 | 已评审记录可回看：`status=decided`、我评过的、入库后的资产链接 | **done** | `pytest -q tests/asset/test_small_gaps.py` | `api/routes_harvest.py` 的 `list_reviews()` |
