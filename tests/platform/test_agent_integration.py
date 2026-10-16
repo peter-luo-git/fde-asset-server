@@ -143,15 +143,16 @@ def test_work_item_follows_a_procedure_step_by_step(seeded) -> None:
         context = service.app.state.context
         sop = _asset_id(context, "delivery-standard")
         path = "/internal/v1/work-items/w-9/sop-step"
+        caller = {"username": "chen", "engagement_slug": "policy-import"}
         assert service.get(path).status_code == 404, "要凭服务密钥"
-        assert service.get(path, headers=HEADERS).json()["found"] is False
+        assert service.get(path, params=caller, headers=HEADERS).json()["found"] is False
 
         bound = service.post(
             "/api/v1/work-items/w-9/assets",
             json={"asset_id": sop, "role": "sop_step", "sop_step": 1},
         )
         assert bound.status_code == 200, bound.text
-        first = service.get(path, headers=HEADERS).json()
+        first = service.get(path, params=caller, headers=HEADERS).json()
         assert first["found"] is True and first["step"] == 1 and first["prompt_md"]
 
         # 做完一步换到下一步：不再因为"已经开始过"而锁住
@@ -161,11 +162,11 @@ def test_work_item_follows_a_procedure_step_by_step(seeded) -> None:
             json={"asset_id": sop, "role": "sop_step", "sop_step": 2},
         )
         assert moved.status_code == 200, moved.text
-        second = service.get(path, headers=HEADERS).json()
+        second = service.get(path, params=caller, headers=HEADERS).json()
         assert second["step"] == 2 and second["prompt_md"] != first["prompt_md"]
 
         assert service.delete("/api/v1/work-items/w-9/sop-step").json()["removed"] is True
-        assert service.get(path, headers=HEADERS).json()["found"] is False
+        assert service.get(path, params=caller, headers=HEADERS).json()["found"] is False
 
 
 def test_references_in_a_delivery_summary_are_kept_apart_from_reuse(seeded) -> None:

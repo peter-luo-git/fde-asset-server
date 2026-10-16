@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import quote
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,14 @@ class Principal:
 
 
 class PrincipalNotFound(LookupError):
+    pass
+
+
+class WorkItemNotFound(LookupError):
+    pass
+
+
+class WorkItemForbidden(PermissionError):
     pass
 
 
@@ -113,6 +122,25 @@ class LocalDirectory:
     def agents(self) -> dict[str, dict]:
         """Agent 清单（按预设 key 索引），同上。"""
         return self._load().get("agents", {})
+
+    def work_item_access(self, work_item_id: str, username: str, *, write: bool = False) -> str:
+        """开发模式也只接受目录显式登记的任务，并在每次请求重新检查成员关系。"""
+        data = self._load()
+        item = data.get("work_items", {}).get(work_item_id)
+        slug = item.get("engagement_slug") if isinstance(item, dict) else None
+        if not isinstance(slug, str) or not slug or slug not in data.get("engagements", {}):
+            raise WorkItemNotFound(work_item_id)
+        try:
+            principal = self.resolve(username)
+        except PrincipalNotFound:
+            raise WorkItemNotFound(work_item_id) from None
+        member = next((m for m in principal.memberships if m.engagement_slug == slug), None)
+        if not principal.is_admin:
+            if member is None:
+                raise WorkItemNotFound(work_item_id)
+            if write and member.role not in {"owner", "member"}:
+                raise WorkItemForbidden(work_item_id)
+        return slug
 
     def write(self, data: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -239,6 +267,35 @@ class PlatformDirectory:
             return self._http().get(self.base_url + path, **kwargs)
         except Exception as exc:  # noqa: BLE001 - 网络层的各种失败都算「问不到」
             raise PlatformUnavailable(str(exc)) from None
+
+    def work_item_access(self, work_item_id: str, username: str, *, write: bool = False) -> str:
+        """不缓存任务权限：任务归属、成员撤权和读写限制每次由平台重新核验。"""
+        if not self._service_key:
+            raise PlatformUnavailable("没有配置和 fde-server 共用的服务密钥")
+        response = self._get(
+            "/internal/identity/work-items/" + quote(work_item_id, safe="") + "/access",
+            headers={"X-FDE-Service-Key": self._service_key},
+            params={"username": username, "write": str(write).lower()},
+        )
+        if response.status_code in (401, 404):
+            raise WorkItemNotFound(work_item_id)
+        if response.status_code == 403:
+            raise WorkItemForbidden(work_item_id)
+        if response.status_code != 200:
+            raise PlatformUnavailable("暂时无法确认任务访问权限")
+        try:
+            payload = response.json()
+            slug = payload["engagement_slug"]
+            if (
+                payload["work_item_id"] != work_item_id
+                or not isinstance(slug, str)
+                or not slug.strip()
+                or len(slug) > 120
+            ):
+                raise ValueError
+        except (KeyError, TypeError, ValueError):
+            raise PlatformUnavailable("平台任务权限响应格式无效") from None
+        return slug
 
     # ---- 这次请求是谁 ----
 

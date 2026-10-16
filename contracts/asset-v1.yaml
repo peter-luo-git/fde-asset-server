@@ -35,6 +35,37 @@ components:
       - type
       title: ValidationError
       type: object
+    WorkItemAssetLink:
+      additionalProperties: false
+      properties:
+        asset_id:
+          maxLength: 64
+          minLength: 1
+          title: Asset Id
+          type: string
+        engagement_slug:
+          default: ''
+          description: 可省略；如提供，必须与平台核验的任务所属项目一致。
+          maxLength: 120
+          title: Engagement Slug
+          type: string
+        role:
+          default: reference
+          enum:
+          - reference
+          - sop_step
+          title: Role
+          type: string
+        sop_step:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: SOP 关联必须填写实际存在的整数步骤。
+          title: Sop Step
+      required:
+      - asset_id
+      title: WorkItemAssetLink
+      type: object
 info:
   title: FDE 资产中心服务
   version: 0.1.0
@@ -3184,8 +3215,7 @@ paths:
         content:
           application/json:
             schema:
-              title: Payload
-              type: object
+              $ref: '#/components/schemas/WorkItemAssetLink'
         required: true
       responses:
         '200':

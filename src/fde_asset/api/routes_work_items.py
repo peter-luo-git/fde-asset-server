@@ -8,6 +8,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import and_, select, update
 
 from fde_asset.api.deps import ServiceContext, get_context, get_principal
+from fde_asset.api.work_item_models import WorkItemAssetLink
+from fde_asset.api.work_item_access import require_binding_project, require_work_item
 from fde_asset.core.db import work_item_assets
 from fde_asset.modules.asset import catalog, sop
 from fde_asset.platform.identity import Principal
@@ -18,29 +20,27 @@ router = APIRouter(prefix="/api/v1", tags=["work-items"])
 @router.post("/work-items/{work_item_id}/assets")
 def link_asset(
     work_item_id: str,
-    payload: dict[str, Any] = Body(...),
+    payload: WorkItemAssetLink = Body(...),
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
-    asset_id = payload["asset_id"]
-    role = payload.get("role", "reference")
-    engagement_slug = payload.get("engagement_slug", "")
-    step = payload.get("sop_step")
+    asset_id = payload.asset_id
+    role = payload.role
+    engagement_slug = require_work_item(context, work_item_id, principal, write=True)
+    if payload.engagement_slug and payload.engagement_slug != engagement_slug:
+        raise HTTPException(status_code=403, detail="任务不属于指定项目")
+    step = payload.sop_step
 
     asset = catalog.get_asset(context.engine, principal, asset_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="资产不存在或无权查看")
-    if (
-        engagement_slug
-        and engagement_slug not in principal.engagement_slugs
-        and not principal.is_admin
-    ):
-        raise HTTPException(status_code=403, detail="不是该项目成员")
     if role == "sop_step":
         if asset["kind"] != "Sop":
             raise HTTPException(status_code=422, detail="只有 SOP 可以按步骤关联")
-        if step is None:
-            raise HTTPException(status_code=422, detail="必须指定 sop_step")
+        if step is None or not any(
+            item["number"] == step for item in sop.merged_steps(context.engine, asset_id)["steps"]
+        ):
+            raise HTTPException(status_code=422, detail="必须指定实际存在的 sop_step")
         with context.engine.connect() as conn:
             existing = conn.execute(
                 select(work_item_assets).where(
@@ -53,11 +53,12 @@ def link_asset(
         # 不再因为"已经开始过会话"而锁住：一个任务往往要 Agent 干好几轮，
         # 做完一步要能换到下一步；每次执行带的是当时绑着的那一步
         if existing:
+            require_binding_project(existing, engagement_slug)
             with context.engine.begin() as conn:
                 conn.execute(
                     update(work_item_assets)
                     .where(work_item_assets.c.id == existing.id)
-                    .values(asset_id=asset_id, sop_step=step)
+                    .values(asset_id=asset_id, sop_step=step, engagement_slug=engagement_slug)
                 )
             return {
                 "work_item_id": work_item_id,
@@ -88,6 +89,7 @@ def unlink_sop_step(
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     """这个任务不再按流程走。只有项目成员（或管理员）能解。"""
+    engagement_slug = require_work_item(context, work_item_id, principal, write=True)
     with context.engine.begin() as conn:
         row = conn.execute(
             select(work_item_assets).where(
@@ -99,12 +101,7 @@ def unlink_sop_step(
         ).first()
         if row is None:
             return {"work_item_id": work_item_id, "removed": False}
-        if (
-            row.engagement_slug
-            and row.engagement_slug not in principal.engagement_slugs
-            and not principal.is_admin
-        ):
-            raise HTTPException(status_code=403, detail="不是该项目成员")
+        require_binding_project(row, engagement_slug)
         conn.execute(work_item_assets.delete().where(work_item_assets.c.id == row.id))
     return {"work_item_id": work_item_id, "removed": True}
 
@@ -115,21 +112,25 @@ def list_links(
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
+    engagement_slug = require_work_item(context, work_item_id, principal)
     with context.engine.connect() as conn:
         rows = conn.execute(
             select(work_item_assets).where(work_item_assets.c.work_item_id == work_item_id)
         ).fetchall()
     items = []
     for row in rows:
+        require_binding_project(row, engagement_slug)
         asset = catalog.get_asset(context.engine, principal, row.asset_id)
+        if asset is None:
+            continue
         items.append(
             {
                 "asset_id": row.asset_id,
                 "role": row.role,
                 "sop_step": row.sop_step,
                 "locked": row.locked,
-                "title": asset["title"] if asset else None,
-                "kind": asset["kind"] if asset else None,
+                "title": asset["title"],
+                "kind": asset["kind"],
             }
         )
     return {"items": items}
@@ -143,6 +144,7 @@ def sop_step_summary(
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     """给 orchestrator 拼提示词用：只返回当前步骤的摘要与检查点。"""
+    engagement_slug = require_work_item(context, work_item_id, principal, write=lock)
     with context.engine.connect() as conn:
         row = conn.execute(
             select(work_item_assets).where(
@@ -154,6 +156,9 @@ def sop_step_summary(
         ).first()
     if row is None:
         return {"found": False, "work_item_id": work_item_id}
+    require_binding_project(row, engagement_slug)
+    if catalog.get_asset(context.engine, principal, row.asset_id) is None:
+        raise HTTPException(status_code=404, detail="资产不存在或无权查看")
     if lock:
         with context.engine.begin() as conn:
             conn.execute(

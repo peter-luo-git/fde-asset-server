@@ -903,6 +903,8 @@ DIRECTORY: dict[str, Any] = {
             "description": "给运维同事看的任务与告警面板",
         },
     },
+    # 开发目录明确任务所属项目；不把调用方传入的项目当作任务授权依据。
+    "work_items": {"w-9": {"engagement_slug": "policy-import"}},
     "agents": {
         "import-coder": {
             "title": "导入编码助手",

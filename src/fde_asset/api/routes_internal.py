@@ -14,8 +14,10 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from sqlalchemy import select
 
 from fde_asset.api.deps import ServiceContext, get_context
+from fde_asset.api.work_item_access import require_binding_project, require_work_item
 from fde_asset.core.db import asset_audiences, assets, work_item_assets
 from fde_asset.modules.asset import agent_bundle as agent_bundle_module
+from fde_asset.modules.asset import catalog
 from fde_asset.modules.asset import sop as sop_module
 from fde_asset.modules.asset import usage as usage_module
 from fde_asset.modules.asset.visibility import audience_clause
@@ -240,12 +242,24 @@ def agent_usage(
 
 @router.get("/work-items/{work_item_id}/sop-step", dependencies=[Depends(require_service_key)])
 def work_item_sop_step(
-    work_item_id: str, context: ServiceContext = Depends(get_context)
+    work_item_id: str,
+    username: str = Query(min_length=1, max_length=80),
+    engagement_slug: str = Query(min_length=1, max_length=120),
+    context: ServiceContext = Depends(get_context),
 ) -> dict[str, Any]:
     """这个任务现在绑在哪条流程的第几步，以及给 Agent 看的这一步的说明。
 
     平台在生成给 Agent 的任务说明时来取。没绑、流程已下架、步骤不存在，都返回 found=false。
     """
+    try:
+        principal = context.directory.resolve(username)
+    except PrincipalNotFound:
+        raise HTTPException(status_code=404, detail="没有这个用户") from None
+    except PlatformUnavailable:
+        raise HTTPException(status_code=503, detail="暂时无法向平台确认身份") from None
+    actual_slug = require_work_item(context, work_item_id, principal)
+    if actual_slug != engagement_slug:
+        raise HTTPException(status_code=404, detail="任务不存在或无权访问")
     with context.engine.connect() as conn:
         row = conn.execute(
             select(work_item_assets).where(
@@ -266,6 +280,9 @@ def work_item_sop_step(
             else None
         )
     if row is None or asset is None:
+        return {"found": False, "work_item_id": work_item_id}
+    require_binding_project(row, actual_slug)
+    if catalog.get_asset(context.engine, principal, row.asset_id) is None:
         return {"found": False, "work_item_id": work_item_id}
     summary = sop_module.step_summary(context.engine, row.asset_id, row.sop_step or 1)
     if not summary.get("found"):
