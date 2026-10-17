@@ -168,3 +168,20 @@ def test_review_queue_knows_who_can_decide(client) -> None:
 
     zhao = as_user(client, "zhao").get("/api/v1/reviews", params={"mine": True}).json()["items"]
     assert zhao == [], "不相干的人队列是空的"
+
+
+def test_reviewer_can_mark_the_new_asset_mandatory_for_its_scope(client) -> None:
+    """评审通过时勾上「设为必选」：入库后就是这个项目的必选资产，Agent 组包一定带上。"""
+    from fde_asset.modules.asset.indexer import asset_id_for_candidate
+
+    cid = _submit_ready_case(client)
+    wang = as_user(client, "wang")
+    review_id = wang.get(f"/api/v1/harvest-candidates/{cid}/review").json()["current"]["review_id"]
+    result = wang.post(
+        f"/api/v1/reviews/{review_id}/decide", json={"approve": True, "mandatory": True}
+    ).json()
+    assert result["status"] == "merged"
+    assert result["mandatory"] == {"entry": "engagement:policy-import", "ok": True}
+    asset_id = asset_id_for_candidate(cid)
+    entries = wang.get(f"/api/v1/assets/{asset_id}/mandatory").json()["entries"]
+    assert [entry["entry"] for entry in entries] == ["engagement:policy-import"]

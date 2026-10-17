@@ -256,6 +256,23 @@ target_assets = Table(
     UniqueConstraint("target_type", "target_id", "asset_id", name="uq_target_asset"),
 )
 
+#: 必选资产：在这个范围里干活的 Agent 一定带上它，不用一个个去关联。
+#: 由管理员或这个范围的负责人设置（评审通过时可以顺手设）。个人级只在这个人和 Agent 的私聊里生效
+asset_mandatory = Table(
+    "asset_mandatory",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("asset_id", String(64), nullable=False),
+    # company | department | customer | engagement | user
+    Column("scope", String(16), nullable=False),
+    # 全公司的不填；其他是部门代号、客户代号、项目标识、账号
+    Column("code", String(64), nullable=False, default=""),
+    Column("created_by", String(64), nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    UniqueConstraint("asset_id", "scope", "code", name="uq_asset_mandatory"),
+    Index("ix_asset_mandatory_lookup", "scope", "code"),
+)
+
 #: 用过之后的反馈：这份资产到底帮没帮上忙
 asset_feedback = Table(
     "asset_feedback",

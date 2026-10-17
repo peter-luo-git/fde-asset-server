@@ -1140,9 +1140,55 @@ def seed(settings: AssetSettings) -> dict[str, Any]:
         counts[key] = counts.get(key, 0) + 1
     sha = git.commit_files(RepoRef(), "main", files, "chore(assets): 种子资产")
     result: dict[str, Any] = {"commit": sha, **{key: str(count) for key, count in counts.items()}}
+    result["mandatory"] = str(seed_mandatory(settings, file_store))
 
     write_seed_files(settings, overwrite=True)
     return result
+
+
+def seed_mandatory(settings: AssetSettings, file_store: FileStore) -> int:
+    """种子里公司级的规范和流程设成全公司必选。
+
+    2026-10-17 起规范和流程不再按类型自动带给 Agent，要人指定必选；种子数据照旧给每个 Agent 带上，
+    演示和测试的行为不变。返回新设了几条。
+    """
+    import yaml
+    from sqlalchemy import select
+
+    from fde_asset.core.db import asset_mandatory, create_engine_for, init_db
+
+    wanted: list[str] = []
+    for asset_id, (key, members) in seed_assets_by_id(file_store).items():
+        manifest = next(
+            (
+                yaml.safe_load(data)
+                for path, data in members.items()
+                if path.endswith("/asset.yaml")
+            ),
+            {},
+        )
+        if key == "company" and manifest.get("kind") in {"Rule", "Sop"}:
+            wanted.append(asset_id)
+    engine = create_engine_for(settings.database_target())
+    init_db(engine)
+    added = 0
+    with engine.begin() as conn:
+        have = {
+            row.asset_id
+            for row in conn.execute(
+                select(asset_mandatory.c.asset_id).where(asset_mandatory.c.scope == "company")
+            )
+        }
+        for asset_id in wanted:
+            if asset_id not in have:
+                conn.execute(
+                    asset_mandatory.insert().values(
+                        asset_id=asset_id, scope="company", code="", created_by="seed"
+                    )
+                )
+                added += 1
+    engine.dispose()
+    return added
 
 
 def write_seed_files(settings: AssetSettings, *, overwrite: bool = False) -> list[str]:

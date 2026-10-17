@@ -77,7 +77,7 @@ _KNOWN: OrderedDict[str, str] = OrderedDict()
 _KNOWN_LIMIT = 1024
 _KNOWN_LOCK = threading.Lock()
 #: 拼包的规则（目录形状、改写 asset.yaml 的方式）变了就加一，旧的键全部作废
-_KEY_FORMAT = 1
+_KEY_FORMAT = 2  # 2：规范和流程不再按类型必带，改看必选（2026-10-17）
 
 
 class BundleNotFound(LookupError):
@@ -127,6 +127,7 @@ def _select(engine: Engine, request: dict[str, str]) -> Selection:
         target_type=request.get("target_type", ""),
         target_id=request.get("target_id", ""),
         also_targets=(("agent", agent_key),) if agent_key else (),
+        username=request.get("username", ""),
     )
 
 
@@ -209,8 +210,12 @@ def build_bundle(
     target_type: str = "",
     target_id: str = "",
     agent_key: str = "",
+    username: str = "",
 ) -> AgentBundle:
-    """`agent_key`：这次干活的是哪个 Agent；给它关联过的资产和项目关联的合在一起挑。"""
+    """`agent_key`：这次干活的是哪个 Agent；给它关联过的资产和项目关联的合在一起挑。
+
+    `username`：只在私聊里给，带上这个人的个人必选资产。
+    """
     request = {
         "department_code": department_code,
         "engagement_slug": engagement_slug,
@@ -218,6 +223,7 @@ def build_bundle(
         "target_type": target_type,
         "target_id": target_id,
         "agent_key": agent_key,
+        **({"username": username} if username else {}),
     }
     chosen = _select(engine, request)
     heads = _heads(repo_port, chosen)

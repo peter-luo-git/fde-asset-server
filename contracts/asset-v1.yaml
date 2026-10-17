@@ -1272,6 +1272,150 @@ paths:
       summary: Change Lifecycle
       tags:
       - assets
+  /api/v1/assets/{asset_id}/mandatory:
+    get:
+      description: 这份资产在哪些范围是必选，以及我能给哪些范围设。
+      operationId: asset_mandatory_api_v1_assets__asset_id__mandatory_get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Asset Mandatory Api V1 Assets  Asset Id  Mandatory Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Asset Mandatory
+      tags:
+      - mandatory
+    post:
+      description: '设为必选。`entry`：company，或 department:/customer:/engagement:/user: 加代号。'
+      operationId: add_mandatory_api_v1_assets__asset_id__mandatory_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Add Mandatory Api V1 Assets  Asset Id  Mandatory Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Add Mandatory
+      tags:
+      - mandatory
+  /api/v1/assets/{asset_id}/mandatory/remove:
+    post:
+      operationId: remove_mandatory_api_v1_assets__asset_id__mandatory_remove_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Remove Mandatory Api V1 Assets  Asset Id  Mandatory Remove Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Remove Mandatory
+      tags:
+      - mandatory
   /api/v1/assets/{asset_id}/passport:
     get:
       operationId: get_passport_api_v1_assets__asset_id__passport_get
@@ -2175,6 +2319,53 @@ paths:
       summary: List Kinds
       tags:
       - assets
+  /api/v1/mandatory:
+    get:
+      description: 必选资产清单。管理员看全部；其他人看自己负责的范围。
+      operationId: list_mandatory_api_v1_mandatory_get
+      parameters:
+      - description: 只看某一种范围：company/department/customer/engagement/user
+        in: query
+        name: scope
+        required: false
+        schema:
+          default: ''
+          description: 只看某一种范围：company/department/customer/engagement/user
+          title: Scope
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response List Mandatory Api V1 Mandatory Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: List Mandatory
+      tags:
+      - mandatory
   /api/v1/match:
     post:
       description: 按项目/工作项/Agent 的上下文推荐该带哪些资产，每条都带推荐理由。

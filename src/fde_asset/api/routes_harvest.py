@@ -683,7 +683,38 @@ def decide_review(
             "invalid": report.invalid,
             "head": report.head,
         }
+        if payload.get("mandatory") is True:
+            result["mandatory"] = _mark_mandatory(context, principal, review.scope, candidate)
     return result
+
+
+def _mark_mandatory(
+    context: ServiceContext, principal: Principal, scope: str, candidate
+) -> dict[str, Any]:
+    """评审通过时顺手设成本作用域的必选资产。设不上不影响入库，原因带回给页面。"""
+    from fde_asset.modules.asset import mandatory
+    from fde_asset.modules.asset.indexer import asset_id_for_candidate
+
+    code = {
+        "department": candidate.department_code,
+        "customer": candidate.customer_code,
+        "engagement": candidate.engagement_slug,
+    }.get(scope, "")
+    entry = "company" if scope == "company" else f"{scope}:{code}"
+    try:
+        saved, _ = mandatory.add(
+            context.engine,
+            principal,
+            asset_id_for_candidate(candidate.candidate_id),
+            entry,
+            context={
+                "department_code": candidate.department_code,
+                "customer_code": candidate.customer_code,
+            },
+        )
+    except mandatory.MandatoryError as exc:
+        return {"entry": entry, "ok": False, "error": str(exc)}
+    return {"entry": saved.key, "ok": True}
 
 
 @router.get("/workbench")

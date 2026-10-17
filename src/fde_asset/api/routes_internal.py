@@ -142,6 +142,7 @@ def agent_bundle(
     没给就按现在的资产和关联关系新拼一份。
     带了 `known_revision`（平台上一轮拿到的版本号）且现在该带的还是这一份，只回
     `{"revision": ..., "unchanged": true}`，不带文件。身份和项目成员照常每次核对。
+    `personal: true`：这一轮是这个人和 Agent 的私聊，个人必选资产也带上。
     """
     revision = str(payload.get("revision") or "")
     if revision:
@@ -178,6 +179,9 @@ def agent_bundle(
         "target_id": engagement_slug,
         "agent_key": str(payload.get("agent_key") or ""),
     }
+    if payload.get("personal") is True:
+        # 平台说这一轮是这个人和 Agent 的私聊：带上他的个人必选资产。共享会话不带
+        request["username"] = principal.user_id
     known = str(payload.get("known_revision") or "")
     if known and agent_bundle_module.unchanged(context.engine, context.repo_port, known, **request):
         return {"revision": known, "unchanged": True}
