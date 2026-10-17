@@ -3,7 +3,9 @@
 状态：todo / doing / review / done / env-pending
 规则：一个切片半天内、生产代码 ≤ 300 行；`make check` 绿 = 完成；评审最多 2 轮。
 
-**整体状态（2026-10-06）**：v0.1 的 21 个切片全部 done；10-01 之后按《资产中心-推荐与应用资产设计》§3.5 的四批排期又做了 15 个切片（见下方「v0.1 之后」）。
+**整体状态（2026-10-17 更新）**：下面切片表记到 2026-10-06；之后的工作（存储切到 Gitea 和 PostgreSQL、资产接到 Agent、每轮核对资产包版本等）没有再拆切片，记在 fde-specs《资产中心-后续工作清单》§十三至§十六。最近一次后端全量 pytest 456 项通过（2026-10-16）。
+
+**2026-10-06 时的状态**：v0.1 的 21 个切片全部 done；10-01 之后按《资产中心-推荐与应用资产设计》§3.5 的四批排期又做了 15 个切片（见下方「v0.1 之后」）。
 后端全量 **377 通过 / 3 跳过**（跳过的 3 个需要 docker 与 docker compose）、ruff 与 `alembic heads` 通过。
 还没做的和被 fde-server 卡住的，统一记在 fde-specs《资产中心-后续工作清单》。
 
@@ -38,11 +40,11 @@
 | S-W1 | fde-web | 资产前端重构为 `src/features/asset/` 自包含目录 | **done** | `npm run test:asset` |
 | S-W2 | fde-web | 资产页面从 mock 切到真实 asset-v1 契约 | **done** | `npm run test:asset-e2e`（11 步契约 E2E） |
 | S-W3 | fde-web | 资产工作台页面 | **done** | `npm run qa:asset-browser`（12 步浏览器 E2E） |
-| S-14b | fde-server | orchestrator 注入 SOP 步骤摘要并回填检查点 | **blocked** | 等待"两处实现怎么合"的决定（交接说明 Q1） |
-| S-15b | fde-server | 会话事件识别技能加载与知识读取，上报资产服务 | **blocked** | 同上 |
+| S-14b | fde-server | orchestrator 注入 SOP 步骤摘要并回填检查点 | **done，会话路径待实测** | 2026-10-15 fde-server 合入（`6b98437`、`76a89ec`），会话路径在 `resident_agent_authority.py`；从页面执行绑定流程的任务尚未实测（后续工作清单 §十六 A2） |
+| S-15b | fde-server | 会话事件识别技能加载与知识读取，上报资产服务 | **done** | 同上合入；2026-10-16 真实环境实测：私聊里让阿码读技能，资产中心记一次"已加载" |
 
-> S-W1/W2/W3 的代码在 `fde-web` 的 `feat/asset-center-web` 分支（提交 `444e71d`），尚未合并到 main。
-> fde-server 按指令一行未改，两个配套切片只做了接口契约设计，见《资产中心-组织与共享设计》§六。
+> S-W1/W2/W3 已并入 `fde-web` 的 `dev1005`（最初在 `feat/asset-center-web` 分支 `444e71d`）。
+> 2026-10-06 时 fde-server 按指令未改；之后 S-14b、S-15b 已由 fde-server 实现，见上表。
 
 ## v0.1 之后（2026-10-01 起）
 
@@ -75,7 +77,7 @@
 | X-10 | 沿用旧数据启动时补齐名单文件里后来才有的部分；老王兼 finance 部门主管 | **done** | `pytest -q tests/platform/test_directory_refresh.py` | `scripts/seed_assets.refresh_directory()` |
 | X-11 | 后台定时任务：有新提交才重建索引、定时扫线索、定时探活 | **done** | `pytest -q tests/platform/test_scheduler.py` | `scheduler.py`、`main_asset_worker.py`、`serve_seeded.py --with-worker` |
 | X-12 | 对外契约 `contracts/asset-v1.yaml` 由代码导出，测试拦住不一致 | **done** | `pytest -q tests/test_contract.py` | `scripts/export_openapi.py` |
-| F2 | Agent 检索工具（资产侧）：MCP 接口 `search_assets` / `get_asset` | **env-pending** | `pytest -q tests/platform/test_mcp.py` | `api/routes_mcp.py`；待 fde-server 挂载并在真实 dsh 上验证 |
+| F2 | Agent 检索工具（资产侧）：MCP 接口 `search_assets` / `get_asset` | **done（平台侧决定不挂）** | `pytest -q tests/platform/test_mcp.py` | `api/routes_mcp.py`；资产整包进 Agent 只读目录后不再需要，平台不挂载（后续工作清单 §十四 S5），接口保留 |
 | X-13 | 删草稿（线索回到工作台）、资产下架/废弃/恢复、应用可被引用、评审通知 | **done** | `pytest -q tests/asset/test_small_gaps.py` | `harvest/service.delete_draft()`、`modules/asset/lifecycle.py`、`notify/service.notify_review()` |
 | F3 | 启动资产包 | 不做 | — | 2026-10-04 决定暂不做，理由见《资产中心-后续工作清单》§一 |
 | F11 | 度量看板 | todo | — | 2026-10-04 决定这一轮先不做 |
