@@ -34,9 +34,13 @@ check-fast:
 	$(RUN) ruff check src tests
 	$(RUN) pytest -q $(T)
 
-# 需要 PostgreSQL 的条件测试，单独跑，不阻塞切片
-check-db:
-	FDE_ASSET_TEST_DATABASE_URL=$(DB_URL) $(RUN) pytest -q -m db
+# 测试用的 PostgreSQL：本机起一个只监听 127.0.0.1:55432 的容器，测试默认连它（见 tests/conftest.py）。
+# 已经在就直接用；别的地方用 FDE_ASSET_TEST_DATABASE_URL 指定
+test-db:
+	docker start asset-test-pg >/dev/null 2>&1 || docker run -d --name asset-test-pg \
+		-e POSTGRES_PASSWORD=test -p 127.0.0.1:55432:5432 postgres:17.11-alpine >/dev/null
+	until docker exec asset-test-pg pg_isready -U postgres >/dev/null 2>&1; do sleep 1; done
+	@echo "测试库就绪：postgresql://postgres:test@127.0.0.1:55432/postgres"
 
 api:
 	$(RUN) python -m fde_asset.main_asset_api
@@ -52,7 +56,7 @@ DEMO_DATA ?= .demo-data
 demo-serve:
 	$(RUN) python scripts/serve_seeded.py --host $(DEMO_HOST) --port $(DEMO_PORT) --data-dir $(DEMO_DATA)
 
-# 本地进程形态：SQLite + 本机裸仓库，无需 Docker / Gitea / 模型凭据
+# 本地进程形态：PostgreSQL（FDE_ASSET_DATABASE_URL，可以用 make test-db 那个库）+ 本机裸仓库
 dev:
 	$(RUN) python scripts/dev_bootstrap.py
 	$(RUN) python -m fde_asset.main_asset_api

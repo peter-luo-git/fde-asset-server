@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "FDE 资产中心服务：索引、目录、沉淀、分发与复用计量"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "aiosqlite==0.20.0",
     "alembic==1.14.1",
     "asyncpg==0.30.0",
     "fastapi==0.115.6",

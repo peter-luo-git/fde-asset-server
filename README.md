@@ -36,13 +36,15 @@ make demo                   # 端到端演示：12 步全绿即 v0.1 验收通�
 ```
 ~/.fde/repos/company-assets.git        资产裸仓库（唯一可信源）
 ~/.fde/repos/dept-<代号>-assets.git    部门级
-~/.fde/data/asset.db                   索引与使用记录（SQLite）
+PostgreSQL（FDE_ASSET_DATABASE_URL）     索引与使用记录（2026-10-18 起只用 PostgreSQL）
 ~/.fde/data/assets/snapshots/<sha>/    会话快照（供 orchestrator 只读挂载）
 ```
 
 ## 本地验证
 
-`make check` 顺序执行 Ruff、格式检查、编译、完整 pytest 与 Alembic heads；检测到 `uv` 时最后还执行 `uv lock --check`。默认测试使用各用例的临时 SQLite 数据。真实模型与 PostgreSQL 条件测试需要另行提供相应环境，默认条件缺失时跳过。
+`make check` 顺序执行 Ruff、格式检查、编译、完整 pytest 与 Alembic heads；检测到 `uv` 时最后还执行 `uv lock --check`。测试只用 PostgreSQL：每个用例在测试库服务器上建临时库、跑完删掉；服务器默认是 `make test-db` 起的本机容器（127.0.0.1:55432），别处用 `FDE_ASSET_TEST_DATABASE_URL` 指定。真实模型条件测试需要另行提供环境，缺失时跳过。
+
+**SQLite 已去掉（2026-10-18）**：服务、迁移、测试都不再支持 SQLite。只保留启动时的一次性搬迁（`core/sqlite_import.py`）：PostgreSQL 还是空库、数据目录里还有旧的 `asset.db`，就把数据搬过去——生产目标机从旧版本升级要用，升级完可以删掉。
 
 仓库保留真实生成的 [uv.lock](uv.lock)，固定 Python 3.12 范围内的依赖解析；原 `pyproject.toml` 的16个运行依赖和3个开发依赖直接 pin、项目版本保持。2026-10-12 首轮完整检查使用既有只读依赖环境，423项通过/2项条件跳过，当时共享 PATH 未找到 uv，未执行条件锁检查。Root 后继补验发现缺锁后，使用私有 uv0.13.0、PyPI 与私有缓存生成锁；在线/离线 `uv lock --check` 和独立产物目录中的 `uv build --no-sources` 均通过，wheel依赖及sdist内的锁/清单与源码一致。本轮未执行 `uv sync` 或修改共享虚拟环境；先前全量结果不表示已在新锁同步出的环境重跑全部测试，详细证据见[实现贡献](operations/agent-contributions/full-test-fixes-20261012/implementer_specs_asset_fixes.md)。
 

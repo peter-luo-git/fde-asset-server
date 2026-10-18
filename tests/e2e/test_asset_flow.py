@@ -1,6 +1,6 @@
 """端到端：真实 uvicorn + 真实 git 仓库 + 数据库，跑完 12 步主链路。
 
-数据库默认 SQLite；设了 FDE_ASSET_TEST_DATABASE_URL 就用 PostgreSQL 的临时库（和其他用例一样）。
+数据库用测试库服务器上的临时库（和其他用例一样，见 tests/conftest.py）。
 
 这不是单元测试的补充，而是资产中心 v0.1 的验收：任何一步失败都视为不通过。
 """

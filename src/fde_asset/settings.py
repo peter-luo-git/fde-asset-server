@@ -9,13 +9,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class AssetSettings(BaseSettings):
-    """本地进程形态的默认值：SQLite + 本机裸仓库，无外部依赖。"""
+    """服务配置。数据库只用 PostgreSQL（2026-10-18 起去掉了 SQLite）；仓库不配 Gitea 时用本机裸仓库。"""
 
     model_config = SettingsConfigDict(env_prefix="FDE_ASSET_", extra="ignore")
 
     data_dir: Path = Path("./data")
+    #: 旧版本留下的 SQLite 文件在哪（默认数据目录下的 asset.db）。只在启动时用一次：
+    #: PostgreSQL 还是空库、这个文件还在，就把数据搬过去（生产目标机升级要用，升级完可删）
     database_path: Path | None = None
-    # 填了就用 PostgreSQL（形如 postgresql://账号@主机:5432/库名），不填用数据目录下的 SQLite 文件
+    #: PostgreSQL 连接串，形如 postgresql://账号@主机:5432/库名。必填
     database_url: str = ""
     #: 数据库口令放在文件里时给路径，连接串里就不用写口令
     database_password_file: Path | None = None
@@ -54,12 +56,16 @@ class AssetSettings(BaseSettings):
 
     @property
     def db_path(self) -> Path:
+        """旧版本的 SQLite 文件，只给启动时的一次性搬迁用。"""
         return (self.database_path or self.root / "asset.db").expanduser()
 
-    def database_target(self) -> str | Path:
-        """连哪个数据库：PostgreSQL 的连接串，或者 SQLite 文件的路径。"""
+    def database_target(self) -> str:
+        """PostgreSQL 连接串（口令放在文件里时补进去）。没配就报错：不再退回 SQLite。"""
         if not self.database_url:
-            return self.db_path
+            raise RuntimeError(
+                "没有配置数据库：设 FDE_ASSET_DATABASE_URL=postgresql://账号@主机:5432/库名"
+                "（2026-10-18 起资产中心只用 PostgreSQL；本机测试库见 Makefile 的 test-db）"
+            )
         from sqlalchemy.engine import make_url
 
         url = make_url(self.database_url)

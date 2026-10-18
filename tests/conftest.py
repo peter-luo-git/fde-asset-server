@@ -1,8 +1,8 @@
 """测试夹具：每个用例一套独立的本地仓库 + 数据库，互不干扰。
 
-默认用 SQLite。设了 `FDE_ASSET_TEST_DATABASE_URL`（指向一个有建库权限的 PostgreSQL 账号，
-例如 postgresql://postgres:test@127.0.0.1:55432/postgres）就改用 PostgreSQL：
-每个用例在那台服务器上建一个临时库，跑完删掉。
+数据库只用 PostgreSQL（2026-10-18 起去掉了 SQLite）：每个用例在测试库服务器上建一个临时库，
+跑完删掉。服务器默认是本机的测试容器（`make test-db` 起），别的地方用
+`FDE_ASSET_TEST_DATABASE_URL` 指定一个有建库权限的账号。
 """
 
 from __future__ import annotations
@@ -41,16 +41,15 @@ def _env_does_not_leak():
     os.environ.update(before)
 
 
-POSTGRES_URL = os.environ.get("FDE_ASSET_TEST_DATABASE_URL", "")
+#: 测试库服务器：默认是 `make test-db` 起的本机容器
+POSTGRES_URL = os.environ.get(
+    "FDE_ASSET_TEST_DATABASE_URL", "postgresql://postgres:test@127.0.0.1:55432/postgres"
+)
 
 
 @contextmanager
 def temporary_database():
-    """设了 PostgreSQL 时建一个临时库，给出它的地址，用完删掉；没设就给空串（用 SQLite）。"""
-    if not POSTGRES_URL:
-        yield ""
-        return
-
+    """在测试库服务器上建一个临时库，给出它的地址，用完删掉。"""
     import uuid
 
     from sqlalchemy import create_engine

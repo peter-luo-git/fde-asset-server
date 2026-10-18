@@ -97,7 +97,7 @@ def base_select(principal: Principal, query: CatalogQuery) -> Select:
         like = f"%{query.q}%"
         statement = statement.where(
             or_(
-                # 不分大小写：搜 oracle 要能找到 Oracle（SQLite 的 like 本来就不分，PostgreSQL 分）
+                # 不分大小写：搜 oracle 要能找到 Oracle（PostgreSQL 的 like 分大小写）
                 assets.c.name.ilike(like),
                 assets.c.title.ilike(like),
                 assets.c.summary.ilike(like),

@@ -67,6 +67,3 @@ def create_app(settings: AssetSettings | None = None) -> FastAPI:
     app.include_router(routes_mcp.router)
     app.include_router(routes_internal.router)
     return app
-
-
-app = create_app()

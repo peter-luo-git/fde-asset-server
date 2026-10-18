@@ -33,12 +33,6 @@ def test_postgres_transactions_take_the_shared_index_lock() -> None:
     assert conn.sql == [f"SELECT pg_advisory_xact_lock({INDEX_LOCK_KEY})"]
 
 
-def test_sqlite_needs_no_lock() -> None:
-    conn = _Conn("sqlite")
-    lock_index(conn)
-    assert conn.sql == []
-
-
 def test_finish_index_waits_for_an_index_in_progress(monkeypatch) -> None:
     """同一个进程里，另一处还在建索引时，收尾要等它建完，不能插进去改关系。"""
     steps: list[str] = []
