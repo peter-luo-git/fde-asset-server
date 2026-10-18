@@ -204,9 +204,85 @@ def get_asset(
         raise HTTPException(status_code=404, detail="资产不存在或无权查看")
     with context.engine.connect() as conn:
         row = conn.execute(select(assets).where(assets.c.asset_id == asset_id)).first()
-    # 页面据此决定要不要显示下架、废弃、恢复
+    # 页面据此决定要不要显示下架、废弃、恢复、修改
     data["can_manage"] = lifecycle.may_manage(principal, row)
+    revision = harvest_service.open_revision(context.engine, asset_id)
+    data["open_revision"] = (
+        {
+            "candidate_id": revision["candidate_id"],
+            "status": revision["status"],
+            "created_by": revision["created_by"],
+        }
+        if revision
+        else None
+    )
     return data
+
+
+@router.post("/assets/{asset_id}/edit")
+def edit_asset(
+    asset_id: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """在网页上修改一份已入库资产：起一份带着现在全部内容的修订稿，改完提交评审，
+    通过后发布成这份资产的新版本（编号不变、版本号加一）。已经有修订稿就返回那一份。"""
+    if catalog.get_asset(context.engine, principal, asset_id) is None:
+        raise HTTPException(status_code=404, detail="资产不存在或无权查看")
+    with context.engine.connect() as conn:
+        row = conn.execute(select(assets).where(assets.c.asset_id == asset_id)).first()
+    if not lifecycle.may_manage(principal, row):
+        raise HTTPException(status_code=403, detail="只有资产负责人或它所在范围的评审人能修改")
+    if row.kind == "Application":
+        raise HTTPException(status_code=422, detail="应用的登记信息请在应用市场里改")
+    try:
+        candidate = harvest_service.draft_revision(
+            context.engine,
+            principal,
+            context.repo_port,
+            row,
+            blob_store=context.blob_store,
+            file_store=context.file_store,
+        )
+    except harvest_service.HarvestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    if candidate["created_by"] != principal.user_id and candidate["origin"] != "feedback":
+        # 同一份资产同时只留一份修订稿，免得后入库的把先入库的冲掉
+        raise HTTPException(
+            status_code=409,
+            detail=f"{candidate['created_by']} 正在修订这份资产，等那份入库或删掉后再改",
+        )
+    return candidate
+
+
+@router.get("/assets/{asset_id}/versions")
+def asset_versions_view(
+    asset_id: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """这份资产发布过的版本，新的在前。"""
+    from fde_asset.core.db import asset_versions
+
+    if catalog.get_asset(context.engine, principal, asset_id) is None:
+        raise HTTPException(status_code=404, detail="资产不存在或无权查看")
+    with context.engine.connect() as conn:
+        rows = conn.execute(
+            select(asset_versions)
+            .where(asset_versions.c.asset_id == asset_id)
+            .order_by(asset_versions.c.id.desc())
+        ).fetchall()
+    return {
+        "items": [
+            {
+                "version": row.version,
+                "commit": row.commit_sha,
+                "summary": row.summary,
+                "created_at": row.created_at.isoformat() if row.created_at else "",
+            }
+            for row in rows
+        ]
+    }
 
 
 @router.get("/assets/{asset_id}/attachments/{filename}")
@@ -250,7 +326,7 @@ def change_visibility(
     compliance = context.settings.root / "compliance.json"
     terms = json.loads(compliance.read_text(encoding="utf-8")) if compliance.exists() else {}
     try:
-        return sharing.change(
+        result = sharing.change(
             context.engine,
             context.repo_port,
             principal,
@@ -268,6 +344,17 @@ def change_visibility(
     except sharing.SharingError as exc:
         status = 404 if "无权查看" in str(exc) else 422
         raise HTTPException(status_code=status, detail=str(exc)) from None
+    if result.get("requested"):
+        from fde_asset.api.routes_visibility import announce
+
+        title = (catalog.get_asset(context.engine, principal, asset_id) or {}).get("title", "")
+        announce(
+            context,
+            result["requested"],
+            title=title,
+            by=principal.display_name or principal.user_id,
+        )
+    return result
 
 
 @router.post("/assets/{asset_id}/lifecycle")
@@ -438,24 +525,17 @@ def submit_feedback(
         with context.engine.connect() as conn:
             row = conn.execute(select(assets).where(assets.c.asset_id == asset_id)).first()
         if row is not None:
-            draft = feedback.revision_draft_payload(row, note, principal.user_id)
+            # 「已过时」起的是这份资产的修订稿：带着现在的内容，入库后是新版本，不是另一份资产
             try:
-                candidate = harvest_service.create_draft(
+                candidate = harvest_service.draft_revision(
                     context.engine,
                     principal,
-                    harvest_service.CandidateInput(
-                        kind=draft["kind"],
-                        name=draft["name"],
-                        title=draft["title"],
-                        scope=draft["scope"],
-                        department_code=draft["department_code"],
-                        engagement_slug=draft["engagement_slug"],
-                        origin="feedback",
-                        source={
-                            "origin": "feedback",
-                            "note": f"{principal.user_id} 反馈已过时：{note}",
-                        },
-                    ),
+                    context.repo_port,
+                    row,
+                    blob_store=context.blob_store,
+                    file_store=context.file_store,
+                    origin="feedback",
+                    note=f"{principal.user_id} 反馈已过时：{note}",
                 )
             except harvest_service.HarvestError:
                 candidate = None

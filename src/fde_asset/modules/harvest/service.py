@@ -61,6 +61,10 @@ class CandidateInput:
     files: dict[str, str] = field(default_factory=dict)
     #: 从哪条沉淀线索起草的；填了就把那条线索标成已起草，不再出现在工作台
     lead_id: str = ""
+    #: 修订哪份已入库资产：入库时写回那份资产，编号不变、版本加一
+    revises_asset_id: str = ""
+    #: 除了归属作用域，还想让谁看见；入库时评审人有权放的直接生效，其余转成可见范围申请
+    visibility: list[str] = field(default_factory=list)
 
 
 def _now() -> datetime:
@@ -93,9 +97,48 @@ def generate_name(engine: Engine, kind: str) -> str:
     return f"{prefix}-{stamp}-{uuid.uuid4().hex[:12]}"
 
 
+def landed_asset_id(candidate: Any) -> str:
+    """草稿入库后是哪份资产：修订稿是被修订的那份，其余由草稿编号算出来。"""
+    get = (
+        candidate.get
+        if isinstance(candidate, dict)
+        else lambda key, default="": getattr(candidate, key, default)
+    )
+    return get("revises_asset_id", "") or asset_id_for_candidate(get("candidate_id"))
+
+
+def clean_visibility(visibility: Any) -> list[str]:
+    """起草时选的额外可见范围：校验写法、去重；可以为空。"""
+    from fde_asset.modules.asset.manifest import VISIBILITY_PATTERN
+
+    if visibility in (None, ""):
+        return []
+    if not isinstance(visibility, list) or len(visibility) > 50:
+        raise HarvestError("可见范围要是一个列表")
+    items = [str(item).strip() for item in visibility if str(item).strip()]
+    for item in items:
+        if not VISIBILITY_PATTERN.match(item):
+            raise HarvestError(
+                f"可见范围写法不对：{item}。应是 company，或 department:/customer:/engagement:/user: 加代号"
+            )
+    return list(dict.fromkeys(items))
+
+
+def set_visibility(engine: Engine, candidate_id: str, visibility: Any) -> dict[str, Any]:
+    items = clean_visibility(visibility)
+    with engine.begin() as conn:
+        conn.execute(
+            update(harvest_candidates)
+            .where(harvest_candidates.c.candidate_id == candidate_id)
+            .values(visibility_json=json.dumps(items, ensure_ascii=False), updated_at=_now())
+        )
+    return get_candidate(engine, candidate_id)
+
+
 def create_draft(engine: Engine, principal: Principal, data: CandidateInput) -> dict[str, Any]:
     if data.kind not in KIND_RULES:
         raise HarvestError(f"不支持的 kind：{data.kind}")
+    extra_visibility = clean_visibility(data.visibility)
     name = (data.name or "").strip()
     if not name:
         name = generate_name(engine, data.kind)
@@ -156,6 +199,8 @@ def create_draft(engine: Engine, principal: Principal, data: CandidateInput) -> 
                 files_json=json.dumps(files, ensure_ascii=False),
                 checks_json="{}",
                 created_by=principal.user_id,
+                revises_asset_id=data.revises_asset_id,
+                visibility_json=json.dumps(extra_visibility, ensure_ascii=False),
             )
         )
         if data.lead_id:
@@ -414,6 +459,8 @@ def get_candidate(engine: Engine, candidate_id: str) -> dict[str, Any]:
     data["files"] = json.loads(data.pop("files_json") or "{}")
     data["source"] = json.loads(data.pop("source_json") or "{}")
     data["checks"] = json.loads(data.pop("checks_json") or "{}")
+    data["visibility"] = json.loads(data.pop("visibility_json", None) or "[]")
+    data["revises_asset_id"] = data.get("revises_asset_id") or ""
     for key in ("created_at", "updated_at"):
         data[key] = data[key].isoformat()
     return data
@@ -586,7 +633,7 @@ def run_checks(
             owner=manifest.spec.owner,
             kind=candidate["kind"],
             name=candidate["name"],
-            asset_id=asset_id_for_candidate(candidate_id),
+            asset_id=landed_asset_id(candidate),
         )
         if taken:
             findings.append(
@@ -659,8 +706,12 @@ def submit(
         raise HarvestError("存在中危结果，需要勾选确认后提交")
 
     rule = KIND_RULES[candidate["kind"]]
-    asset_id = asset_id_for_candidate(candidate_id)
+    asset_id = landed_asset_id(candidate)
     prefix = f"{ASSET_ROOT}/{asset_id}"
+    revised = _revised_row(engine, candidate)
+    if revised is not None:
+        # 写回原资产自己的目录；旧布局导入的资产不一定在 assets/<编号> 下
+        prefix = revised.path
     files: dict[str, bytes] = {}
     attachments: list[dict[str, Any]] = []
     for path, content in _normalized_files(candidate, candidate["files"]).items():
@@ -679,7 +730,7 @@ def submit(
             continue
         files[f"{prefix}/{path}"] = content.encode("utf-8")
     files[f"{prefix}/asset.yaml"] = _landed_manifest(
-        candidate, asset_id=asset_id, attachments=attachments
+        candidate, asset_id=asset_id, attachments=attachments, revised=revised
     ).encode("utf-8")
     branch = f"asset/{candidate['name']}-{candidate_id[:6]}"
     repo_port.create_branch(target_repo, branch)
@@ -687,7 +738,11 @@ def submit(
         target_repo,
         branch,
         files,
-        f"feat(asset): 沉淀 {rule.label}「{candidate['title']}」",
+        (
+            f"feat(asset): 修订 {rule.label}「{candidate['title']}」"
+            if revised is not None
+            else f"feat(asset): 沉淀 {rule.label}「{candidate['title']}」"
+        ),
         author_name=principal.display_name or principal.user_id,
         author_email=f"{principal.user_id}@fde.local",
     )
@@ -812,10 +867,48 @@ def _normalized_files(candidate: dict[str, Any], files: dict[str, str]) -> dict[
     return result
 
 
+def _revised_row(engine: Engine, candidate: dict[str, Any]) -> Any:
+    """修订稿要写回的那份资产；不是修订稿返回 None。资产没了就不能当修订稿交。"""
+    asset_id = candidate.get("revises_asset_id") or ""
+    if not asset_id:
+        return None
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(assets).where(assets.c.asset_id == asset_id, assets.c.deleted_at.is_(None))
+        ).first()
+    if row is None:
+        raise HarvestError("要修订的资产已经不在了；可以删掉这份草稿，另起一份新资产")
+    return row
+
+
+def bump_version(current: str, drafted: str) -> str:
+    """修订稿的版本号：草稿里写得比现在大就用它，否则在现在的基础上加一个小版本。"""
+
+    def parts(value: str) -> tuple[int, int, int] | None:
+        pieces = str(value or "").strip().split(".")
+        if len(pieces) != 3 or not all(piece.isdigit() for piece in pieces):
+            return None
+        return int(pieces[0]), int(pieces[1]), int(pieces[2])
+
+    now, wanted = parts(current), parts(drafted)
+    if now is None:
+        return drafted or "0.1.0"
+    if wanted is not None and wanted > now:
+        return drafted
+    return f"{now[0]}.{now[1] + 1}.0"
+
+
 def _landed_manifest(
-    candidate: dict[str, Any], *, asset_id: str, attachments: list[dict[str, Any]]
+    candidate: dict[str, Any],
+    *,
+    asset_id: str,
+    attachments: list[dict[str, Any]],
+    revised: Any = None,
 ) -> str:
-    """入库用的 asset.yaml：编号、可见范围、附件清单以这里算出来的为准，其余照草稿。"""
+    """入库用的 asset.yaml：编号、可见范围、附件清单以这里算出来的为准，其余照草稿。
+
+    修订稿：可见范围沿用资产现在的（调整可见范围另有入口），版本号在现在的基础上加一。
+    """
     import yaml
 
     raw = _normalized_files(candidate, candidate["files"]).get("asset.yaml", "")
@@ -824,14 +917,25 @@ def _landed_manifest(
     spec = document.setdefault("spec", {})
     # 编号放在最前面，打开文件第一眼就能看到
     document["metadata"] = {"id": asset_id, **{k: v for k, v in metadata.items() if k != "id"}}
-    spec["visibility"] = [
-        visibility_entry(
-            candidate["scope"],
-            department_code=candidate.get("department_code") or "",
-            customer_code=candidate.get("customer_code") or "",
-            engagement_slug=candidate.get("engagement_slug") or "",
-        )
-    ]
+    if revised is not None:
+        spec["visibility"] = json.loads(revised.visibility_json or "[]") or [
+            visibility_entry(
+                revised.scope,
+                department_code=revised.department_code or "",
+                customer_code=revised.customer_code or "",
+                engagement_slug=revised.engagement_slug or "",
+            )
+        ]
+        spec["version"] = bump_version(revised.version, str(spec.get("version") or ""))
+    else:
+        spec["visibility"] = [
+            visibility_entry(
+                candidate["scope"],
+                department_code=candidate.get("department_code") or "",
+                customer_code=candidate.get("customer_code") or "",
+                engagement_slug=candidate.get("engagement_slug") or "",
+            )
+        ]
     if attachments:
         spec["attachments"] = attachments
     else:
@@ -865,3 +969,89 @@ def _slugify(text: str, *, fallback: str | None = None) -> str:
     if fallback is not None:
         return fallback
     return "item-" + uuid.uuid4().hex[:8]
+
+
+def open_revision(engine: Engine, asset_id: str) -> dict[str, Any] | None:
+    """这份资产有没有还没入库的修订稿（草稿或评审中）。"""
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(harvest_candidates.c.candidate_id)
+            .where(
+                harvest_candidates.c.revises_asset_id == asset_id,
+                harvest_candidates.c.status.in_(["draft", "submitted"]),
+            )
+            .order_by(harvest_candidates.c.created_at.desc())
+        ).first()
+    return get_candidate(engine, row.candidate_id) if row else None
+
+
+def draft_revision(
+    engine: Engine,
+    principal: Principal,
+    repo_port,
+    asset_row: Any,
+    *,
+    blob_store: BlobStore | None = None,
+    file_store: FileStore | None = None,
+    origin: str = "edit",
+    note: str = "",
+) -> dict[str, Any]:
+    """在网页上修改一份已入库资产：起一份修订稿，内容是资产现在的全部文件。
+
+    改完照常提交评审，通过后写回这份资产（编号不变、版本加一）。同一份资产同时只留一份
+    没入库的修订稿：已经有了就返回那一份，免得两个人各改各的、后入库的把先入库的冲掉。
+    """
+    import yaml
+
+    existing = open_revision(engine, asset_row.asset_id)
+    if existing is not None:
+        return existing
+    repo = RepoRef(name=asset_row.repo)
+    files: dict[str, str] = {}
+    for entry in repo_port.list_tree(repo, asset_row.path):
+        relative = entry.path[len(asset_row.path) + 1 :]
+        if not relative:
+            continue
+        content = repo_port.read_file(repo, entry.path)
+        try:
+            files[relative] = content.decode("utf-8")
+        except UnicodeDecodeError:
+            continue  # 仓库里只有文字；万一有别的，修订稿里不带
+    manifest = yaml.safe_load(files.get("asset.yaml") or "") or {}
+    spec = manifest.get("spec") if isinstance(manifest, dict) else {}
+    attachments = (spec or {}).get("attachments") or []
+    if isinstance(spec, dict):
+        # 附件清单和可见范围入库时由服务端算，草稿里不留，免得被手改
+        spec.pop("attachments", None)
+        files["asset.yaml"] = yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False)
+    for attachment in attachments:
+        name = str(attachment.get("name") or "")
+        if name:
+            files[f"{ATTACHMENT_PREFIX}{safe_name(name)}"] = ATTACHMENT_PLACEHOLDER
+    candidate = create_draft(
+        engine,
+        principal,
+        CandidateInput(
+            kind=asset_row.kind,
+            name=asset_row.name,
+            title=asset_row.title,
+            scope=asset_row.scope,
+            department_code=asset_row.department_code or "",
+            engagement_slug=asset_row.engagement_slug or "",
+            customer_code=asset_row.customer_code or "",
+            origin=origin,
+            source={
+                "origin": origin,
+                "revises": asset_row.asset_id,
+                **({"note": note} if note else {}),
+            },
+            files=files,
+            revises_asset_id=asset_row.asset_id,
+        ),
+    )
+    if blob_store is not None and file_store is not None:
+        for attachment in attachments:
+            content = file_store.get(str(attachment.get("sha256") or ""))
+            if content is not None and attachment.get("name"):
+                blob_store.put(candidate["candidate_id"], str(attachment["name"]), content)
+    return get_candidate(engine, candidate["candidate_id"])

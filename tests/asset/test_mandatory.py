@@ -218,3 +218,32 @@ def test_changing_mandatory_invalidates_known_revision(service):
     changed = _bundle(service, agent_key="coder-default", known_revision=first["revision"])
     assert "files" in changed and "10-engineering" not in _names(changed)
     assert base64.b64decode(first["files"]["rules/10-engineering.md"])
+
+
+def test_usage_report_recognises_the_reference_spellings_agents_really_write(service):
+    """2026-10-17 从真实回复里收集的写法：中文类型、文件路径、.md 后缀、标题都要认得出。"""
+    payload = _bundle(service, agent_key="coder-default")
+    refs = [
+        "rules/10-engineering",
+        "规范/00-security-redlines.md",
+        "流程/delivery-standard",
+        "knowledge/sops/delivery-standard/SOP",
+        "Sop/通用交付流程（L1）",
+        "sops/delivery-standard/SOP.md",
+        "类型/名称",
+        "knowledge/INDEX",
+    ]
+    response = service.post(
+        "/internal/v1/agent-usage",
+        json={
+            "revision": payload["revision"],
+            "session_id": "ref-spellings",
+            "agent_key": "coder-default",
+            "engagement_slug": "policy-import",
+            "refs": refs,
+        },
+        headers={"X-FDE-Service-Key": KEY},
+    )
+    assert response.status_code == 200, response.text
+    # 只有写法示例和知识索引认不出
+    assert sorted(response.json()["ignored"]) == ["knowledge/INDEX", "类型/名称"]

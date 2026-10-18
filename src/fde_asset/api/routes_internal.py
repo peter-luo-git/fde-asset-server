@@ -232,8 +232,20 @@ def agent_usage(
             unknown.append(str(path))
             continue
         items.append(_usage(payload, revision, *found))
-    for ref in payload.get("refs") or []:
-        asset_id = agent_bundle_module.resolve_ref(bundle, str(ref))
+    refs = payload.get("refs") or []
+    titles: dict[str, str] = {}
+    if refs:
+        # 有的引用直接写标题（[[Solution/银行核心迁移方案]]），按包里资产的标题再对一次
+        ids = [str(item.get("asset_id", "")) for item in bundle.assets]
+        with context.engine.connect() as conn:
+            titles = {
+                row.asset_id: row.title
+                for row in conn.execute(
+                    select(assets.c.asset_id, assets.c.title).where(assets.c.asset_id.in_(ids))
+                )
+            }
+    for ref in refs:
+        asset_id = agent_bundle_module.resolve_ref(bundle, str(ref), titles)
         if asset_id is None:
             unknown.append(str(ref))
             continue

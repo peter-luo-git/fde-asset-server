@@ -336,38 +336,66 @@ def resolve_path(bundle: AgentBundle, path: str) -> tuple[str, str] | None:
     return None
 
 
-#: Agent 在交付摘要里写引用时用的前缀 → 资产类型。它写得不统一：有照类型写的（skill/x），
-#: 有照目录写的（rules/x、knowledge/cases/x），也有照知识索引里给的写的（company:x）
+#: Agent 写引用时用的前缀 → 资产类型。它写得不统一：有照类型写的（skill/x、Solution/x），
+#: 有照目录写的（rules/x、knowledge/cases/x），有照知识索引写的（company:x），
+#: 也有写中文的（方案/x、规范/x.md）。2026-10-17 按真实回复里的写法补齐
 _REF_KIND_HINTS = {
     "rule": "Rule",
     "rules": "Rule",
+    "规范": "Rule",
+    "规则": "Rule",
     "skill": "Skill",
     "skills": "Skill",
+    "技能": "Skill",
     "case": "Case",
     "cases": "Case",
+    "案例": "Case",
+    "问题": "Case",
     "sop": "Sop",
     "sops": "Sop",
+    "流程": "Sop",
     "solution": "Solution",
     "solutions": "Solution",
+    "方案": "Solution",
     "impl": "Implementation",
     "implementation": "Implementation",
     "implementations": "Implementation",
+    "实施": "Implementation",
     "exp": "Experience",
     "experience": "Experience",
     "experiences": "Experience",
+    "经验": "Experience",
 }
+#: 写成文件路径时，最后一段是这些文件名，资产名在前一段（knowledge/sops/x/SOP.md）
+_MAIN_FILES = {"readme", "sop", "skill", "rule", "asset.yaml", "asset"}
+_REF_SUFFIXES = (".md", ".yaml")
 
 
-def resolve_ref(bundle: AgentBundle, ref: str) -> str | None:
-    """Agent 在交付摘要里写的一处引用，是资产包里的哪份资产。认不出返回 None。
+def resolve_ref(bundle: AgentBundle, ref: str, titles: dict[str, str] | None = None) -> str | None:
+    """Agent 写的一处引用，是资产包里的哪份资产。认不出返回 None。
 
-    按最后一段名字去对资产包里的挂载名；同名不同类型时看前缀像哪一类。
+    按名字去对资产包里的挂载名；对不上再按标题对（`titles`：资产编号 → 标题）。
+    同名不同类型时看前缀像哪一类。知识索引（INDEX）、写法示例（类型/名称）这类认不出，照常忽略。
     """
-    pieces = [piece for piece in re.split(r"[/:]", (ref or "").strip().strip("[]")) if piece]
+    pieces = [
+        piece.strip()
+        for piece in re.split(r"[/:：]", (ref or "").strip().strip("[]"))
+        if piece.strip()
+    ]
     if not pieces:
         return None
-    name = pieces[-1].removesuffix(".md")
+    name = pieces[-1]
+    for suffix in _REF_SUFFIXES:
+        name = name.removesuffix(suffix)
+    if name.lower() in _MAIN_FILES and len(pieces) > 1:
+        pieces = pieces[:-1]
+        name = pieces[-1]
     found = [item for item in bundle.assets if item.get("mount_name") == name]
+    if not found:
+        # 也有人写不带负责人后缀的资产标识，或直接写标题
+        found = [item for item in bundle.assets if item.get("name") == name]
+    if not found and titles:
+        found = [item for item in bundle.assets if titles.get(item.get("asset_id", "")) == name]
     if not found:
         return None
     hinted = {_REF_KIND_HINTS.get(piece.lower()) for piece in pieces[:-1]}

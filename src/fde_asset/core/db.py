@@ -171,6 +171,31 @@ harvest_candidates = Table(
     Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
     Column("updated_at", DateTime(timezone=True), nullable=False, default=_now),
     Column("review_id", String(64), nullable=False, default=""),
+    # 修订的是哪份已入库资产：入库时写回那份资产（编号不变、版本加一），不另起一份新资产
+    Column("revises_asset_id", String(64), nullable=False, default=""),
+    # 起草时除了归属作用域，还想让谁看见（company、department:x、user:x……）。
+    # 评审人有权放的入库时直接生效，没权放的入库后转成可见范围申请
+    Column("visibility_json", Text, nullable=False, default="[]"),
+)
+
+#: 可见范围申请：资产负责人想把资产放到自己没有评审权的那一层时，由那一层的评审人审批
+visibility_requests = Table(
+    "visibility_requests",
+    metadata,
+    Column("request_id", String(64), primary_key=True),
+    Column("asset_id", String(64), nullable=False),
+    # 申请加上的那一项：company、department:x、customer:x、engagement:x
+    Column("entry", String(80), nullable=False),
+    Column("requested_by", String(64), nullable=False),
+    Column("note", Text, nullable=False, default=""),
+    Column(
+        "status", String(16), nullable=False, default="open"
+    ),  # open|approved|rejected|withdrawn
+    Column("decided_by", String(64), nullable=False, default=""),
+    Column("decision_note", Text, nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    Column("decided_at", DateTime(timezone=True)),
+    Index("ix_visibility_requests_asset", "asset_id", "status"),
 )
 
 asset_reviews = Table(

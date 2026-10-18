@@ -1,4 +1,6 @@
-"""端到端：真实 uvicorn + 真实 git 仓库 + SQLite，跑完 12 步主链路。
+"""端到端：真实 uvicorn + 真实 git 仓库 + 数据库，跑完 12 步主链路。
+
+数据库默认 SQLite；设了 FDE_ASSET_TEST_DATABASE_URL 就用 PostgreSQL 的临时库（和其他用例一样）。
 
 这不是单元测试的补充，而是资产中心 v0.1 的验收：任何一步失败都视为不通过。
 """
@@ -10,12 +12,14 @@ from pathlib import Path
 import pytest
 
 from scripts.asset_demo import run_demo
+from tests.conftest import temporary_database
 
 
 @pytest.fixture(scope="module")
 def demo_results(tmp_path_factory) -> list:
     data_dir: Path = tmp_path_factory.mktemp("e2e") / "data"
-    return run_demo(data_dir, verbose=False)
+    with temporary_database() as database_url:
+        return run_demo(data_dir, verbose=False, database_url=database_url)
 
 
 def test_all_twelve_steps_pass(demo_results) -> None:

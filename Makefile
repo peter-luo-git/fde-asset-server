@@ -24,7 +24,7 @@ check:
 	$(RUN) ruff format --check src tests
 	$(RUN) python -m compileall -q src tests
 	$(RUN) pytest -q
-	$(RUN) alembic heads
+	$(RUN) python -m alembic heads
 ifeq ($(HAS_UV),yes)
 	uv lock --check
 endif

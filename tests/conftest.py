@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -43,12 +44,11 @@ def _env_does_not_leak():
 POSTGRES_URL = os.environ.get("FDE_ASSET_TEST_DATABASE_URL", "")
 
 
-@pytest.fixture()
-def settings(tmp_path: Path):
+@contextmanager
+def temporary_database():
+    """设了 PostgreSQL 时建一个临时库，给出它的地址，用完删掉；没设就给空串（用 SQLite）。"""
     if not POSTGRES_URL:
-        value = AssetSettings(data_dir=tmp_path / "data")
-        value.ensure_dirs()
-        yield value
+        yield ""
         return
 
     import uuid
@@ -61,18 +61,21 @@ def settings(tmp_path: Path):
     admin = create_engine(server, isolation_level="AUTOCOMMIT")
     with admin.connect() as conn:
         conn.exec_driver_sql(f'CREATE DATABASE "{name}"')
-    value = AssetSettings(
-        data_dir=tmp_path / "data",
-        database_url=server.set(database=name).render_as_string(hide_password=False),
-    )
-    value.ensure_dirs()
     try:
-        yield value
+        yield server.set(database=name).render_as_string(hide_password=False)
     finally:
         with admin.connect() as conn:
             # 用例里建的连接池可能还开着，强制断开再删
             conn.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
         admin.dispose()
+
+
+@pytest.fixture()
+def settings(tmp_path: Path):
+    with temporary_database() as database_url:
+        value = AssetSettings(data_dir=tmp_path / "data", database_url=database_url)
+        value.ensure_dirs()
+        yield value
 
 
 @pytest.fixture()

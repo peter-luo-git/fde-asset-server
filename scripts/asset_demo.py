@@ -81,8 +81,9 @@ def _check(condition: bool, message: str) -> None:
         raise DemoFailure(message)
 
 
-def run_demo(data_dir: Path, *, verbose: bool = True) -> list[StepResult]:
-    settings = AssetSettings(data_dir=data_dir)
+def run_demo(data_dir: Path, *, verbose: bool = True, database_url: str = "") -> list[StepResult]:
+    """`database_url` 不给就用数据目录里的 SQLite；测试设了 PostgreSQL 时传进来。"""
+    settings = AssetSettings(data_dir=data_dir, database_url=database_url)
     settings.ensure_dirs()
     seed(settings)
     results: list[StepResult] = []

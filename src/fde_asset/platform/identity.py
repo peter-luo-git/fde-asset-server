@@ -114,6 +114,10 @@ class LocalDirectory:
         """Agent 清单（按预设 key 索引），同上。"""
         return self._load().get("agents", {})
 
+    def departments(self) -> dict[str, str]:
+        """部门代号 → 名称。开发名单里没写就为空，页面显示代号。"""
+        return dict(self._load().get("departments", {}))
+
     def write(self, data: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -302,6 +306,11 @@ class PlatformDirectory:
             agent_snapshot[raw["key"]] = {field: raw[field] for field in fields}
         try:
             snapshot = {
+                "departments": {
+                    str(raw["code"]): str(raw.get("name") or raw["code"])
+                    for raw in payload.get("departments") or []
+                    if isinstance(raw, dict) and raw.get("code")
+                },
                 "agents": agent_snapshot,
                 "users": {
                     raw["username"]: _principal_from_platform(raw) for raw in payload["users"]
@@ -339,3 +348,7 @@ class PlatformDirectory:
 
     def agents(self) -> dict[str, dict]:
         return self._directory()["agents"]
+
+    def departments(self) -> dict[str, str]:
+        """部门代号 → 名称，选可见范围时显示用。"""
+        return self._directory()["departments"]

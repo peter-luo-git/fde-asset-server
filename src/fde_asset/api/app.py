@@ -15,6 +15,7 @@ from fde_asset.api import (
     routes_mcp,
     routes_notify,
     routes_recommend,
+    routes_visibility,
     routes_work_items,
 )
 from fde_asset.api.deps import build_context
@@ -59,6 +60,7 @@ def create_app(settings: AssetSettings | None = None) -> FastAPI:
     app.include_router(routes_harvest.router)
     app.include_router(routes_work_items.router)
     app.include_router(routes_mandatory.router)
+    app.include_router(routes_visibility.router)
     app.include_router(routes_recommend.router)
     app.include_router(routes_apps.router)
     app.include_router(routes_notify.router)
