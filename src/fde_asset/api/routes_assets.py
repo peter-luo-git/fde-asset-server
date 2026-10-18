@@ -35,6 +35,7 @@ from fde_asset.platform.identity import Principal
 from fde_asset.platform import settings_store
 from fde_asset.platform.llm.reranker import build_reranker
 from fde_asset.platform.refs.wiki import parse_refs
+from fde_asset.platform.repo.ports import RepoRef
 
 router = APIRouter(prefix="/api/v1", tags=["assets"])
 
@@ -282,6 +283,35 @@ def asset_versions_view(
             }
             for row in rows
         ]
+    }
+
+
+@router.get("/assets/{asset_id}/body")
+def get_asset_body(
+    asset_id: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """资产正文全文（主文件的 Markdown）。详情页原来只显示结论段，正文其余章节看不到（B1）。
+
+    读的是仓库里的主文件；库里的 content_text 混着附件抽出来的文字，是给检索用的，不拿来展示。
+    """
+    if catalog.get_asset(context.engine, principal, asset_id) is None:
+        raise HTTPException(status_code=404, detail="资产不存在或无权查看")
+    with context.engine.connect() as conn:
+        row = conn.execute(select(assets).where(assets.c.asset_id == asset_id)).first()
+    rule = KIND_RULES.get(row.kind)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="这类资产没有正文")
+    path = f"{row.path}/{rule.main_file}"
+    try:
+        raw = context.repo_port.read_file(RepoRef(name=row.repo), path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="仓库里找不到这份资产的正文") from None
+    return {
+        "asset_id": asset_id,
+        "file": rule.main_file,
+        "markdown": raw.decode("utf-8", errors="replace"),
     }
 
 
@@ -574,7 +604,9 @@ def asset_checkup(
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     """资产体检：半年没更新、零复用、被反复拒绝、收到差评，四条规则。"""
-    return checkup.run(context.engine, principal, owner_only=owner_only)
+    return checkup.run(
+        context.engine, principal, owner_only=owner_only, directory=context.directory
+    )
 
 
 @router.get("/settings")

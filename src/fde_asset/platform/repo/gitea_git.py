@@ -129,6 +129,31 @@ class GiteaGitRepo(LocalGitRepo):
         if status not in (201, 409):
             raise GitCommandError(f"没能在 Gitea 里建仓库 {self.owner}/{repo.name}：{status}")
 
+    def ensure_push_hook(self, repo: RepoRef, url: str, secret: str) -> bool:
+        """资产仓库有推送就回调资产中心（B9）。已经有指向同一地址的回调就不动；返回这次是否新挂了。"""
+        self.ensure_repo(repo)
+        status, hooks = self._api("GET", f"/repos/{self.owner}/{repo.name}/hooks")
+        if status != 200:
+            raise GitCommandError(f"读不了 {self.owner}/{repo.name} 的回调：{status}")
+        if isinstance(hooks, list) and any(
+            isinstance(hook, dict) and (hook.get("config") or {}).get("url") == url
+            for hook in hooks
+        ):
+            return False
+        status, _ = self._api(
+            "POST",
+            f"/repos/{self.owner}/{repo.name}/hooks",
+            {
+                "type": "gitea",
+                "active": True,
+                "events": ["push"],
+                "config": {"url": url, "content_type": "json", "secret": secret},
+            },
+        )
+        if status != 201:
+            raise GitCommandError(f"没能给 {self.owner}/{repo.name} 挂回调：{status}")
+        return True
+
     def ensure_repo(self, repo: RepoRef) -> Path:
         path = super().ensure_repo(repo)
         if repo.name not in self._ensured:

@@ -45,8 +45,12 @@ class AssetSettings(BaseSettings):
     gitea_token: str = ""
     #: 令牌放在文件里时给路径，优先于上面那一项
     gitea_token_file: Path | None = None
-    #: 多久去 Gitea 看一次有没有新提交
-    gitea_sync_seconds: float = 20.0
+    #: 多久去 Gitea 看一次有没有新提交。资产仓库有推送时 Gitea 会回调（gitea_webhook_url），
+    #: 这里只是兜底，所以放到 5 分钟（2026-10-18，原来 20 秒）
+    gitea_sync_seconds: float = 300.0
+    #: Gitea 回调资产中心的地址（同一个 Docker 网络里，如 http://asset-server:8100/internal/v1/gitea-push）；
+    #: 不填就只靠轮询。签名密钥由和平台共用的服务密钥派生，不另配
+    gitea_webhook_url: str = ""
     #: 附件原件的存放目录；不填就在数据目录下
     file_root: Path | None = None
 
@@ -111,6 +115,17 @@ class AssetSettings(BaseSettings):
     def bundle_dir(self) -> Path:
         """给平台拼好的 Agent 资产包存档：平台重试一次运行时按版本号来取同一份。"""
         return self.root / "bundles"
+
+    def gitea_webhook_secret(self) -> str:
+        """Gitea 回调的签名密钥：由和平台共用的服务密钥派生，不另配一份。没有服务密钥就不启用回调。"""
+        import hashlib
+        import hmac
+
+        if not self.server_service_key:
+            return ""
+        return hmac.new(
+            self.server_service_key.encode(), b"fde-asset-gitea-webhook", hashlib.sha256
+        ).hexdigest()
 
     def gitea_access_token(self) -> str:
         if self.gitea_token_file is not None:

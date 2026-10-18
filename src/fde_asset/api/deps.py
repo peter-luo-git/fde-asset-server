@@ -93,6 +93,15 @@ def build_context(settings: AssetSettings | None = None) -> ServiceContext:
     if copied:
         logger.warning("已把 SQLite 里的数据搬进 PostgreSQL：%d 张表、%d 行", *copied)
     repo_port = build_repo_port(settings)
+    if settings.gitea_url and settings.gitea_webhook_url and settings.gitea_webhook_secret():
+        # 资产仓库有推送就回调资产中心，马上同步、重建索引；轮询只是兜底（B9）
+        try:
+            if repo_port.ensure_push_hook(
+                RepoRef(), settings.gitea_webhook_url, settings.gitea_webhook_secret()
+            ):
+                logger.warning("已给资产仓库挂上 Gitea 推送回调：%s", settings.gitea_webhook_url)
+        except Exception as error:  # noqa: BLE001 - 挂不上就只靠轮询，不挡启动
+            logger.warning("资产仓库的 Gitea 回调没挂上，只靠轮询：%s", error)
     file_store = FileStore(settings.file_dir)
     # 以前是一层一个仓库；数据目录里还留着那样的旧仓库就先并进来，之后才能建索引
     reset_candidates: list[str] = []

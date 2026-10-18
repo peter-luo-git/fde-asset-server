@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
+import logging
+import threading
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import select
 
 from fde_asset.api.deps import ServiceContext, get_context
@@ -24,6 +27,8 @@ from fde_asset.platform.identity import PlatformUnavailable, PrincipalNotFound
 from fde_asset.platform.repo.ports import RepoRef
 
 # 内部接口不进对外的接口契约
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/internal/v1", include_in_schema=False)
 
 # Agent 那条链路目前只认公司级和项目级，类型只认这几种；其余的不给
@@ -129,6 +134,78 @@ def agent_catalog(
             }
         )
     return {"username": principal.user_id, "items": items, "skipped": skipped}
+
+
+_push_lock = threading.Lock()
+_push_state = {"running": False, "pending": False}
+
+
+def _refresh_after_push(context: ServiceContext) -> None:
+    """Gitea 说资产仓库有新推送：强制同步，库里还不是这个版本就重建索引。期间又来推送就跑完再补一次。"""
+    from fde_asset.modules.asset.indexer import index_all
+
+    while True:
+        try:
+            repo = RepoRef()
+            sync = getattr(context.repo_port, "sync", None)
+            if callable(sync):
+                sync(repo, force=True)
+            head = context.repo_port.get_head(repo)
+            with context.engine.connect() as conn:
+                indexed = conn.execute(
+                    select(assets.c.asset_id).where(
+                        assets.c.repo == repo.name, assets.c.commit_sha == head
+                    )
+                ).first()
+            if indexed is None:
+                index_all(
+                    context.engine,
+                    context.repo_port,
+                    context.repos(),
+                    text_limit=context.settings.index_text_limit,
+                    owner_of=context.target_owner,
+                    file_store=context.file_store,
+                )
+        except Exception:  # noqa: BLE001 - 失败了还有定时轮询兜底
+            logger.exception("Gitea 推送回调触发的同步失败，等定时轮询兜底")
+        with _push_lock:
+            if not _push_state["pending"]:
+                _push_state["running"] = False
+                return
+            _push_state["pending"] = False
+
+
+@router.post("/gitea-push", status_code=202)
+async def gitea_push(
+    request: Request, context: ServiceContext = Depends(get_context)
+) -> dict[str, Any]:
+    """Gitea 的推送回调（B9）：资产仓库主分支有新提交就马上同步、重建索引，不用等轮询。
+
+    用 X-Gitea-Signature 验签，密钥由服务密钥派生（settings.gitea_webhook_secret）。
+    """
+    secret = context.settings.gitea_webhook_secret()
+    if not secret:
+        raise HTTPException(status_code=404)
+    body = await request.body()
+    if len(body) > 1024 * 1024:
+        raise HTTPException(status_code=413)
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(request.headers.get("x-gitea-signature", ""), expected):
+        raise HTTPException(status_code=403, detail="签名不对")
+    try:
+        payload = json.loads(body or b"{}")
+    except ValueError:
+        raise HTTPException(status_code=422, detail="不是 JSON") from None
+    name = ((payload.get("repository") or {}).get("name")) if isinstance(payload, dict) else None
+    if name != RepoRef().name or not str(payload.get("ref", "")).startswith("refs/heads/"):
+        return {"accepted": False}
+    with _push_lock:
+        if _push_state["running"]:
+            _push_state["pending"] = True
+            return {"accepted": True, "queued": True}
+        _push_state["running"] = True
+    threading.Thread(target=_refresh_after_push, args=(context,), daemon=True).start()
+    return {"accepted": True}
 
 
 @router.post("/agent-bundle", dependencies=[Depends(require_service_key)])

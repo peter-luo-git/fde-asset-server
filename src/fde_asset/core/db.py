@@ -178,6 +178,37 @@ harvest_candidates = Table(
 )
 
 #: 可见范围申请：资产负责人想把资产放到自己没有评审权的那一层时，由那一层的评审人审批
+#: 定时体检的结果（B10）：同一份资产、同一条规则、同一个对象只有一行；问题消失就记下解决时间，
+#: 再出现算新问题。新出现的才发通知
+asset_checkup_findings = Table(
+    "asset_checkup_findings",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("asset_id", String(64), nullable=False),
+    Column("rule", String(32), nullable=False),
+    #: 规则针对的对象：失效的引用、点名的人；其余规则为空
+    Column("subject", String(200), nullable=False, default=""),
+    Column("owner_ref", String(128), nullable=False, default=""),
+    Column("detail", Text, nullable=False, default=""),
+    Column("first_seen_at", DateTime(timezone=True), nullable=False, default=_now),
+    Column("last_seen_at", DateTime(timezone=True), nullable=False, default=_now),
+    Column("resolved_at", DateTime(timezone=True)),
+    Column("notified_at", DateTime(timezone=True)),
+    UniqueConstraint("asset_id", "rule", "subject", name="uq_checkup_finding"),
+)
+
+#: 可见范围里点名的人，上一次体检时和这份资产还有没有关系（B5）。
+#: 有关系 → 没关系，说明这个人换了项目或部门，提醒负责人看要不要收回；一开始就没关系的
+#: （有意点名给外部门的人）不提醒
+asset_named_audience = Table(
+    "asset_named_audience",
+    metadata,
+    Column("asset_id", String(64), primary_key=True),
+    Column("user_id", String(64), primary_key=True),
+    Column("related", Boolean, nullable=False, default=False),
+    Column("checked_at", DateTime(timezone=True), nullable=False, default=_now),
+)
+
 visibility_requests = Table(
     "visibility_requests",
     metadata,

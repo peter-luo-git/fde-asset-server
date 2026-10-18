@@ -211,3 +211,13 @@ def test_audience_options_list_departments_customers_projects_and_people(client)
     assert "HUAAN" in {item["code"] for item in options["customers"]}
     assert "policy-import" in {item["code"] for item in options["engagements"]}
     assert "chen" in {item["code"] for item in options["users"]}
+
+
+def test_detail_body_returns_the_full_main_file_for_viewers_only(client):
+    row = _row(client)
+    body = as_user(client, "chen").get(f"/api/v1/assets/{row.asset_id}/body")
+    assert body.status_code == 200, body.text
+    data = body.json()
+    assert data["file"] == "README.md"
+    assert "## 根因" in data["markdown"] or "## 解决方法" in data["markdown"]
+    assert as_user(client, "zhao").get(f"/api/v1/assets/{row.asset_id}/body").status_code == 404
