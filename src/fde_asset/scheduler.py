@@ -2,9 +2,11 @@
 
 | 任务 | 做什么 | 多久一次 |
 |---|---|---|
-| reindex | 资产仓库有新提交就重建索引（顺带重建关系、发变更通知） | `index_poll_seconds`，默认 30 秒 |
+| reindex | 资产仓库有新提交就重建索引（顺带重建关系、发变更通知）。资产仓库挂了 Gitea 推送回调时，推送当场就会同步，这里只是兜底 | `index_poll_seconds`，默认 30 秒；看 Gitea 分支头的缓存 `gitea_sync_seconds` 默认 5 分钟 |
 | leads | 重新扫描沉淀线索 | 10 分钟 |
 | probe | 探一遍应用的演示地址 | 系统配置 `app_probe_interval_minutes`，默认 10 分钟 |
+| checkup | 资产体检，结果落库，新出现的问题通知负责人（B10） | 每天一次 |
+| housekeeping | 清理过期的资产包存档、没人引用的附件原件（B6） | 每天一次 |
 
 正式部署是独立的 asset-worker 进程（`python -m fde_asset.main_asset_worker`）；
 本地演示为了少起一个进程，`serve_seeded.py --with-worker` 会在接口进程里起一个线程跑同一套任务。
@@ -24,6 +26,7 @@ from sqlalchemy import select
 from fde_asset.api.deps import ServiceContext
 from fde_asset.core.db import assets
 from fde_asset.modules.app import health as app_health
+from fde_asset.modules.asset import checkup, housekeeping
 from fde_asset.modules.asset.indexer import index_all
 from fde_asset.modules.leads import rules as leads_rules
 from fde_asset.platform import settings_store
@@ -31,6 +34,7 @@ from fde_asset.platform import settings_store
 logger = logging.getLogger(__name__)
 
 LEADS_INTERVAL_SECONDS = 600
+DAILY_SECONDS = 86400.0
 
 
 @dataclass
@@ -93,6 +97,12 @@ def build_tasks(context: ServiceContext) -> list[Task]:
         Task("reindex", lambda: float(context.settings.index_poll_seconds), reindex),
         Task("leads", lambda: float(LEADS_INTERVAL_SECONDS), leads),
         Task("probe", probe_interval, probe),
+        Task(
+            "checkup",
+            lambda: DAILY_SECONDS,
+            lambda: checkup.sweep(context.engine, context.directory),
+        ),
+        Task("housekeeping", lambda: DAILY_SECONDS, lambda: housekeeping.run(context)),
     ]
 
 

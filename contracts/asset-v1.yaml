@@ -1062,6 +1062,53 @@ paths:
       summary: Download Asset Attachment
       tags:
       - assets
+  /api/v1/assets/{asset_id}/body:
+    get:
+      description: '资产正文全文（主文件的 Markdown）。详情页原来只显示结论段，正文其余章节看不到（B1）。
+
+
+        读的是仓库里的主文件；库里的 content_text 混着附件抽出来的文字，是给检索用的，不拿来展示。'
+      operationId: get_asset_body_api_v1_assets__asset_id__body_get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Get Asset Body Api V1 Assets  Asset Id  Body Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Get Asset Body
+      tags:
+      - assets
   /api/v1/assets/{asset_id}/changes:
     get:
       description: 这份资产最近一次更新改了什么，章节级。
@@ -1106,6 +1153,52 @@ paths:
       summary: Asset Changes
       tags:
       - notify
+  /api/v1/assets/{asset_id}/edit:
+    post:
+      description: '在网页上修改一份已入库资产：起一份带着现在全部内容的修订稿，改完提交评审，
+
+        通过后发布成这份资产的新版本（编号不变、版本号加一）。已经有修订稿就返回那一份。'
+      operationId: edit_asset_api_v1_assets__asset_id__edit_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Edit Asset Api V1 Assets  Asset Id  Edit Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Edit Asset
+      tags:
+      - assets
   /api/v1/assets/{asset_id}/feedback:
     get:
       operationId: read_feedback_api_v1_assets__asset_id__feedback_get
@@ -1303,6 +1396,150 @@ paths:
       summary: Change Lifecycle
       tags:
       - assets
+  /api/v1/assets/{asset_id}/mandatory:
+    get:
+      description: 这份资产在哪些范围是必选，以及我能给哪些范围设。
+      operationId: asset_mandatory_api_v1_assets__asset_id__mandatory_get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Asset Mandatory Api V1 Assets  Asset Id  Mandatory Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Asset Mandatory
+      tags:
+      - mandatory
+    post:
+      description: '设为必选。`entry`：company，或 department:/customer:/engagement:/user: 加代号。'
+      operationId: add_mandatory_api_v1_assets__asset_id__mandatory_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Add Mandatory Api V1 Assets  Asset Id  Mandatory Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Add Mandatory
+      tags:
+      - mandatory
+  /api/v1/assets/{asset_id}/mandatory/remove:
+    post:
+      operationId: remove_mandatory_api_v1_assets__asset_id__mandatory_remove_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Remove Mandatory Api V1 Assets  Asset Id  Mandatory Remove Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Remove Mandatory
+      tags:
+      - mandatory
   /api/v1/assets/{asset_id}/passport:
     get:
       operationId: get_passport_api_v1_assets__asset_id__passport_get
@@ -1482,6 +1719,50 @@ paths:
       summary: Get Sop Step
       tags:
       - assets
+  /api/v1/assets/{asset_id}/versions:
+    get:
+      description: 这份资产发布过的版本，新的在前。
+      operationId: asset_versions_view_api_v1_assets__asset_id__versions_get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Asset Versions View Api V1 Assets  Asset Id  Versions Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Asset Versions View
+      tags:
+      - assets
   /api/v1/assets/{asset_id}/visibility:
     post:
       description: '调整可见范围（升级、降级、分享）：改仓库里的 asset.yaml 并提交，再重建索引。
@@ -1536,6 +1817,87 @@ paths:
       summary: Change Visibility
       tags:
       - assets
+  /api/v1/assets/{asset_id}/visibility-requests:
+    get:
+      operationId: asset_requests_api_v1_assets__asset_id__visibility_requests_get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Asset Requests Api V1 Assets  Asset Id  Visibility Requests Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Asset Requests
+      tags:
+      - visibility
+  /api/v1/audience-options:
+    get:
+      description: 选可见范围时的下拉名单：部门、客户、项目、人。名单取不到时各项为空，页面退回手填。
+      operationId: audience_options_api_v1_audience_options_get
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Audience Options Api V1 Audience Options Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Audience Options
+      tags:
+      - visibility
   /api/v1/dev/identities:
     get:
       description: '开发模式下可以切换成哪些身份，给页面上的身份切换用。
@@ -2206,6 +2568,53 @@ paths:
       summary: List Kinds
       tags:
       - assets
+  /api/v1/mandatory:
+    get:
+      description: 必选资产清单。管理员看全部；其他人看自己负责的范围。
+      operationId: list_mandatory_api_v1_mandatory_get
+      parameters:
+      - description: 只看某一种范围：company/department/customer/engagement/user
+        in: query
+        name: scope
+        required: false
+        schema:
+          default: ''
+          description: 只看某一种范围：company/department/customer/engagement/user
+          title: Scope
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response List Mandatory Api V1 Mandatory Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: List Mandatory
+      tags:
+      - mandatory
   /api/v1/match:
     post:
       description: 按项目/工作项/Agent 的上下文推荐该带哪些资产，每条都带推荐理由。
@@ -3143,6 +3552,149 @@ paths:
       summary: Unsubscribe
       tags:
       - notify
+  /api/v1/visibility-requests:
+    get:
+      operationId: list_requests_api_v1_visibility_requests_get
+      parameters:
+      - description: todo 等我批的 / mine 我提的 / decided 我批过的
+        in: query
+        name: view
+        required: false
+        schema:
+          default: todo
+          description: todo 等我批的 / mine 我提的 / decided 我批过的
+          enum:
+          - todo
+          - mine
+          - decided
+          title: View
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response List Requests Api V1 Visibility Requests Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: List Requests
+      tags:
+      - visibility
+  /api/v1/visibility-requests/{request_id}/decide:
+    post:
+      operationId: decide_request_api_v1_visibility_requests__request_id__decide_post
+      parameters:
+      - in: path
+        name: request_id
+        required: true
+        schema:
+          title: Request Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Decide Request Api V1 Visibility Requests  Request Id  Decide Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Decide Request
+      tags:
+      - visibility
+  /api/v1/visibility-requests/{request_id}/withdraw:
+    post:
+      operationId: withdraw_request_api_v1_visibility_requests__request_id__withdraw_post
+      parameters:
+      - in: path
+        name: request_id
+        required: true
+        schema:
+          title: Request Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Withdraw Request Api V1 Visibility Requests  Request Id  Withdraw Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Withdraw Request
+      tags:
+      - visibility
   /api/v1/work-items/{work_item_id}/assets:
     get:
       operationId: list_links_api_v1_work_items__work_item_id__assets_get

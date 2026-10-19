@@ -19,7 +19,6 @@ from fde_asset.core.db import (
     harvest_candidates,
 )
 from fde_asset.modules.asset.indexer import (
-    asset_id_for_candidate,
     finish_index,
     index_repository,
 )
@@ -92,6 +91,7 @@ def create_candidate(
                 source=payload.get("source", {}),
                 files=payload.get("files", {}),
                 lead_id=payload.get("lead_id") or "",
+                visibility=payload.get("visibility") or [],
             ),
         )
     except service.HarvestError as exc:
@@ -225,6 +225,8 @@ def patch_candidate(
             service.merge_files(context.engine, candidate_id, payload["files"])
         if "meta" in payload:
             service.update_meta(context.engine, candidate_id, payload["meta"])
+        if "visibility" in payload:
+            service.set_visibility(context.engine, candidate_id, payload["visibility"])
     except service.HarvestError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     service.run_checks(context.engine, candidate_id, _scan_context(context))
@@ -580,9 +582,9 @@ def _landed_asset_id(context: ServiceContext, principal: Principal, candidate: A
     """评审通过的草稿入库后是哪份资产；看不到或已经不在了就返回空，页面只给草稿链接。"""
     if candidate is None:
         return ""
-    # 资产编号是由草稿编号算出来的，不用再按层级和名字去猜
+    # 资产编号是由草稿编号算出来的（修订稿就是被修订的那份），不用再按层级和名字去猜
     conditions = [
-        assets.c.asset_id == asset_id_for_candidate(candidate.candidate_id),
+        assets.c.asset_id == service.landed_asset_id(candidate),
         assets.c.deleted_at.is_(None),
         visibility_clause(principal),
     ]
@@ -683,7 +685,112 @@ def decide_review(
             "invalid": report.invalid,
             "head": report.head,
         }
+        if payload.get("mandatory") is True:
+            result["mandatory"] = _mark_mandatory(context, principal, review.scope, candidate)
+        extra = json.loads(getattr(candidate, "visibility_json", "") or "[]")
+        if extra:
+            result["visibility"] = _apply_extra_visibility(context, principal, candidate, extra)
     return result
+
+
+def _apply_extra_visibility(
+    context: ServiceContext, principal: Principal, candidate, extra: list[str]
+) -> dict[str, Any]:
+    """起草时多选的可见范围：评审人有权放的直接加上，没权放的以起草人的名义转成申请。"""
+    from fde_asset.api.routes_visibility import announce
+    from fde_asset.modules.asset import sharing
+    from fde_asset.modules.asset import visibility_requests
+
+    asset_id = service.landed_asset_id(candidate)
+    with context.engine.connect() as conn:
+        row = conn.execute(select(assets).where(assets.c.asset_id == asset_id)).first()
+    if row is None:
+        return {"applied": [], "requested": [], "error": "入库后的资产没找到"}
+    from fde_asset.modules.asset.manifest import visibility_entry
+
+    current = sharing.normalize(
+        json.loads(row.visibility_json or "[]")
+        or [
+            visibility_entry(
+                row.scope,
+                department_code=row.department_code or "",
+                customer_code=row.customer_code or "",
+                engagement_slug=row.engagement_slug or "",
+            )
+        ]
+    )
+    wanted_all = sharing.normalize([*current, *extra])
+    added = [pair for pair in sharing.audiences(wanted_all) if sharing._entry(*pair) not in current]
+    allowed = [pair for pair in added if sharing._may_add(principal, *pair)]
+    pending = [sharing._entry(*pair) for pair in added if pair not in allowed]
+    applied: list[str] = []
+    error = ""
+    if allowed:
+        wanted = [entry for entry in wanted_all if entry not in pending]
+        terms_path = context.settings.root / "compliance.json"
+        terms = json.loads(terms_path.read_text(encoding="utf-8")) if terms_path.exists() else {}
+        try:
+            sharing.commit_visibility(
+                context.engine,
+                context.repo_port,
+                principal,
+                row,
+                current=current,
+                wanted=wanted,
+                added=allowed,
+                note="评审通过时按起草时选的可见范围加上",
+                customer_names=tuple(terms.get("customer_names", [])),
+                sensitive_terms=tuple(terms.get("sensitive_terms", [])),
+                text_limit=context.settings.index_text_limit,
+                owner_of=context.target_owner,
+                file_store=context.file_store,
+            )
+            applied = [sharing._entry(*pair) for pair in allowed]
+        except sharing.SharingError as exc:
+            # 比如放到全公司时扫出了客户名：入库照常，这几项不加，告诉评审人
+            error = str(exc)
+    requested = (
+        visibility_requests.create(
+            context.engine,
+            asset_id=asset_id,
+            entries=pending,
+            requested_by=candidate.created_by,
+            note="起草时选的可见范围，评审人没有这一层的权限",
+        )
+        if pending
+        else []
+    )
+    if requested:
+        announce(context, requested, title=row.title, by=candidate.created_by)
+    return {"applied": applied, "requested": [item["entry"] for item in requested], "error": error}
+
+
+def _mark_mandatory(
+    context: ServiceContext, principal: Principal, scope: str, candidate
+) -> dict[str, Any]:
+    """评审通过时顺手设成本作用域的必选资产。设不上不影响入库，原因带回给页面。"""
+    from fde_asset.modules.asset import mandatory
+
+    code = {
+        "department": candidate.department_code,
+        "customer": candidate.customer_code,
+        "engagement": candidate.engagement_slug,
+    }.get(scope, "")
+    entry = "company" if scope == "company" else f"{scope}:{code}"
+    try:
+        saved, _ = mandatory.add(
+            context.engine,
+            principal,
+            service.landed_asset_id(candidate),
+            entry,
+            context={
+                "department_code": candidate.department_code,
+                "customer_code": candidate.customer_code,
+            },
+        )
+    except mandatory.MandatoryError as exc:
+        return {"entry": entry, "ok": False, "error": str(exc)}
+    return {"entry": saved.key, "ok": True}
 
 
 @router.get("/workbench")

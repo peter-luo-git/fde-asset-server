@@ -270,6 +270,31 @@ def notify_review(
     return len(dict.fromkeys(user_ids))
 
 
+def notify_users(
+    engine: Engine,
+    user_ids: list[str],
+    *,
+    kind: str,
+    asset_id: str,
+    title: str,
+    body: str,
+    reason: str,
+) -> int:
+    """给几个人各发一条站内通知（可见范围申请等用）。"""
+    with engine.begin() as conn:
+        for user_id in dict.fromkeys(user_ids):
+            _push(
+                conn,
+                user_id=user_id,
+                kind=kind,
+                asset_id=asset_id,
+                title=title,
+                body=body,
+                reason=reason,
+            )
+    return len(dict.fromkeys(user_ids))
+
+
 def _subscribers(conn, row: Any) -> dict[str, str]:
     """哪些人订阅了这份资产会命中。返回 {用户: 命中的理由}。"""
     industries = set(json.loads(row.industry_json or "[]"))

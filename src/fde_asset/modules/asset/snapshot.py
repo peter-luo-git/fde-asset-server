@@ -5,13 +5,12 @@
 
 带哪些资产分两种情况（`selection`）：
 
-- **linked**：给了目标（项目或 Agent），而且它关联过技能或知识。这时上层（公司、部门、客户）的
-  技能和知识**只带关联过的**——负责人挑过了，就按他挑的来，不再把整层都塞给 Agent。
-- **scope**：没给目标，或者目标还没关联任何技能和知识。退回老办法，作用域内的全带上，
-  免得新项目什么都没有。
-
-不管哪种情况：规范全带（红线不挑场景）；流程全带（分层继承要用到上层）；
-项目自己沉淀的全带（那本来就是它自己的东西）。
+- **linked**：给了目标（项目或 Agent）。上层（公司、部门、客户）的资产只带两种：
+  **设成必选的**（见 `mandatory.py`），和**关联给这个项目或 Agent 的**；其余一份都不带，
+  不拿整层来兜底（2026-10-16 起）。规范和流程也一样，不再按类型自动必带（2026-10-17 起）。
+  带了某个流程，就把它 extends 的上层流程一起带上，分层继承才接得上。
+  项目自己沉淀的全带（那本来就是它自己的东西）。
+- **scope**：没给目标，只是看一个作用域里有什么（不是给哪个 Agent 的），作用域内的全列出来。
 """
 
 from __future__ import annotations
@@ -27,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
 from fde_asset.core.db import assets, target_assets
+from fde_asset.modules.asset import mandatory as mandatory_module
 from fde_asset.modules.asset.manifest import KIND_RULES, SHORT_BY_KIND, owner_slug
 from fde_asset.modules.asset.visibility import audience_clause
 from fde_asset.platform.extract import extract_text
@@ -34,8 +34,6 @@ from fde_asset.platform.repo.ports import RepoRef
 
 LAYER_DIR = {"Rule": "rules", "Skill": "skills", "Sop": "sops"}
 KNOWLEDGE_KINDS = {"Solution", "Implementation", "Case", "Experience"}
-#: 这几类是「挑着带」的：有关联就只带关联的。规范和流程不在此列
-PICKABLE_KINDS = KNOWLEDGE_KINDS | {"Skill"}
 
 
 @dataclass
@@ -47,7 +45,7 @@ class SnapshotResult:
     index_bytes: int = 0
     index_truncated: bool = False
     skipped: list[dict[str, Any]] = field(default_factory=list)
-    #: linked = 按目标关联的资产挑；scope = 作用域内全带
+    #: linked = 给了目标，按它关联的资产挑；scope = 没给目标，作用域内全列出来
     selection: str = "scope"
     #: 快照里有几份是因为被关联才带上的
     linked: int = 0
@@ -64,10 +62,12 @@ class Selection:
     rows: list[Any]
     #: {资产编号: 挂载名}，同类型内不重名
     mounted: dict[str, str]
-    #: linked = 按目标关联的资产挑；scope = 可见范围内全带
+    #: linked = 给了目标，按它关联的资产挑；scope = 没给目标，可见范围内全列出来
     selection: str
     linked: int
     not_carried: list[dict[str, Any]]
+    #: 有几份是因为设成必选才带上的
+    mandatory: int = 0
 
 
 def select_assets(
@@ -79,10 +79,12 @@ def select_assets(
     target_type: str = "",
     target_id: str = "",
     also_targets: tuple[tuple[str, str], ...] = (),
+    username: str = "",
 ) -> Selection:
     """`also_targets`：还要一并算上谁的关联，例如这次干活的 Agent。
 
     关联时定下的挂载名以第一个目标（项目）的为准，后面的目标只补它没有的。
+    `username`：只在这个人和 Agent 私聊时给，带上他的个人必选资产（以及点名给他、他能看的）。
     """
     with engine.connect() as conn:
         rows = conn.execute(
@@ -96,9 +98,17 @@ def select_assets(
                     department_codes=[department_code],
                     customer_codes=[customer_code],
                     engagement_slugs=[engagement_slug],
+                    user_id=username,
                 ),
             )
         ).fetchall()
+        mandatory_ids = mandatory_module.ids_for(
+            conn,
+            department_code=department_code,
+            customer_code=customer_code,
+            engagement_slug=engagement_slug,
+            username=username,
+        )
         linked_ids: set[str] = set()
         linked_titles: dict[str, str] = {}
         #: 关联时定下的挂载名
@@ -131,30 +141,29 @@ def select_assets(
     in_scope = list(rows)
     in_scope.sort(key=lambda row: (_layer_order(row.scope), row.kind, row.name, row.asset_id))
 
-    # 关联过技能或知识，就按关联的来；一份都没关联过，退回作用域内全带
-    picked = {
+    # 给了目标：必选的、关联的、项目自己的才带；没给目标才是看整个作用域
+    available = {row.asset_id for row in in_scope}
+    picked = linked_ids & available
+    forced = mandatory_ids & available
+    selection = "linked" if any(one_type and one_id for one_type, one_id in targets) else "scope"
+    wanted = {
         row.asset_id
         for row in in_scope
-        if row.asset_id in linked_ids and row.kind in PICKABLE_KINDS
-    }
-    selection = "linked" if picked else "scope"
-    selected = [
-        row
-        for row in in_scope
         if selection == "scope"
-        or row.kind not in PICKABLE_KINDS
         or row.scope == "engagement"
         or row.asset_id in picked
-    ]
-    # 关联了却带不进来的要说出来：否则负责人以为 Agent 拿到了，其实没有
-    carried = {row.asset_id for row in selected}
+        or row.asset_id in forced
+    }
+    wanted |= _sop_parents(in_scope, wanted)
+    selected = [row for row in in_scope if row.asset_id in wanted]
+    # 关联了、设了必选却带不进来的要说出来：否则负责人以为 Agent 拿到了，其实没有
     not_carried = [
         {
             "asset": linked_titles.get(asset_id, asset_id),
             "asset_id": asset_id,
             "reason": "linked_but_not_available",
         }
-        for asset_id in sorted(linked_ids - carried)
+        for asset_id in sorted(linked_ids - wanted)
     ]
 
     return Selection(
@@ -163,7 +172,27 @@ def select_assets(
         selection=selection,
         linked=len(picked),
         not_carried=not_carried,
+        mandatory=len(forced - picked),
     )
+
+
+def _sop_parents(rows: list[Any], wanted: set[str]) -> set[str]:
+    """带上的流程 extends 了谁，就把上层流程也带上（只在候选里找，不越过可见范围）。"""
+    by_name: dict[str, Any] = {}
+    for row in rows:
+        if row.kind == "Sop":
+            by_name.setdefault(row.name, row)
+    extra: set[str] = set()
+    queue = [row for row in rows if row.kind == "Sop" and row.asset_id in wanted]
+    while queue:
+        row = queue.pop()
+        parent_ref = str(json.loads(row.kind_spec_json or "{}").get("extends") or "")
+        parent = by_name.get(parent_ref.split("/")[-1]) if parent_ref else None
+        if parent is None or parent.asset_id in wanted or parent.asset_id in extra:
+            continue
+        extra.add(parent.asset_id)
+        queue.append(parent)
+    return extra
 
 
 def build_snapshot(

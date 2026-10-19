@@ -106,17 +106,21 @@ PROJECT = {"department_code": "finance", "engagement_slug": "policy-import"}
 TARGET = {**PROJECT, "target_type": "engagement", "target_id": "policy-import"}
 
 
-def test_without_links_everything_in_scope_is_carried(indexed) -> None:
-    """还没关联过任何技能和知识的项目，不能因此什么都拿不到。"""
+def test_without_links_no_upper_skill_or_knowledge_is_carried(indexed) -> None:
+    """没有关联就是没有：上层的技能和知识不拿整层来兜底。"""
     plain = _build(indexed, **PROJECT)
     targeted = _build(indexed, **TARGET)
-    assert targeted.selection == "scope" and targeted.linked == 0
-    assert targeted.sha == plain.sha, "没有关联时和不给目标是同一份快照"
+    assert targeted.selection == "linked" and targeted.linked == 0
+    assert "insurance-policy-import" in _names(plain, "skills"), "不给目标只是看作用域，照常全列"
+    assert _names(targeted, "skills") == {"policy-date-parse"}, "只剩项目自己的技能"
+    assert "bank-core-migration-solution" not in _knowledge(targeted)
+    assert "import-over-10k-rows-timeout" in _knowledge(targeted), "项目自己沉淀的照带"
+    assert _names(targeted, "rules") == _names(plain, "rules"), "规范照带"
 
 
 def test_linked_skills_and_knowledge_replace_the_whole_upper_layers(indexed) -> None:
     before = _build(indexed, **TARGET)
-    assert "bank-core-migration-solution" in _knowledge(before)
+    assert "insurance-policy-import" not in _names(before, "skills")
 
     _link(indexed, "policy-import", "insurance-policy-import", "policy-import-poc-retro")
     after = _build(indexed, **TARGET)
@@ -156,8 +160,8 @@ def test_links_belong_to_their_target_only(indexed) -> None:
         target_type="engagement",
         target_id="core-migration",
     )
-    assert other.selection == "scope", "别的项目关联了什么，不影响这个项目"
-    assert "bank-core-migration-solution" in _knowledge(other)
+    assert other.selection == "linked" and other.linked == 0, "别的项目关联了什么，不影响这个项目"
+    assert "policy-import-poc-retro" not in _knowledge(other)
 
 
 def test_linked_but_unavailable_assets_are_reported(indexed) -> None:
@@ -199,9 +203,9 @@ def test_snapshot_endpoint_fills_scope_from_the_target(client) -> None:
     wang = as_user(client, "wang")
     target = {"target_type": "engagement", "target_id": "policy-import"}
     first = wang.post("/api/v1/snapshots", json=target).json()
-    assert first["selection"] == "scope" and first["linked"] == 0
-    # 没传部门、客户：从名单里补出来，所以项目级和客户级的资产都在
-    assert first["counts"].get("Case", 0) >= 3
+    assert first["selection"] == "linked" and first["linked"] == 0
+    # 没传部门、客户：从名单里补出来；没关联时只有项目自己的案例
+    assert first["counts"].get("Case", 0) >= 1
 
     item = next(
         i

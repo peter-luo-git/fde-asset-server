@@ -1,4 +1,4 @@
-"""资产中心端到端演示：真实 HTTP 服务 + 真实 git 仓库 + SQLite，不依赖 Docker / Gitea / 模型。
+"""资产中心端到端演示：真实 HTTP 服务 + 真实 git 仓库 + PostgreSQL（FDE_ASSET_DATABASE_URL，要空库），不依赖 Gitea / 模型。
 
 12 步全绿 = 资产中心 v0.1 验收通过。既可以直接运行，也被 tests/e2e 复用。
 """
@@ -81,8 +81,11 @@ def _check(condition: bool, message: str) -> None:
         raise DemoFailure(message)
 
 
-def run_demo(data_dir: Path, *, verbose: bool = True) -> list[StepResult]:
-    settings = AssetSettings(data_dir=data_dir)
+def run_demo(data_dir: Path, *, verbose: bool = True, database_url: str = "") -> list[StepResult]:
+    """`database_url`：PostgreSQL 连接串，要用一个空库；不给就读环境变量 FDE_ASSET_DATABASE_URL。"""
+    settings = AssetSettings(
+        data_dir=data_dir, **({"database_url": database_url} if database_url else {})
+    )
     settings.ensure_dirs()
     seed(settings)
     results: list[StepResult] = []

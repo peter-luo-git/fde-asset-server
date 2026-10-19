@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from fde_asset.core.db import clean_text
 from fde_asset.platform.blobs import BlobStore
 from fde_asset.platform.files import FileStore
-from tests.conftest import POSTGRES_URL, as_user
+from tests.conftest import as_user
 
 
 def test_draft_originals_live_in_the_shared_file_store(tmp_path: Path) -> None:
@@ -66,28 +65,44 @@ def test_null_characters_are_dropped_before_storing() -> None:
     assert clean_text("plain") == "plain"
 
 
-@pytest.mark.skipif(not POSTGRES_URL, reason="要有 PostgreSQL 才能验证搬数据")
-def test_sqlite_data_is_copied_into_an_empty_postgres(tmp_path: Path, settings) -> None:
-    from sqlalchemy import func, select
+def test_old_sqlite_data_is_copied_into_an_empty_postgres(tmp_path: Path, settings) -> None:
+    """生产目标机升级用：旧版本把数据存在数据目录的 asset.db（SQLite），新版本第一次起来时搬进 PostgreSQL。
+
+    资产中心 2026-10-18 起只用 PostgreSQL，这里直接按表结构造一个旧版的 SQLite 文件。
+    """
+    from sqlalchemy import create_engine, func, select
 
     from fde_asset.api.deps import build_context
-    from fde_asset.core.db import asset_events, assets, create_engine_for, init_db, record_event
-    from fde_asset.settings import AssetSettings
-    from scripts.seed_assets import seed
+    from fde_asset.core.db import (
+        asset_events,
+        assets,
+        create_engine_for,
+        init_db,
+        metadata,
+        record_event,
+    )
 
-    # 先按老样子用 SQLite 跑起来，攒下一些数据
-    old = AssetSettings(data_dir=settings.data_dir)
-    seed(old)
-    old_context = build_context(old)
-    from fde_asset.modules.asset.indexer import index_all
-
-    index_all(old_context.engine, old_context.repo_port, old_context.repos())
-    with old_context.engine.begin() as conn:
+    settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+    old = create_engine(f"sqlite+pysqlite:///{settings.db_path}", future=True)
+    metadata.create_all(old)
+    with old.begin() as conn:
+        for index in range(3):
+            conn.execute(
+                assets.insert().values(
+                    asset_id=f"old-{index}",
+                    scope="company",
+                    repo="assets",
+                    path=f"assets/old-{index}",
+                    kind="Case",
+                    name=f"old-{index}",
+                    title=f"旧库里的资产 {index}",
+                    owner_ref="user:chen",
+                )
+            )
         record_event(conn, "test.marker", {"text": "带\x00空字符"})
         before_assets = conn.execute(select(func.count()).select_from(assets)).scalar_one()
         before_events = conn.execute(select(func.count()).select_from(asset_events)).scalar_one()
-    old_context.engine.dispose()
-    assert before_assets > 0
+    old.dispose()
 
     # 换成 PostgreSQL 启动：空库 + 数据目录里留着 SQLite 文件 → 自动搬
     context = build_context(settings)

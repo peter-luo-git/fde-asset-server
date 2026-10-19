@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 from sqlalchemy import Column, String, inspect, select
@@ -10,9 +9,9 @@ from sqlalchemy import Column, String, inspect, select
 from fde_asset.core.db import add_missing_columns, assets, create_engine_for, init_db, metadata
 
 
-def _old_db(tmp_path: Path):
+def _old_db(settings):
     """造一个缺 customer_code 列、且已有一行数据的旧库。"""
-    engine = create_engine_for(tmp_path / "asset.db")
+    engine = create_engine_for(settings.database_target())
     metadata.create_all(engine)
     with engine.begin() as conn:
         conn.execute(
@@ -37,8 +36,8 @@ def _columns(engine) -> set[str]:
     return {item["name"] for item in inspect(engine).get_columns("assets")}
 
 
-def test_init_db_adds_missing_column_and_keeps_rows(tmp_path: Path) -> None:
-    engine = _old_db(tmp_path)
+def test_init_db_adds_missing_column_and_keeps_rows(settings) -> None:
+    engine = _old_db(settings)
     assert "customer_code" not in _columns(engine)
 
     init_db(engine)
@@ -51,8 +50,8 @@ def test_init_db_adds_missing_column_and_keeps_rows(tmp_path: Path) -> None:
     assert add_missing_columns(engine) == [], "补过一次就不该再动"
 
 
-def test_alembic_managed_db_is_left_alone(tmp_path: Path) -> None:
-    engine = _old_db(tmp_path)
+def test_alembic_managed_db_is_left_alone(settings) -> None:
+    engine = _old_db(settings)
     with engine.begin() as conn:
         conn.exec_driver_sql("CREATE TABLE alembic_version (version_num VARCHAR(32))")
 
@@ -60,8 +59,8 @@ def test_alembic_managed_db_is_left_alone(tmp_path: Path) -> None:
     assert "customer_code" not in _columns(engine), "迁移脚本管的库交给迁移脚本"
 
 
-def test_not_null_column_without_default_is_refused(tmp_path: Path) -> None:
-    engine = _old_db(tmp_path)
+def test_not_null_column_without_default_is_refused(settings) -> None:
+    engine = _old_db(settings)
     column = Column("no_default", String(8), nullable=False)
     assets.append_column(column)
     try:

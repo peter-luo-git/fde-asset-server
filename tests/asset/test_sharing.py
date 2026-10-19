@@ -60,8 +60,11 @@ def test_widening_needs_the_reviewer_of_the_target_level(client) -> None:
     asset = _asset(wang, "policy-date-parse")
     url = f"/api/v1/assets/{asset['asset_id']}/visibility"
 
-    refused = wang.post(url, json={"visibility": ["engagement:policy-import", "company"]})
-    assert refused.status_code == 403, "放到全公司要资产评审员来操作"
+    # 2026-10-17 起不再拒绝：没有那一层评审权时转成申请，等资产评审员批
+    requested = wang.post(url, json={"visibility": ["engagement:policy-import", "company"]})
+    assert requested.status_code == 200, requested.text
+    assert requested.json()["changed"] is False
+    assert [item["entry"] for item in requested.json()["requested"]] == ["company"]
 
     allowed = wang.post(url, json={"visibility": ["engagement:policy-import", "user:zhao"]})
     assert allowed.status_code == 200, allowed.text
@@ -91,6 +94,11 @@ def test_mount_names_keep_the_first_and_suffix_the_later() -> None:
 
 
 def test_agent_bundle_is_laid_out_for_the_platform(indexed, tmp_path) -> None:
+    from tests.platform.test_agent_integration import _link
+
+    # 上层的技能要关联了才带；项目自己的不用
+    for name in ("insurance-policy-import", "pg-vacuum-tuning"):
+        _link(indexed, "engagement", "policy-import", name)
     bundle = agent_bundle.build_bundle(
         indexed.engine,
         indexed.repo_port,

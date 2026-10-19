@@ -7,7 +7,6 @@ helpful / not_helpful / outdated；选「已过时」时自动起草一份修订
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -210,20 +209,4 @@ def owner_signals(engine: Engine, principal: Principal) -> dict[str, Any]:
             }
             for row in sorted(declined_rows, key=lambda r: r.times, reverse=True)
         ],
-    }
-
-
-def revision_draft_payload(asset_row: Any, note: str, reporter: str) -> dict[str, Any]:
-    """给「已过时」自动起草用的草稿内容：带上反馈人的原话。"""
-    return {
-        "kind": asset_row.kind,
-        "name": f"{asset_row.name}-revision",
-        "title": f"{asset_row.title}（修订）",
-        "scope": asset_row.scope,
-        "department_code": asset_row.department_code,
-        "engagement_slug": asset_row.engagement_slug,
-        "note": note,
-        "reporter": reporter,
-        "source_asset_id": asset_row.asset_id,
-        "body": json.dumps({"反馈人": reporter, "过时原因": note}, ensure_ascii=False, indent=2),
     }

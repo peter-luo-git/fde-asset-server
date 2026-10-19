@@ -43,6 +43,8 @@ def _bundle(context, tmp_path, **kwargs):
 
 
 def test_bundle_carries_procedures_and_all_knowledge_kinds(indexed, tmp_path) -> None:
+    # 上层的知识要关联了才带；项目自己的案例、流程不用关联
+    _link(indexed, "engagement", "policy-import", "bank-core-migration-solution")
     bundle = _bundle(indexed, tmp_path)
     tops = {"/".join(path.split("/")[:2]) for path in bundle.files if path.startswith("knowledge/")}
     assert "knowledge/cases" in tops and "knowledge/solutions" in tops
@@ -70,6 +72,7 @@ def test_assets_linked_to_the_agent_join_the_project_links(indexed, tmp_path) ->
 
 
 def test_paths_in_a_bundle_resolve_back_to_assets(indexed, tmp_path) -> None:
+    _link(indexed, "engagement", "policy-import", "insurance-policy-import")
     bundle = _bundle(indexed, tmp_path)
     skill = _asset_id(indexed, "insurance-policy-import")
     assert agent_bundle.resolve_path(bundle, "skills/insurance-policy-import/SKILL.md") == (
@@ -101,6 +104,7 @@ def _service(seeded):
 def test_reported_reads_are_counted_once_per_run(seeded) -> None:
     with _service(seeded) as service:
         context = service.app.state.context
+        _link(context, "engagement", "policy-import", "insurance-policy-import")
         bundle = service.post(
             "/internal/v1/agent-bundle",
             json={"username": "chen", "engagement_slug": "policy-import"},
@@ -173,6 +177,7 @@ def test_references_in_a_delivery_summary_are_kept_apart_from_reuse(seeded) -> N
     """Agent 自己说参考了什么：记下来，但不算进使用次数和等级。"""
     with _service(seeded) as service:
         context = service.app.state.context
+        _link(context, "engagement", "policy-import", "insurance-policy-import")
         bundle = service.post(
             "/internal/v1/agent-bundle",
             json={"username": "chen", "engagement_slug": "policy-import"},

@@ -1,14 +1,15 @@
 """测试夹具：每个用例一套独立的本地仓库 + 数据库，互不干扰。
 
-默认用 SQLite。设了 `FDE_ASSET_TEST_DATABASE_URL`（指向一个有建库权限的 PostgreSQL 账号，
-例如 postgresql://postgres:test@127.0.0.1:55432/postgres）就改用 PostgreSQL：
-每个用例在那台服务器上建一个临时库，跑完删掉。
+数据库只用 PostgreSQL（2026-10-18 起去掉了 SQLite）：每个用例在测试库服务器上建一个临时库，
+跑完删掉。服务器默认是本机的测试容器（`make test-db` 起），别的地方用
+`FDE_ASSET_TEST_DATABASE_URL` 指定一个有建库权限的账号。
 """
 
 from __future__ import annotations
 
 import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -40,17 +41,15 @@ def _env_does_not_leak():
     os.environ.update(before)
 
 
-POSTGRES_URL = os.environ.get("FDE_ASSET_TEST_DATABASE_URL", "")
+#: 测试库服务器：默认是 `make test-db` 起的本机容器
+POSTGRES_URL = os.environ.get(
+    "FDE_ASSET_TEST_DATABASE_URL", "postgresql://postgres:test@127.0.0.1:55432/postgres"
+)
 
 
-@pytest.fixture()
-def settings(tmp_path: Path):
-    if not POSTGRES_URL:
-        value = AssetSettings(data_dir=tmp_path / "data")
-        value.ensure_dirs()
-        yield value
-        return
-
+@contextmanager
+def temporary_database():
+    """在测试库服务器上建一个临时库，给出它的地址，用完删掉。"""
     import uuid
 
     from sqlalchemy import create_engine
@@ -61,18 +60,21 @@ def settings(tmp_path: Path):
     admin = create_engine(server, isolation_level="AUTOCOMMIT")
     with admin.connect() as conn:
         conn.exec_driver_sql(f'CREATE DATABASE "{name}"')
-    value = AssetSettings(
-        data_dir=tmp_path / "data",
-        database_url=server.set(database=name).render_as_string(hide_password=False),
-    )
-    value.ensure_dirs()
     try:
-        yield value
+        yield server.set(database=name).render_as_string(hide_password=False)
     finally:
         with admin.connect() as conn:
             # 用例里建的连接池可能还开着，强制断开再删
             conn.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
         admin.dispose()
+
+
+@pytest.fixture()
+def settings(tmp_path: Path):
+    with temporary_database() as database_url:
+        value = AssetSettings(data_dir=tmp_path / "data", database_url=database_url)
+        value.ensure_dirs()
+        yield value
 
 
 @pytest.fixture()
