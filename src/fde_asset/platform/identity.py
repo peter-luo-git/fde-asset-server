@@ -330,10 +330,10 @@ class PlatformDirectory:
 
     # ---- 名单 ----
 
-    def _directory(self) -> dict:
+    def _directory(self, *, refresh: bool = False) -> dict:
         now = time.monotonic()
         with self._lock:
-            if self._snapshot and now - self._snapshot[0] < self.ttl:
+            if not refresh and self._snapshot and now - self._snapshot[0] < self.ttl:
                 return self._snapshot[1]
         if not self._service_key:
             raise PlatformUnavailable("没有配置和 fde-server 共用的服务密钥")
@@ -405,6 +405,10 @@ class PlatformDirectory:
 
     def agents(self) -> dict[str, dict]:
         return self._directory()["agents"]
+
+    def refresh(self) -> None:
+        """写入项目前重新核对当前目录；失败时保留拒绝访问，不回退旧缓存。"""
+        self._directory(refresh=True)
 
     def departments(self) -> dict[str, str]:
         """部门代号 → 名称，选可见范围时显示用。"""

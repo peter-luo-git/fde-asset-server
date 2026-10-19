@@ -2,6 +2,9 @@
 
 | 日期 | 切片 | 提交 | check | 评审 | 备注 |
 |---|---|---|---|---|---|
+| 2026-10-19 | agent-assets-members-20261019 实现验收 | 基线96a3096；待Root提交 | 通过（完整make check：524通过/1模型网关条件跳过/3已有警告；head0011_checkup_findings） | implementer_asset_linking实现；Root已读实际diff | typed POST recommend/unlink幂等解除指定目标三元组、保留资产与其他关联；pa目标读取和写入实时目录、转交/撤权/缺失目标拒绝；link与accept同事务在写入及幂等返回前复用现有visibility_clause，缺失/不可见统一404且admin仍受restricted限制。最终定向51通过、完整1406.46秒退出0；独立tmpfs与本任务PG已清理，旧中断及红灯日志保留；贡献与命令见operations/agent-contributions/agent-assets-members-20261019/implementer_asset_linking.md。无Git写、业务库变更或部署，三服务部署/E2E由Root收口。 |
+| 2026-10-19 | agent-assets-members-20261019 可见性补强文审 | 基线96a3096；待Root提交 | 需修改（补强最终make check及部署E2E待收口） | reviewer_label_docs，docs-impact-control | 核对link/accept同事务visibility检查先于幂等返回、缺失/不可见统一404及admin restricted拒绝；unlink允许清理当前可管理目标旧关联；更新README与待验收说明，无新增review文件或业务/Git写，保留前轮失败历史。 |
+| 2026-10-19 | agent-assets-members-20261019 文审 | 基线96a3096；待Root提交 | 需修改（最终make check及部署/E2E待Root收口） | reviewer_label_docs，docs-impact-control | 只更新既有README：当前pa目录/转交后授权、POST recommend/unlink三元组幂等/保留资产与其他关联；无新增review文件、业务/Git写或生成契约修改，git diff --check与写后重读；final2日志pytest KeyError保留，最终证据由Root补录。 |
 | 2026-09-30 | S-00 | — | — | — | 仓库骨架创建：进程入口、配置、健康检查、Makefile、看板 |
 | 2026-09-30 | S-01 ~ S-20 | `132c543` | 绿（133 测试） | 自检 | 资产服务 v0.1 全量：索引、目录、SOP 分层、快照、沉淀、评审、线索、护照；十二步演示全绿 |
 | 2026-09-30 | S-W1/W2/W3 | fde-web `444e71d` | 绿（310 测试） | 自检 | 前端 `src/features/asset/` 自包含 feature + 两层端到端（契约 11 步、浏览器 12 步） |

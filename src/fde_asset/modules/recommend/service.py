@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import and_, select, update
+from sqlalchemy import and_, delete, select, update
 
 from fde_asset.modules.asset.manifest import owner_slug
 from sqlalchemy.engine import Engine
@@ -37,6 +37,22 @@ DEFAULT_LIMIT = 10
 
 class RecommendError(ValueError):
     pass
+
+
+class AssetUnavailable(RecommendError):
+    """资产不存在与当前主体不可见使用相同结果，避免泄露资产存在性。"""
+
+
+def _require_visible_asset(conn, principal: Principal, asset_id: str) -> None:
+    if (
+        conn.execute(
+            select(assets.c.asset_id).where(
+                assets.c.asset_id == asset_id, visibility_clause(principal)
+            )
+        ).first()
+        is None
+    ):
+        raise AssetUnavailable("资产不存在或不可见")
 
 
 @dataclass
@@ -395,6 +411,8 @@ def decide(
         ).first()
         if row is None:
             raise RecommendError("推荐不存在")
+        if accept:
+            _require_visible_asset(conn, principal, row.asset_id)
         if row.status in ("accepted", "declined"):
             return {
                 "recommendation_id": recommendation_id,
@@ -497,6 +515,7 @@ def link(
 ) -> dict[str, Any]:
     """本人直接关联，不走推荐流程。"""
     with engine.begin() as conn:
+        _require_visible_asset(conn, principal, asset_id)
         exists = conn.execute(
             select(target_assets.c.id).where(
                 and_(
@@ -542,6 +561,37 @@ def link(
             },
         )
     return {"linked": True}
+
+
+def unlink(
+    engine: Engine,
+    principal: Principal,
+    target_type: str,
+    target_id: str,
+    asset_id: str,
+) -> dict[str, bool]:
+    """只解除这个目标的关联，不修改资产或其他目标，重复请求不产生事件。"""
+    with engine.begin() as conn:
+        result = conn.execute(
+            delete(target_assets).where(
+                target_assets.c.target_type == target_type,
+                target_assets.c.target_id == target_id,
+                target_assets.c.asset_id == asset_id,
+            )
+        )
+        unlinked = result.rowcount > 0
+        if unlinked:
+            record_event(
+                conn,
+                "asset.unlinked",
+                {
+                    "asset_id": asset_id,
+                    "target_type": target_type,
+                    "target_id": target_id,
+                    "created_by": principal.user_id,
+                },
+            )
+    return {"unlinked": unlinked}
 
 
 def linked_assets(

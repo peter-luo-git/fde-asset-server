@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
 from fde_asset.api.deps import ServiceContext, get_context, get_principal
 from fde_asset.modules.asset import rerank as rerank_module
 from fde_asset.modules.recommend import service
 from fde_asset.platform import settings_store
 from fde_asset.platform.cache import recommendation_cache
-from fde_asset.platform.identity import Principal
+from fde_asset.platform.identity import PlatformDirectory, Principal
 from fde_asset.platform.llm.client import build_client
 from fde_asset.platform.llm.reranker import build_reranker
 
@@ -21,9 +22,28 @@ router = APIRouter(prefix="/api/v1", tags=["recommend"])
 EXPLAIN_TIMEOUT_SECONDS = 90.0
 
 
+class UnlinkAssetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_type: Literal["engagement", "agent"]
+    target_id: str = Field(min_length=1, max_length=120)
+    asset_id: str = Field(min_length=1, max_length=64)
+
+
 def _target(
     context: ServiceContext, payload: dict[str, Any], *, override_context: bool = True
 ) -> service.Target:
+    project_agent_write = (
+        not override_context
+        and payload.get("target_type") == "agent"
+        and str(payload.get("target_id", "")).startswith("pa-")
+    )
+    if project_agent_write and isinstance(context.directory, PlatformDirectory):
+        # Instance ownership and project membership can change at any time.
+        # Never grant a write from the recommendation UI's cached target list.
+        context.directory.refresh()
+    if project_agent_write and payload["target_id"] not in context.directory.agents():
+        raise HTTPException(status_code=404, detail="项目 Agent 不存在或已不可管理")
     try:
         target = service.target_from_directory(
             context.directory, payload.get("target_type", ""), payload.get("target_id", "")
@@ -63,6 +83,10 @@ def _may_manage(principal: Principal, target: service.Target) -> bool:
 
 def _may_decide(context: ServiceContext, principal: Principal, sent_to: dict[str, str]) -> bool:
     """推送时记下的负责人，或者目标现在的负责人（项目会换负责人）。"""
+    if sent_to["target_type"] == "agent" and sent_to["target_id"].startswith("pa-"):
+        # A saved recommendation must not preserve the previous instance
+        # owner's authority after transfer or project membership revocation.
+        return _owns(principal, _target(context, sent_to, override_context=False))
     if principal.is_admin or sent_to["target_owner"] == principal.user_id:
         return True
     try:
@@ -80,6 +104,9 @@ def list_targets(
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     """我能为哪些项目和 Agent 找资产：我负责的 + （部门主管）本部门全部。"""
+    if isinstance(context.directory, PlatformDirectory):
+        # A just-created project instance must immediately be selectable.
+        context.directory.refresh()
     mine: list[dict[str, Any]] = []
     department: list[dict[str, Any]] = []
     owner_names: dict[str, str] = {}
@@ -278,7 +305,10 @@ def inbox(
     return {"items": service.inbox(context.engine, principal)}
 
 
-@router.post("/recommend/{recommendation_id}/decide")
+@router.post(
+    "/recommend/{recommendation_id}/decide",
+    responses={404: {"description": "资产不存在或对当前用户不可见"}},
+)
 def decide(
     recommendation_id: str,
     payload: dict[str, Any] = Body(default={}),
@@ -299,11 +329,13 @@ def decide(
         )
         recommendation_cache.invalidate()
         return result
+    except service.AssetUnavailable as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
     except service.RecommendError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
-@router.post("/recommend/link")
+@router.post("/recommend/link", responses={404: {"description": "资产不存在或对当前用户不可见"}})
 def link(
     payload: dict[str, Any] = Body(...),
     context: ServiceContext = Depends(get_context),
@@ -313,9 +345,12 @@ def link(
     target = _target(context, payload, override_context=False)
     if not _owns(principal, target):
         raise HTTPException(status_code=403, detail="只有目标负责人或管理员能关联资产")
-    result = service.link(
-        context.engine, principal, target.target_type, target.target_id, payload["asset_id"]
-    )
+    try:
+        result = service.link(
+            context.engine, principal, target.target_type, target.target_id, payload["asset_id"]
+        )
+    except service.AssetUnavailable as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
     # 关联之后推荐结果就变了（已关联的不再推），清掉这个目标的缓存
     recommendation_cache.invalidate()
     return result
@@ -329,3 +364,20 @@ def linked(
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     return {"items": service.linked_assets(context.engine, principal, target_type, target_id)}
+
+
+@router.post("/recommend/unlink")
+def unlink(
+    payload: UnlinkAssetRequest,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, bool]:
+    """负责人或管理员解除指定目标关联；重复解除返回 unlinked=false，保留资产正文。"""
+    target = _target(context, payload.model_dump(), override_context=False)
+    if not _owns(principal, target):
+        raise HTTPException(status_code=403, detail="只有目标负责人或管理员能解除资产关联")
+    result = service.unlink(
+        context.engine, principal, target.target_type, target.target_id, payload.asset_id
+    )
+    recommendation_cache.invalidate()
+    return result

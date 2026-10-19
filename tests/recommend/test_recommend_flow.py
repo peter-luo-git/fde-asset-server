@@ -2,7 +2,126 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import pytest
+from sqlalchemy import select, update
+
+from fde_asset.core.db import assets, asset_recommendations, target_assets
+from fde_asset.modules.recommend import service
 from tests.conftest import as_user
+from tests.asset.test_sharing import _asset
+
+
+@pytest.mark.parametrize(
+    "case", ["invisible", "missing", "restricted", "admin_restricted", "deleted"]
+)
+def test_direct_link_rechecks_asset_visibility_in_service_and_api(client, case):
+    context = client.app.state.context
+    asset = _asset(
+        as_user(client, "admin"),
+        "pg-vacuum-tuning" if case == "invisible" else "insurance-policy-import",
+    )
+    actor = "admin" if case == "admin_restricted" else "wang"
+    asset_id = "missing-asset" if case == "missing" else asset["asset_id"]
+    if case in {"restricted", "admin_restricted", "deleted"}:
+        values = (
+            {"deleted_at": datetime.now(timezone.utc)}
+            if case == "deleted"
+            else {"restricted": True, "owner_kind": "user", "owner_value": "chen"}
+        )
+        with context.engine.begin() as conn:
+            conn.execute(update(assets).where(assets.c.asset_id == asset_id).values(**values))
+    target = {"target_type": "agent", "target_id": "migration-reviewer"}
+    denied = as_user(client, actor).post(
+        "/api/v1/recommend/link", json={**target, "asset_id": asset_id}
+    )
+    assert denied.status_code == 404, denied.text
+    with pytest.raises(service.RecommendError, match="不可见|不存在"):
+        service.link(
+            context.engine,
+            context.directory.resolve(actor),
+            "agent",
+            "migration-reviewer",
+            asset_id,
+        )
+    with context.engine.connect() as conn:
+        assert (
+            conn.execute(select(target_assets).where(target_assets.c.asset_id == asset_id)).first()
+            is None
+        )
+
+
+def test_link_replay_rechecks_visibility_without_removing_existing_link(client):
+    context = client.app.state.context
+    asset = _asset(as_user(client, "admin"), "insurance-policy-import")
+    payload = {
+        "target_type": "agent",
+        "target_id": "migration-reviewer",
+        "asset_id": asset["asset_id"],
+    }
+    assert as_user(client, "wang").post("/api/v1/recommend/link", json=payload).json()["linked"]
+    with context.engine.begin() as conn:
+        conn.execute(
+            update(assets)
+            .where(assets.c.asset_id == asset["asset_id"])
+            .values(restricted=True, owner_kind="user", owner_value="chen")
+        )
+    denied = as_user(client, "wang").post("/api/v1/recommend/link", json=payload)
+    assert denied.status_code == 404, denied.text
+    with context.engine.connect() as conn:
+        rows = conn.execute(
+            select(target_assets).where(target_assets.c.asset_id == asset["asset_id"])
+        ).all()
+    assert len(rows) == 1
+
+
+@pytest.mark.parametrize("case", ["restricted", "deleted"])
+def test_accept_rechecks_current_asset_visibility_and_preserves_pending_state(client, case):
+    context = client.app.state.context
+    asset = _asset(as_user(client, "admin"), "insurance-policy-import")
+    target = {"target_type": "agent", "target_id": "migration-reviewer"}
+    sent = as_user(client, "wang").post(
+        "/api/v1/recommend/send",
+        json={
+            **target,
+            "status": "sent",
+            "items": [{"asset_id": asset["asset_id"], "score": 1}],
+        },
+    )
+    assert sent.status_code == 200, sent.text
+    recommendation = client.get("/api/v1/recommend/inbox").json()["items"][0]
+    values = (
+        {"deleted_at": datetime.now(timezone.utc)}
+        if case == "deleted"
+        else {"restricted": True, "owner_kind": "user", "owner_value": "chen"}
+    )
+    with context.engine.begin() as conn:
+        conn.execute(update(assets).where(assets.c.asset_id == asset["asset_id"]).values(**values))
+    path = f"/api/v1/recommend/{recommendation['recommendation_id']}/decide"
+    denied = as_user(client, "wang").post(path, json={"accept": True})
+    assert denied.status_code == 404, denied.text
+    with pytest.raises(service.RecommendError, match="不可见|不存在"):
+        service.decide(
+            context.engine,
+            context.directory.resolve("wang"),
+            recommendation["recommendation_id"],
+            accept=True,
+        )
+    with context.engine.connect() as conn:
+        assert (
+            conn.execute(
+                select(asset_recommendations.c.status).where(
+                    asset_recommendations.c.recommendation_id == recommendation["recommendation_id"]
+                )
+            ).scalar_one()
+            == "sent"
+        )
+        assert (
+            conn.execute(
+                select(target_assets).where(target_assets.c.asset_id == asset["asset_id"])
+            ).first()
+            is None
+        )
 
 
 def _compute(client, user: str, target_type: str, target_id: str) -> list[dict]:
@@ -187,6 +306,31 @@ def test_owner_links_directly_without_recommendation(client) -> None:
         },
     )
     assert again.json()["linked"] is False
+
+
+def test_unlink_removes_only_the_owned_target_and_is_idempotent(client) -> None:
+    asset_id = _compute(client, "chen", "agent", "import-coder")[0]["asset_id"]
+    target = {"target_type": "agent", "target_id": "import-coder"}
+    payload = {**target, "asset_id": asset_id}
+    other = {"target_type": "engagement", "target_id": "policy-import", "asset_id": asset_id}
+    assert as_user(client, "chen").post("/api/v1/recommend/link", json=payload).json()["linked"]
+    assert as_user(client, "admin").post("/api/v1/recommend/link", json=other).json()["linked"]
+    denied = as_user(client, "zhao").post("/api/v1/recommend/unlink", json=payload)
+    assert denied.status_code == 403
+    removed = as_user(client, "chen").post("/api/v1/recommend/unlink", json=payload)
+    assert removed.status_code == 200, removed.text
+    assert removed.json() == {"unlinked": True}
+    assert (
+        as_user(client, "chen").get("/api/v1/recommend/linked", params=target).json()["items"] == []
+    )
+    remaining = (
+        as_user(client, "admin").get("/api/v1/recommend/linked", params=other).json()["items"]
+    )
+    assert asset_id in {item["asset_id"] for item in remaining}
+    assert as_user(client, "chen").post("/api/v1/recommend/unlink", json=payload).json() == {
+        "unlinked": False
+    }
+    assert as_user(client, "chen").post("/api/v1/recommend/link", json=payload).json()["linked"]
 
 
 def test_linked_assets_are_not_recommended_again(client) -> None:

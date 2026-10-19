@@ -316,6 +316,96 @@ def test_recommend_targets_report_old_server_agent_contract_as_unavailable(seede
         assert client.get("/api/v1/recommend/targets").status_code == 503
 
 
+def test_target_picker_finds_project_agent_created_after_directory_was_cached(seeded):
+    platform = FakePlatform({"wang": WANG})
+    source = directory(platform, ttl_seconds=600)
+    assert "pa-new" not in source.agents()
+    platform.directory_payload = {
+        **DIRECTORY,
+        "agents": [*DIRECTORY["agents"], {**DIRECTORY["agents"][0], "key": "pa-new"}],
+    }
+    app = create_app(seeded.model_copy(update={"identity_mode": "platform"}))
+    with TestClient(app) as client:
+        app.state.context.directory = source
+        client.cookies.set("fde_session", "wang")
+        response = client.get("/api/v1/recommend/targets")
+        assert response.status_code == 200, response.text
+        assert "pa-new" in {item["target_id"] for item in response.json()["mine"]}
+
+
+@pytest.mark.parametrize("operation", ["link", "unlink"])
+def test_project_agent_writes_recheck_owner_after_cached_directory_transfer(seeded, operation):
+    platform = FakePlatform({"wang": WANG})
+    raw = {**DIRECTORY["agents"][0], "key": "pa-transferred"}
+    platform.directory_payload = {**DIRECTORY, "agents": [raw]}
+    app = create_app(seeded.model_copy(update={"identity_mode": "platform"}))
+    with TestClient(app) as client:
+        source = directory(platform, ttl_seconds=600)
+        app.state.context.directory = source
+        client.cookies.set("fde_session", "wang")
+        targets = client.get("/api/v1/recommend/targets").json()["mine"]
+        assert "pa-transferred" in {item["target_id"] for item in targets}
+        platform.directory_payload = {**DIRECTORY, "agents": [{**raw, "owner": "admin"}]}
+        response = client.post(
+            f"/api/v1/recommend/{operation}",
+            json={"target_type": "agent", "target_id": "pa-transferred", "asset_id": "any-asset"},
+        )
+        assert response.status_code == 403, response.text
+
+
+@pytest.mark.parametrize("operation", ["link", "unlink"])
+def test_admin_cannot_write_project_agent_removed_from_current_directory(seeded, operation):
+    platform = FakePlatform({"admin": ADMIN})
+    raw = {**DIRECTORY["agents"][0], "key": "pa-removed"}
+    platform.directory_payload = {**DIRECTORY, "agents": [raw]}
+    app = create_app(seeded.model_copy(update={"identity_mode": "platform"}))
+    with TestClient(app) as client:
+        app.state.context.directory = directory(platform, ttl_seconds=600)
+        client.cookies.set("fde_session", "admin")
+        assert client.get("/api/v1/recommend/targets").status_code == 200
+        platform.directory_payload = {**DIRECTORY, "agents": []}
+        response = client.post(
+            f"/api/v1/recommend/{operation}",
+            json={"target_type": "agent", "target_id": "pa-removed", "asset_id": "any-asset"},
+        )
+        assert response.status_code == 404, response.text
+
+
+def test_project_agent_recommendation_decision_uses_current_owner_not_original_recipient(seeded):
+    peer = {**WANG, "user_id": "u-3", "username": "chen", "is_department_head": False}
+    platform = FakePlatform({"wang": WANG, "chen": peer, "admin": ADMIN})
+    raw = {**DIRECTORY["agents"][0], "key": "pa-recommended"}
+    platform.directory_payload = {**DIRECTORY, "users": [WANG, peer], "agents": [raw]}
+    app = create_app(seeded.model_copy(update={"identity_mode": "platform"}))
+    with TestClient(app) as client:
+        app.state.context.directory = directory(platform, ttl_seconds=600)
+        client.cookies.set("fde_session", "admin")
+        assert client.post("/api/v1/admin/assets/reindex").status_code == 200
+        client.cookies.set("fde_session", "wang")
+        target = {"target_type": "agent", "target_id": "pa-recommended"}
+        computed = client.post("/api/v1/recommend/compute", json=target)
+        assert computed.status_code == 200, computed.text
+        sent = client.post(
+            "/api/v1/recommend/send",
+            json={**target, "status": "sent", "items": computed.json()["items"][:1]},
+        )
+        assert sent.status_code == 200, sent.text
+        recommendation = client.get("/api/v1/recommend/inbox").json()["items"][0]
+        platform.directory_payload = {
+            **platform.directory_payload,
+            "agents": [{**raw, "owner": "chen"}],
+        }
+        path = f"/api/v1/recommend/{recommendation['recommendation_id']}/decide"
+        denied = client.post(path, json={"accept": True})
+        assert denied.status_code == 403, denied.text
+        client.cookies.set("fde_session", "chen")
+        accepted = client.post(path, json={"accept": True})
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["status"] == "accepted"
+        linked = client.get("/api/v1/recommend/linked", params=target).json()["items"]
+        assert recommendation["asset_id"] in {row["asset_id"] for row in linked}
+
+
 def test_recommend_directory_outage_is_503_without_internal_error_details(seeded) -> None:
     app = create_app(seeded.model_copy(update={"identity_mode": "platform"}))
     with TestClient(app, raise_server_exceptions=False) as client:

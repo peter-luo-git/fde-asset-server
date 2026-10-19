@@ -6,6 +6,12 @@ FDE 协同平台的**资产中心服务**：索引、目录、沉淀、评审、
 
 ## 平台Agent推荐目录后继（2026-10-13）
 
+2026-10-19 项目实例关联后继：配套 Server 目录纳入有效项目实例及当前负责人，`GET /api/v1/recommend/targets` 在 platform 模式实时刷新目录，新实例无需等待TTL才可选。`pa-*` 目标的写入与接受推荐重新读取当前目录，转交后旧负责人/旧收件人不保留授权；缺失目标返回404，管理员也不能写入已失效实例；刷新失败不以旧缓存授予写权限。既有非项目实例推荐接受兼容语义保持。
+
+同日可见性补强：直接关联与接受推荐在写入事务内沿用 `visibility_clause` 复核当前资产，检查先于幂等返回。不存在、已删除或对当前主体不可见（含不满足restricted规则）统一404，不泄露存在性；管理员也不能绕过restricted规则。拒绝不新增关联或推进推荐状态，既有关联不因此删除。解除仍只校验当前目标管理权，允许清理自身可管理目标的旧关联，不要求资产仍可见；不修改全局资产可见性规则或资产正文。
+
+新增 `POST /api/v1/recommend/unlink`，输入严格为 `{target_type,target_id,asset_id}`，类型为 `engagement` 或 `agent`，仅目标当前负责人或管理员可解除（无权403）。按三元组删除关联，首次返回 `{unlinked:true}` 并记 `asset.unlinked`，重复返回 `{unlinked:false}` 且不重复记事件；保留资产正文、其他目标关联，可重新关联。解除后清推荐缓存，无新迁移。请求字段和路径由真实路由经 `scripts/export_openapi.py` 生成 `contracts/asset-v1.yaml`，child文审不修改生成物。本轮完整 `make check` 和三服务真实部署/E2E由 Root 收口，旧测试/部署记录不作本轮通过证据。
+
 platform身份模式通过 `X-FDE-Service-Key`读取Server内部目录，Agent与用户/项目共用默认30秒TTL；只消费 `key/title/description/role/owner/department_code` 六安全字段，不使用本地演示Agent回退或运行配置。合法空agents数组保持空；目录过期后重新请求，密钥/网络/响应或旧Server缺agents失败时安全503，不继续使用过期目录、不回显内部URL/异常正文，原未登录/失效会话401/403保持。
 
 公开coding预设由Server按配置公司及当前可用状态筛选，作者须同公司活跃，部门来自活跃主部门；无主内建Agent仅管理员管理。普通负责人或有明确同部门的主管沿原规则管理，空owner/空部门不构成主管权限；send/link写授权只信目录归属，compute/explain既有只读上下文覆盖不授予写权限。升级应先使Server提供新目录再更新Asset，回退使用兼容的配对版本，不能依靠演示目录维持授权；无新迁移或资产数据重写，也不宣称完整目录多租户已解决。
