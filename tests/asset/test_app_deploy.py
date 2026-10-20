@@ -1,13 +1,12 @@
 """应用容器化演示：上传 → 审核 → 启动 → 访问 → 停止。
 
-带 docker 的那条是真跑容器的集成测试；没有 docker 的环境自动跳过，
+带 docker 的那条需显式 --docker-integration；授权执行后的构建失败仍失败，
 其余用假的 Runner 覆盖状态机与权限。
 """
 
 from __future__ import annotations
 
 import base64
-import json
 import subprocess
 import time
 from pathlib import Path
@@ -17,13 +16,9 @@ import pytest
 
 from fde_asset.modules.app import deploy
 from fde_asset.platform.blobs import BlobStore
-from fde_asset.platform.runner.docker_runner import LocalDockerRunner
 from fde_asset.platform.runner.ports import LoadedImage, RunnerError, RunningContainer
 from tests.conftest import as_user
 from tests.docker_resources import OwnedDockerRunner
-
-DOCKER = LocalDockerRunner()
-HAS_DOCKER = DOCKER.available()
 
 
 class FakeRunner:
@@ -201,7 +196,7 @@ def test_full_state_machine_with_fake_runner(client, indexed, store) -> None:
     assert runner.stopped == ["fake-container"]
 
 
-@pytest.mark.skipif(not HAS_DOCKER, reason="本机没有可用的 docker")
+@pytest.mark.docker
 def test_real_container_runs_and_serves(client, indexed, store, tmp_path, docker_resources) -> None:
     """真·集成测试：造一个最小镜像，走完上传 → 审核 → 启动 → 访问 → 停止。"""
     work = tmp_path
@@ -220,8 +215,7 @@ def test_real_container_runs_and_serves(client, indexed, store, tmp_path, docker
         text=True,
         timeout=600,
     )
-    if build.returncode != 0:
-        pytest.skip(f"构建镜像失败（多半是没网拉不到 busybox）：{build.stderr[-300:]}")
+    assert build.returncode == 0, "authorized Docker image build failed"
 
     tar_path = work / "app.tar"
     subprocess.run(
@@ -266,7 +260,6 @@ def test_real_container_runs_and_serves(client, indexed, store, tmp_path, docker
     assert after["run_status"] == "stopped"
 
 
-@pytest.mark.skipif(not HAS_DOCKER, reason="本机没有可用的 docker")
 def test_container_runs_without_privileges() -> None:
     """安全边界：不开特权、丢掉 capability、不挂宿主机目录。"""
     from fde_asset.platform.runner.ports import RunLimits
@@ -277,4 +270,3 @@ def test_container_runs_without_privileges() -> None:
     source = Path("src/fde_asset/platform/runner/docker_runner.py").read_text(encoding="utf-8")
     assert "--privileged" not in source
     assert "-v " not in source and "--volume" not in source
-    assert json.dumps(True)  # 占位，保证本用例不被优化掉

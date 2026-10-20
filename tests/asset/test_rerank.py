@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
 
@@ -11,11 +10,8 @@ from fde_asset.modules.asset import rerank
 from fde_asset.platform.llm.client import (
     NullLlmClient,
     build_client,
-    config_from_env,
-    load_env_file,
     _loads,
 )
-from pathlib import Path
 
 CANDIDATES = [
     {
@@ -106,25 +102,13 @@ def test_json_in_code_fence_is_parsed() -> None:
     assert _loads('```json\n{"picked": []}\n```') == {"picked": []}
 
 
-# —— 真调模型的那条：没配密钥就跳过 ——
-# 只在这里看一眼 .env.local 配了没有，看完把环境变量还原：这个文件在收集阶段就被导入，
-# 留在环境里的话，整轮测试里所有走到模型的地方都会悄悄连上真实服务。
-_before = dict(os.environ)
-load_env_file(Path(__file__).resolve().parents[2] / ".env.local")
-LIVE = config_from_env().usable and os.environ.get("FDE_ASSET_LLM_LIVE_TEST", "1") == "1"
-LOCAL_ENV = {key: value for key, value in os.environ.items() if key not in _before}
-for _key in LOCAL_ENV:
-    del os.environ[_key]
-
-
-@pytest.mark.skipif(not LIVE, reason="没有配置模型网关（.env.local）")
+@pytest.mark.live_model
 def test_real_model_reranks_and_explains(monkeypatch) -> None:
     """真连模型：相关的要挑出来，不相关的不要硬凑，理由得是人话。"""
-    for key, value in LOCAL_ENV.items():
-        monkeypatch.setenv(key, value)
-    items, mode = rerank.rerank(CANDIDATES, CONTEXT, build_client(), limit=3)
-    if mode != "reranked":
-        pytest.skip("模型调用没成功（多半是网络或配额），已自动退回关键词排序")
+    client = build_client()
+    assert client.usable, "explicit model acceptance requires model configuration"
+    items, mode = rerank.rerank(CANDIDATES, CONTEXT, client, limit=3)
+    assert mode == "reranked", "explicit acceptance must be reranked, not a fallback"
     assert items, "至少该挑出一条"
     assert items[0]["asset_id"] == "a1", f"最相关的应该是导入超时那条，实际 {items[0]['asset_id']}"
     reason = items[0]["reasons"][0]

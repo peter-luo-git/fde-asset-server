@@ -55,7 +55,11 @@ PostgreSQL（FDE_ASSET_DATABASE_URL）     索引与使用记录（2026-10-18 �
 
 ## 本地验证
 
-`make check` 顺序执行 Ruff、格式检查、编译、完整 pytest 与 Alembic heads；检测到 `uv` 时最后还执行 `uv lock --check`。测试只用 PostgreSQL：每个用例在测试库服务器上建临时库、跑完删掉，测试账号须有建库权限；服务器默认是 `make test-db` 起的本机容器（127.0.0.1:55432），别处用 `FDE_ASSET_TEST_DATABASE_URL` 指定。契约生成与检查还须配置 `FDE_ASSET_DATABASE_URL`，不能只设置测试库变量。真实模型条件测试需要另行提供环境，缺失时跳过。
+`make check` 顺序执行 Ruff、格式检查、编译、完整 pytest 与 Alembic heads；检测到 `uv` 时最后还执行 `uv lock --check`。测试只用 PostgreSQL：每个用例在测试库服务器上建临时库、跑完删掉，测试账号须有建库权限；服务器默认是 `make test-db` 起的本机容器（127.0.0.1:55432），别处用 `FDE_ASSET_TEST_DATABASE_URL` 指定。契约测试也使用本例独占库；独立契约生成命令仍需提供 `FDE_ASSET_DATABASE_URL`。
+
+默认测试不读取 `.env.local`，并移除继承的模型配置。真实模型专项需本轮授权后显式运行 `pytest --live-model tests/asset/test_rerank.py::test_real_model_reranks_and_explains`，只从明确传入的进程环境取配置；已启用却缺配置、服务失败或退回关键词排序均失败。真实容器专项需 `--docker-integration -m docker`；未启用记为跳过，启用后的构建/运行失败不能转成skip。静态容器权限检查始终执行。
+
+固定无模型冒烟入口为 `python scripts/smoke.py --python /absolute/locked/python --report /absolute/asset-smoke.xml`，必须明确提供 `FDE_ASSET_TEST_DATABASE_URL`，不会猜测共享业务库。硬上限60秒（pytest最多45秒，余量用于强杀与父进程清理），覆盖健康、契约、资产类型、扫描、项目可见性与资产包授权；缺前提退出2，失败/超时/零用例/跳过不能通过。每次冒烟在0700私有清单中先登记精确随机库名；即使用例被强杀，父进程finally仍按本轮清单清理，拒绝外来条目，不扫描删除共享前缀。旧报告先清除，必须由本次运行重新生成。它不代替完整pytest、真实模型或真实Docker验收。
 
 **SQLite 已去掉（2026-10-18）**：服务、迁移、测试都不再支持 SQLite。只保留启动时的一次性搬迁（`core/sqlite_import.py`）：PostgreSQL 业务表均为空且数据目录里还有旧的 `asset.db` 时搬入数据，成功后将原文件改名为带 `.migrated-to-postgres` 后缀的备份。升级前保护数据库、资产文件与配置，搬迁结果仍需独立核验；本轮源码同步不表示当前服务器已执行搬迁。旧的 `scripts/rename_user.py` 已删除。
 
