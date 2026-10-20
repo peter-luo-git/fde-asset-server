@@ -11,8 +11,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
+import httpx
 from sqlalchemy.engine import Engine
 
 from fde_asset.core.db import assets
@@ -25,6 +27,7 @@ MAX_DOCUMENTS = 500
 CONCLUSION_CHARS = 300
 DEFAULT_LIMIT = 10
 DEFAULT_MIN_SCORE = 0.05
+logger = logging.getLogger(__name__)
 
 
 def document(row: Any) -> str:
@@ -89,7 +92,15 @@ def ask(
                 if 0 <= item.index < len(rows) and item.score >= min_score
             ]
             mode = "semantic"
-        except Exception:  # noqa: BLE001 - 模型挂了退回关键词，搜索不能跟着瘫
+        except Exception as error:  # noqa: BLE001 - 搜索仍可用，只记录安全诊断字段
+            status = (
+                error.response.status_code if isinstance(error, httpx.HTTPStatusError) else "none"
+            )
+            logger.warning(
+                "Asset semantic rerank failed: exception_type=%s http_status=%s",
+                type(error).__name__,
+                status,
+            )
             scored = None
     if scored is None:
         scored = _keyword_scores(rows, question) if question else []

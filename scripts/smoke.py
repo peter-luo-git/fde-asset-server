@@ -18,6 +18,7 @@ TESTS = (
     "tests/test_health.py",
     "tests/test_contract.py",
     "tests/asset/test_manifest.py",
+    "tests/asset/test_rerank_http_contract.py",
     "tests/platform/test_scan_rules.py",
     "tests/platform/test_asset_permissions.py::test_engagement_asset_only_for_members",
     "tests/platform/test_asset_permissions.py::test_missing_and_forbidden_are_indistinguishable",

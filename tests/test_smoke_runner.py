@@ -50,6 +50,7 @@ def test_smoke_sanitizes_model_git_and_business_database_environment(monkeypatch
             ]
         )
         assert "--live-model" not in command and "--docker-integration" not in command
+        assert "tests/asset/test_rerank_http_contract.py" in command
         report.write_text(
             '<testsuites><testsuite tests="1" failures="0" errors="0" skipped="0"/></testsuites>'
         )

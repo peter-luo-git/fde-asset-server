@@ -59,7 +59,11 @@ PostgreSQL（FDE_ASSET_DATABASE_URL）     索引与使用记录（2026-10-18 �
 
 默认测试不读取 `.env.local`，并移除继承的模型配置。真实模型专项需本轮授权后显式运行 `pytest --live-model tests/asset/test_rerank.py::test_real_model_reranks_and_explains`，只从明确传入的进程环境取配置；已启用却缺配置、服务失败或退回关键词排序均失败。真实容器专项需 `--docker-integration -m docker`；未启用记为跳过，启用后的构建/运行失败不能转成skip。静态容器权限检查始终执行。
 
-固定无模型冒烟入口为 `python scripts/smoke.py --python /absolute/locked/python --report /absolute/asset-smoke.xml`，必须明确提供 `FDE_ASSET_TEST_DATABASE_URL`，不会猜测共享业务库。硬上限60秒（pytest最多45秒，余量用于强杀与父进程清理），覆盖健康、契约、资产类型、扫描、项目可见性与资产包授权；缺前提退出2，失败/超时/零用例/跳过不能通过。每次冒烟在0700私有清单中先登记精确随机库名；即使用例被强杀，父进程finally仍按本轮清单清理，拒绝外来条目，不扫描删除共享前缀。旧报告先清除，必须由本次运行重新生成。它不代替完整pytest、真实模型或真实Docker验收。
+按问题检索 `/api/v1/assets/ask` 使用专用重排配置 `FDE_ASSET_RERANK_BASE_URL`、`FDE_ASSET_RERANK_API_KEY`、`FDE_ASSET_RERANK_MODEL_NAME`，向配置地址的 `/rerank` 发送问题和权限过滤后的文档。它不使用生成式推荐的 `FDE_ASSET_LLM_*` / `FDE_ASSET_REASON_MODEL` 兜底；上面的 live-model 用例验证生成式挑选和解释，不能证明专用重排或 Web semantic 验收通过。真实语义验收须明确配置支持重排协议的模型，不能把聊天模型路由直接当成重排能力。
+
+专用响应接受 `results/index/relevance_score` 或兼容的 `data/document_index/score`，要求索引为有效且不重复的整数、分数为0–1有限数；明确的空列表仍可表示成功的空排名。chat-shaped JSON、缺评分列表或无效条目不会被标为 semantic；调用或解析失败保留关键词兜底，日志仅记录异常类型和HTTP状态，不记录URL、密钥、问题或资产正文。离线协议回归为 `pytest tests/asset/test_rerank_http_contract.py tests/asset/test_rerank.py`，其中未授权的live-model用例仍为skip。
+
+固定无模型冒烟入口为 `python scripts/smoke.py --python /absolute/locked/python --report /absolute/asset-smoke.xml`，必须明确提供 `FDE_ASSET_TEST_DATABASE_URL`，不会猜测共享业务库。硬上限60秒（pytest最多45秒，余量用于强杀与父进程清理），覆盖健康、契约、资产类型、专用重排协议与安全降级日志（合成HTTP，不调用模型）、扫描、项目可见性与资产包授权；缺前提退出2，失败/超时/零用例/跳过不能通过。每次冒烟在0700私有清单中先登记精确随机库名；即使用例被强杀，父进程finally仍按本轮清单清理，拒绝外来条目，不扫描删除共享前缀。旧报告先清除，必须由本次运行重新生成。它不代替完整pytest、真实模型或真实Docker验收。
 
 **SQLite 已去掉（2026-10-18）**：服务、迁移、测试都不再支持 SQLite。只保留启动时的一次性搬迁（`core/sqlite_import.py`）：PostgreSQL 业务表均为空且数据目录里还有旧的 `asset.db` 时搬入数据，成功后将原文件改名为带 `.migrated-to-postgres` 后缀的备份。升级前保护数据库、资产文件与配置，搬迁结果仍需独立核验；本轮源码同步不表示当前服务器已执行搬迁。旧的 `scripts/rename_user.py` 已删除。
 

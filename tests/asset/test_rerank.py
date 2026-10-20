@@ -193,4 +193,5 @@ def test_rerank_response_parsing_is_tolerant() -> None:
     cohere = parse_results({"data": [{"document_index": 2, "score": 0.9}]})
     assert jina[0].index == 1 and jina[0].score == 0.8
     assert cohere[0].index == 2 and cohere[0].score == 0.9
-    assert parse_results({"results": [{"没有index": 1}]}) == []
+    with pytest.raises(ValueError, match="RERANK_RESPONSE_INVALID"):
+        parse_results({"results": [{"没有index": 1}]})

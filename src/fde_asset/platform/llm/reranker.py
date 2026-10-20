@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any, Protocol
 
 from fde_asset.platform.llm.client import LlmConfig, rerank_config
@@ -61,7 +62,10 @@ class HttpReranker:
             timeout=self.config.timeout,
         )
         response.raise_for_status()
-        return parse_results(response.json())
+        scored = parse_results(response.json())
+        if any(item.index >= len(documents) for item in scored):
+            raise ValueError("RERANK_RESPONSE_INVALID")
+        return scored
 
 
 def rerank_url(base_url: str) -> str:
@@ -71,20 +75,30 @@ def rerank_url(base_url: str) -> str:
 
 
 def parse_results(payload: dict[str, Any]) -> list[Scored]:
-    """容忍几种常见的返回写法：results / data，score 字段名也不统一。"""
-    rows = payload.get("results") or payload.get("data") or []
+    """接受两种评分字段格式；错误协议不能冒充成功的空排名。"""
+    if not isinstance(payload, dict):
+        raise ValueError("RERANK_RESPONSE_INVALID")
+    rows = payload.get("results") if "results" in payload else payload.get("data")
+    if not isinstance(rows, list):
+        raise ValueError("RERANK_RESPONSE_INVALID")
     scored: list[Scored] = []
+    seen: set[int] = set()
     for row in rows:
         if not isinstance(row, dict):
-            continue
+            raise ValueError("RERANK_RESPONSE_INVALID")
         index = row.get("index", row.get("document_index"))
-        if index is None:
-            continue
-        score = row.get("relevance_score", row.get("score", 0.0))
-        try:
-            scored.append(Scored(index=int(index), score=float(score)))
-        except (TypeError, ValueError):
-            continue
+        score = row.get("relevance_score", row.get("score"))
+        if (
+            type(index) is not int
+            or index < 0
+            or index in seen
+            or type(score) not in (int, float)
+            or not math.isfinite(score)
+            or not 0 <= score <= 1
+        ):
+            raise ValueError("RERANK_RESPONSE_INVALID")
+        seen.add(index)
+        scored.append(Scored(index=index, score=float(score)))
     scored.sort(key=lambda item: item.score, reverse=True)
     return scored
 
