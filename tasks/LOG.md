@@ -31,3 +31,4 @@
 | 2026-10-19 | message-history-repair-sync-20261019 P1后续切片 | 待后续切片 | 未实现/未验收 | implementer_asset_sync_guards | `mandatory.py:add` 捕获并发唯一键 `IntegrityError` 后未使用 savepoint/回滚便继续 SELECT，真实 PostgreSQL 事务可能已中止；依仓库评审规则转后续独立切片补并发回归，本轮仅修审批列表P0和生成契约。 |
 
 | 2026-10-20 | test-system-refresh-20261020 | 基线0f3da9c；Root实施 | 相关策略28通过/1模型跳过；应用/Compose资源50通过/2容器跳过；固定PG冒烟34通过，最终门槛8.96秒；Ruff通过 | Root实施；reviewer_test_refresh先复审后补超时资源清理 | 模型/Docker显式授权，执行失败不再skip；契约测试独占PG；新增60秒固定冒烟及空/skip结果拒绝，默认移除继承模型配置；不改业务源码，不全量/模型/部署/推送。 |
+| 2026-10-21 | model-defaults-20261021 | Root核验，随本提交整合 | 通过（定向88通过/1真实模型取消选择；Ruff与格式检查通过） | implementer_asset_rerank；Root整合与文审 | 新增rerank_model_name沿用系统设置并严格验证字符串/255字符/控制符；ask、精确推荐、MCP三入口覆盖专用重排模型，空值回退环境默认；缓存区分模型，rerank_model仍仅生成理由；README区分用途。合成HTTP与Root隔离PG验证，无全量/真实模型/部署/推送；由Root提交。 |

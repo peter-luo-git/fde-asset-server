@@ -161,7 +161,8 @@ def compute(
     accurate = payload.get("mode", "accurate") != "fast"
     enabled = bool(settings_store.get(context.engine, "rerank_enabled"))
     llm = None
-    reranker = build_reranker() if accurate and enabled else None
+    rerank_model_name = settings_store.get(context.engine, "rerank_model_name")
+    reranker = build_reranker(rerank_model_name) if accurate and enabled else None
     limit = int(payload.get("limit", service.DEFAULT_LIMIT))
     # 缓存键带上用户：可见范围因人而异，不能把别人能看的缓存给我
     cache_key = ":".join(
@@ -170,6 +171,7 @@ def compute(
             target.target_type,
             target.target_id,
             "accurate" if accurate and enabled else "fast",
+            rerank_model_name if accurate and enabled else "",
             str(limit),
             target.title,
             target.description[:80],

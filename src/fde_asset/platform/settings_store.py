@@ -10,6 +10,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+import unicodedata
 
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
@@ -43,7 +44,22 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
     ),
     SettingSpec("sop_budget", "SOP 步骤摘要预算", "int", 8192, "字符", "单步摘要写进提示词的上限"),
     SettingSpec("rerank_enabled", "推荐启用内容理解重排", "bool", True, "", "关掉就退回关键词排序"),
-    SettingSpec("rerank_model", "重排模型", "str", "", "", "留空则用环境变量里的默认模型"),
+    SettingSpec(
+        "rerank_model",
+        "推荐理由生成模型",
+        "str",
+        "",
+        "",
+        "用于生成推荐理由；留空则用环境变量里的默认生成模型",
+    ),
+    SettingSpec(
+        "rerank_model_name",
+        "资产重排模型",
+        "str",
+        "",
+        "",
+        "用于内容相关度打分；留空则用环境变量里的默认重排模型",
+    ),
     SettingSpec(
         "search_min_relevance",
         "语义相关度门槛",
@@ -120,6 +136,12 @@ def update(engine: Engine, changes: dict[str, Any], *, updated_by: str = "") -> 
                 text = str(number)
             elif spec.kind == "bool":
                 text = "true" if value in (True, "true", "1", 1, "on") else "false"
+            elif key == "rerank_model_name":
+                if not isinstance(value, str):
+                    raise SettingError(f"{spec.label} 要填字符串")
+                if len(value) > 255 or any(unicodedata.category(char) == "Cc" for char in value):
+                    raise SettingError(f"{spec.label} 不能超过 255 个字符或包含控制字符")
+                text = value
             else:
                 text = str(value)
             upsert(

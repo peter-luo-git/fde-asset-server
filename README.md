@@ -61,6 +61,8 @@ PostgreSQL（FDE_ASSET_DATABASE_URL）     索引与使用记录（2026-10-18 �
 
 按问题检索 `/api/v1/assets/ask` 使用专用重排配置 `FDE_ASSET_RERANK_BASE_URL`、`FDE_ASSET_RERANK_API_KEY`、`FDE_ASSET_RERANK_MODEL_NAME`，向配置地址的 `/rerank` 发送问题和权限过滤后的文档。它不使用生成式推荐的 `FDE_ASSET_LLM_*` / `FDE_ASSET_REASON_MODEL` 兜底；上面的 live-model 用例验证生成式挑选和解释，不能证明专用重排或 Web semantic 验收通过。真实语义验收须明确配置支持重排协议的模型，不能把聊天模型路由直接当成重排能力。
 
+管理员通过现有 `GET/PUT /api/v1/settings` 的 `rerank_model_name`（资产重排模型）选择打分模型，按问题检索、精确推荐和 MCP `search_assets` 都读取该值；留空沿用 `FDE_ASSET_RERANK_MODEL_NAME`。模型名必须是字符串、最多 255 个字符且不含控制字符，地址和密钥继续只从上述环境变量读取。精确推荐缓存按所选重排模型区分。原 `rerank_model` 设置展示为“推荐理由生成模型”，仍只用于 `/api/v1/recommend/explain` 的生成模型覆盖，留空沿用默认生成模型，与重排选择相互独立。
+
 专用响应接受 `results/index/relevance_score` 或兼容的 `data/document_index/score`，要求索引为有效且不重复的整数、分数为0–1有限数；明确的空列表仍可表示成功的空排名。chat-shaped JSON、缺评分列表或无效条目不会被标为 semantic；调用或解析失败保留关键词兜底，日志仅记录异常类型和HTTP状态，不记录URL、密钥、问题或资产正文。离线协议回归为 `pytest tests/asset/test_rerank_http_contract.py tests/asset/test_rerank.py`，其中未授权的live-model用例仍为skip。
 
 固定无模型冒烟入口为 `python scripts/smoke.py --python /absolute/locked/python --report /absolute/asset-smoke.xml`，必须明确提供 `FDE_ASSET_TEST_DATABASE_URL`，不会猜测共享业务库。硬上限60秒（pytest最多45秒，余量用于强杀与父进程清理），覆盖健康、契约、资产类型、专用重排协议与安全降级日志（合成HTTP，不调用模型）、扫描、项目可见性与资产包授权；缺前提退出2，失败/超时/零用例/跳过不能通过。每次冒烟在0700私有清单中先登记精确随机库名；即使用例被强杀，父进程finally仍按本轮清单清理，拒绝外来条目，不扫描删除共享前缀。旧报告先清除，必须由本次运行重新生成。它不代替完整pytest、真实模型或真实Docker验收。

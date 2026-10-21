@@ -103,7 +103,9 @@ def _search(context: ServiceContext, principal: Principal, args: dict[str, Any])
         context.engine,
         principal,
         question,
-        reranker=reranker_module.build_reranker(),
+        reranker=reranker_module.build_reranker(
+            settings_store.get(context.engine, "rerank_model_name")
+        ),
         kind=kind,
         limit=limit,
         min_score=int(settings_store.get(context.engine, "search_min_relevance")) / 100,

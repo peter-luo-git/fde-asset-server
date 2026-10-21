@@ -103,6 +103,8 @@ def parse_results(payload: dict[str, Any]) -> list[Scored]:
     return scored
 
 
-def build_reranker() -> Reranker:
+def build_reranker(model_override: str = "") -> Reranker:
     config = rerank_config()
+    if model_override:
+        config.model = model_override
     return HttpReranker(config) if config.usable else NullReranker()

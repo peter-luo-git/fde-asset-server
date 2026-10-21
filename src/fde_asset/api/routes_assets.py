@@ -140,7 +140,7 @@ def ask_assets(
         context.engine,
         principal,
         q,
-        reranker=build_reranker(),
+        reranker=build_reranker(settings_store.get(context.engine, "rerank_model_name")),
         kind=kind,
         scope=scope,
         exclude_kinds=_kinds(exclude_kind),
