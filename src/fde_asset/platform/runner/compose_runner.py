@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 from fde_asset.platform.runner.docker_runner import NETWORK, _run, free_port
@@ -131,7 +130,3 @@ class LocalComposeRunner:
     @staticmethod
     def network_name() -> str:
         return NETWORK
-
-
-def compose_available(docker: str = "docker") -> bool:  # pragma: no cover - 环境探测
-    return subprocess.run([docker, "compose", "version"], capture_output=True).returncode == 0

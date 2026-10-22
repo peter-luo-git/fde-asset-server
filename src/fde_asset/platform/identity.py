@@ -15,7 +15,6 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
 from urllib.parse import quote
 
 
@@ -71,10 +70,6 @@ class WorkItemNotFound(LookupError):
 
 class WorkItemForbidden(PermissionError):
     pass
-
-
-class DirectorySource(Protocol):
-    def resolve(self, user_id: str) -> Principal: ...
 
 
 class LocalDirectory:
@@ -149,59 +144,6 @@ class LocalDirectory:
     def write(self, data: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-class HttpDirectory:
-    """正式环境：成员关系来自 fde-server 的只读接口，带缓存与 fail closed。
-
-    资产服务不信任调用方传来的用户头，用户身份由 OIDC 令牌确定（见 OidcVerifier）。
-    """
-
-    def __init__(self, base_url: str, ttl_seconds: int = 60, client=None) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.ttl = ttl_seconds
-        self._cache: dict[str, tuple[float, Principal]] = {}
-        self._client = client
-
-    def users(self) -> list[str]:  # pragma: no cover - 正式环境由 fde-server 提供名单
-        """正式环境不从资产服务枚举用户；评审人名单由 fde-server 给。"""
-        return []
-
-    def engagements(self) -> dict[str, dict]:  # pragma: no cover - 同上
-        return {}
-
-    def agents(self) -> dict[str, dict]:  # pragma: no cover - 同上
-        return {}
-
-    def resolve(self, user_id: str) -> Principal:
-        now = time.monotonic()
-        hit = self._cache.get(user_id)
-        if hit and now - hit[0] < self.ttl:
-            return hit[1]
-        if self._client is None:  # pragma: no cover - 需要真实 fde-server
-            raise PrincipalNotFound(user_id)
-        response = self._client.get(f"{self.base_url}/internal/v1/users/{user_id}/memberships")
-        response.raise_for_status()
-        payload = response.json()
-        principal = Principal(
-            user_id=user_id,
-            display_name=payload.get("display_name", user_id),
-            department_code=payload.get("department_code", ""),
-            is_admin=bool(payload.get("is_admin")),
-            is_asset_reviewer=bool(payload.get("is_asset_reviewer")),
-            is_department_head=bool(payload.get("is_department_head")),
-            memberships=tuple(
-                Membership(
-                    m["engagement_slug"],
-                    m.get("department_code", ""),
-                    m.get("role", "member"),
-                    m.get("customer_code", ""),
-                )
-                for m in payload.get("memberships", [])
-            ),
-        )
-        self._cache[user_id] = (now, principal)
-        return principal
 
 
 class PlatformUnavailable(RuntimeError):

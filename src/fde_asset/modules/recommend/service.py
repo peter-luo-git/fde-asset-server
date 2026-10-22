@@ -104,19 +104,6 @@ def target_from_directory(directory, target_type: str, target_id: str) -> Target
     )
 
 
-def department_targets(directory, department_code: str) -> list[Target]:
-    """部门管理员视角：本部门的全部项目与 Agent。"""
-    found: list[Target] = []
-    for target_type, source in (
-        ("engagement", directory.engagements()),
-        ("agent", directory.agents()),
-    ):
-        for target_id, raw in source.items():
-            if raw.get("department_code") == department_code:
-                found.append(target_from_directory(directory, target_type, target_id))
-    return found
-
-
 def compute(
     engine: Engine,
     principal: Principal,

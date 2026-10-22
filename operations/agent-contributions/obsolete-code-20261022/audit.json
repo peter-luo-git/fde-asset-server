@@ -1,0 +1,79 @@
+{
+  "task": "obsolete-code-20261022",
+  "date": "2026-10-22",
+  "repository": "fde-asset-server",
+  "baseline": "aaede9120c5982b77af0080917e05f57b2592f6a",
+  "worktree": "/home/hbw/projects/FDE/.worktrees/obsolete-code-20261022/fde-asset-server",
+  "branch": "codex/obsolete-code-20261022",
+  "scope": "仅受Git管理代码；不删除运行实例、凭据、数据、备份、其他任务worktree、历史文档、迁移与冻结契约。",
+  "research": [
+    {
+      "source": "https://raw.githubusercontent.com/langchain-ai/langgraph/1.0.0/libs/langgraph/langgraph/types.py",
+      "version": "LangGraph 1.0.0",
+      "checked": "2026-10-22",
+      "mechanism": "Interrupt.id/Command.resume保留持久中断及按请求标识恢复；废弃属性不等于可以无条件删除兼容层。",
+      "adoption": "保留FDE仍被调用的审批/问答恢复与历史读取路径；本次只按实际引用删除脱离入口的旧实现。",
+      "difference": "FDE是现有数据库/租约/幂等边界，本次不引入LangGraph或第二状态权威；无复制源码。"
+    },
+    {
+      "source": "https://www.typescriptlang.org/tsconfig/noUnusedLocals.html",
+      "version": "本地TypeScript 5.7.x/tsconfig现有noUnusedLocals=true",
+      "checked": "2026-10-22",
+      "mechanism": "编译器检查未使用局部变量，不替代跨模块入口审计。",
+      "adoption": "复用既有TypeScript解析器分析静态/动态字面量import与CSS依赖；再核对QA、配置和其他仓库。",
+      "difference": "引用图不是对未知外部消费者的证明；声明的公开兼容入口保留。"
+    }
+  ],
+  "authors": {
+    "Root": "确认候选，删除源码与过期专属测试，保留当前混合测试，验证并提交",
+    "researcher_server": "只读Server源码及引用审计",
+    "researcher_runtime_asset": "只读Runtime/Asset源码及引用审计",
+    "reviewer_cleanup_docs": "独立删除范围复核及文档影响检查，见Web同目录贡献记录"
+  },
+  "limits": [
+    "仅相关测试；无全量测试、全量E2E、真实模型调用、推送或部署。",
+    "静态分析覆盖工作区代码和已发现的动态注册，不能证明未知仓外消费者不存在。"
+  ],
+  "deleted_declarations": {
+    "src/fde_asset/platform/identity.py": [
+      "DirectorySource",
+      "HttpDirectory"
+    ],
+    "src/fde_asset/modules/asset/indexer.py": [
+      "new_asset_id"
+    ],
+    "src/fde_asset/modules/asset/mandatory.py": [
+      "for_asset"
+    ],
+    "src/fde_asset/modules/asset/manifest.py": [
+      "kind_spec_fields"
+    ],
+    "src/fde_asset/modules/asset/relations.py": [
+      "resolve_targets"
+    ],
+    "src/fde_asset/modules/asset/visibility_requests.py": [
+      "current_visibility"
+    ],
+    "src/fde_asset/modules/recommend/service.py": [
+      "department_targets"
+    ],
+    "src/fde_asset/platform/runner/compose_runner.py": [
+      "compose_available"
+    ],
+    "src/fde_asset/platform/settings_store.py": [
+      "json_dump"
+    ]
+  },
+  "proof": "9文件AST仅删除预定10声明及无用Protocol/Any/json/subprocess导入；其他AST一致。",
+  "verification": {
+    "pytest": "10文件152通过，1项Docker未选择；使用一次性隔离PostgreSQL，未连接生产库。",
+    "ruff": "9文件check与format --check通过",
+    "initial_failure": "默认测试PG不可达：60通过/92环境错误；独立PG重跑152通过。"
+  },
+  "preserved": [
+    "PlatformDirectory现行身份与fail-closed边界",
+    "legacy_layout/legacy_asset_id/sqlite_import：启动与历史数据转换仍使用",
+    "AssetRepoPort现行仓库契约"
+  ],
+  "local_verification_evidence": "/home/hbw/projects/FDE/.run/obsolete-code-cleanup-20261022/verification"
+}

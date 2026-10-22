@@ -210,16 +210,6 @@ def _entry(row: Any) -> Entry:
     return Entry(row.asset_id, row.scope, row.code, row.created_by, row.created_at)
 
 
-def for_asset(engine: Engine, asset_id: str) -> list[Entry]:
-    with engine.connect() as conn:
-        rows = conn.execute(
-            select(asset_mandatory)
-            .where(asset_mandatory.c.asset_id == asset_id)
-            .order_by(asset_mandatory.c.id)
-        ).fetchall()
-    return [_entry(row) for row in rows]
-
-
 def listing(
     engine: Engine, *, scopes: Iterable[tuple[str, str]] | None = None
 ) -> list[dict[str, Any]]:

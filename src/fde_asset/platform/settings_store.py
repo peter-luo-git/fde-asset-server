@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -151,7 +150,3 @@ def update(engine: Engine, changes: dict[str, Any], *, updated_by: str = "") -> 
                 ["key"],
             )
     return all_settings(engine)
-
-
-def json_dump(engine: Engine) -> str:  # pragma: no cover - 调试用
-    return json.dumps(all_settings(engine), ensure_ascii=False, indent=2)
