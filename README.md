@@ -53,6 +53,8 @@ PostgreSQL（FDE_ASSET_DATABASE_URL）     索引与使用记录（2026-10-18 �
 ~/.fde/data/assets/snapshots/<sha>/    会话快照（供 orchestrator 只读挂载）
 ```
 
+Git 子进程回收（2026-10-23 源码修复）：本地仓库与 Gitea 缓存的 Git 调用统一使用命令级 `maintenance.autoDetach=false` 和 `gc.autoDetach=false`，保留自动维护并等待其前台完成，不改仓库或用户的持久配置。这样维护进程不会脱离 `subprocess.run` 后成为 Python PID 1 下未回收的子进程。机制依据为 [Git 2.47 的自动维护配置](https://git-scm.com/docs/git-maintenance/2.47.0.html)；2026-10-23 在 Git 2.47.3 上完成默认后台维护与前台维护对照。部署端还须配套容器 init 回收其他孤儿子进程；仅更新源码不改变已有容器。
+
 ## 本地验证
 
 `make check` 顺序执行 Ruff、格式检查、编译、完整 pytest 与 Alembic heads；检测到 `uv` 时最后还执行 `uv lock --check`。测试只用 PostgreSQL：每个用例在测试库服务器上建临时库、跑完删掉，测试账号须有建库权限；服务器默认是 `make test-db` 起的本机容器（127.0.0.1:55432），别处用 `FDE_ASSET_TEST_DATABASE_URL` 指定。契约测试也使用本例独占库；独立契约生成命令仍需提供 `FDE_ASSET_DATABASE_URL`。

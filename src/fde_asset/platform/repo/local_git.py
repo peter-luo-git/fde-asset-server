@@ -13,6 +13,12 @@ class GitCommandError(RuntimeError):
     pass
 
 
+def git_command(args: list[str]) -> list[str]:
+    # 后台维护脱离 fetch/commit 后会由容器 PID 1 接管；前台维护可由 run 正常等待。
+    # 同时约束旧版 Git 使用的 gc 配置，不禁用维护，也不改仓库的持久配置。
+    return ["git", "-c", "maintenance.autoDetach=false", "-c", "gc.autoDetach=false", *args]
+
+
 class LocalGitRepo:
     """把 `<repo_dir>/<name>.git` 当作唯一可信源；所有写操作经临时工作区完成。"""
 
@@ -28,7 +34,7 @@ class LocalGitRepo:
 
     def _git(self, args: list[str], cwd: Path) -> str:
         result = subprocess.run(
-            ["git", *args],
+            git_command(args),
             cwd=str(cwd),
             capture_output=True,
             text=True,
@@ -47,7 +53,7 @@ class LocalGitRepo:
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             subprocess.run(
-                ["git", "init", "--bare", "--initial-branch", self.default_branch, str(path)],
+                git_command(["init", "--bare", "--initial-branch", self.default_branch, str(path)]),
                 check=True,
                 capture_output=True,
             )
@@ -81,7 +87,7 @@ class LocalGitRepo:
         repo_path = self.ensure_repo(repo)
         target = f"{ref or self.default_branch}:{path}"
         result = subprocess.run(
-            ["git", "show", target],
+            git_command(["show", target]),
             cwd=str(repo_path),
             capture_output=True,
         )
@@ -131,7 +137,7 @@ class LocalGitRepo:
             head = self.get_head(repo)
             if head:
                 subprocess.run(
-                    ["git", "clone", "-q", str(repo_path), str(work)],
+                    git_command(["clone", "-q", str(repo_path), str(work)]),
                     check=True,
                     capture_output=True,
                 )
@@ -166,7 +172,9 @@ class LocalGitRepo:
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp) / "work"
             subprocess.run(
-                ["git", "clone", "-q", str(repo_path), str(work)], check=True, capture_output=True
+                git_command(["clone", "-q", str(repo_path), str(work)]),
+                check=True,
+                capture_output=True,
             )
             self._git(["config", "user.name", "fde-asset"], work)
             self._git(["config", "user.email", "asset@fde.local"], work)

@@ -36,3 +36,5 @@
 | 2026-10-21 | test-inclusion-e2e-20261021 | 基线3fcdded；Root待整合 | 通过（遗漏3份26通过；12步主链及新增定向E2E共14通过；Ruff/格式通过） | implementer_asset（运行名implementer_asset_recent）编写/验证；Root集成 | tests/e2e/test_rerank_model_settings.py补ask/recommend/MCP三入口真实uvicorn+Git+PG测试：模型设置/清空回退、管理员权限、真实事务回滚及模型前SQL可见性（含MCP伪造身份无效）；只合成外部rerank，现有12步主链未改。初轮测试自身CursorResult转换/空评分语义假设已纠正并保留失败证据；3轮独占PG均finally清理，DB标记为0、容器确认不存在。日志/JUnit与清理证据.run/test-inclusion-e2e-20261021/asset-*；无全量/真实模型/现有业务DB/push/部署/Git写，状态Root代记。 |
 
 2026-10-22 | obsolete-code-20261022 | Root删除已替代且无调用的10声明/9文件，researcher_runtime_asset只读取证；隔离PG定向152通过/1项Docker未选择，Ruff通过；清单/初次环境失败及复验证据见operations/agent-contributions/obsolete-code-20261022/audit.json；无全量/E2E/推送/部署。
+
+2026-10-23 | asset-git-reaping-20261023 | Root实施；reviewer_docs_reaping只读审查 | Git调用统一前台自动维护，覆盖本地与Gitea路径；Linux子reaper回归主动收集失败场景的后台进程；Git2.47.3真实隔离回归改前2失败/改后2通过，相关pytest10通过，Ruff/格式检查通过；官方Git机制与版本见README，配套fde-deploy资产服务init配置；无全量/E2E/真实模型/推送/部署，任务证据在工作区.run/asset-git-reaping-20261023。
