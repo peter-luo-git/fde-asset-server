@@ -28,6 +28,7 @@ from fde_asset.modules.harvest import service
 from fde_asset.modules.leads import rules as leads_rules
 from fde_asset.modules.notify import service as notify_service
 from fde_asset.platform.blobs import BlobError
+from fde_asset.platform import settings_store
 from fde_asset.platform.identity import Principal
 
 router = APIRouter(prefix="/api/v1", tags=["harvest"])
@@ -45,6 +46,22 @@ def _scan_context(context: ServiceContext) -> service.ScanContext:
     )
 
 
+def may_review(principal: Principal, candidate: Any) -> bool:
+    """按归属范围判评审权限；从外部技能库安装的，还要公司资产评审员（脚本来源不可控）。"""
+    get = candidate.get if isinstance(candidate, dict) else lambda key: getattr(candidate, key)
+    if not can_review(
+        principal,
+        get("scope"),
+        department_code=get("department_code") or "",
+        engagement_slug=get("engagement_slug") or "",
+        customer_code=get("customer_code") or "",
+    ) and not (get("origin") == "install" and principal.is_asset_reviewer):
+        return False
+    if get("origin") == "install":
+        return principal.is_admin or principal.is_asset_reviewer
+    return True
+
+
 def _reviewers(context: ServiceContext, candidate: dict[str, Any]) -> list[dict[str, str]]:
     """这份草稿该由谁评。开发模式能从目录算出具体人；正式环境名单由 fde-server 提供，返回空列表。"""
     reviewers: list[dict[str, str]] = []
@@ -55,13 +72,7 @@ def _reviewers(context: ServiceContext, candidate: dict[str, Any]) -> list[dict[
             continue
         if other.user_id == candidate["created_by"]:
             continue  # 自己不评自己
-        if can_review(
-            other,
-            candidate["scope"],
-            department_code=candidate["department_code"],
-            engagement_slug=candidate["engagement_slug"],
-            customer_code=candidate["customer_code"],
-        ):
+        if may_review(other, candidate):
             reviewers.append(
                 {"user_id": other.user_id, "display_name": other.display_name or other.user_id}
             )
@@ -120,6 +131,73 @@ def create_from_issue(
         )
     except service.HarvestError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@router.post("/harvest-candidates/from-skill-package")
+def create_from_skill_package(
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """整目录导入技能：`zip_base64`（zip 包）或 `files`（{相对路径: base64}，浏览器选文件夹上传）。
+
+    默认个人专用（scope=user）；也可以直接选项目、部门、全公司。
+    """
+    from fde_asset.modules.asset import skill_package
+
+    try:
+        if payload.get("zip_base64"):
+            content = base64.b64decode(str(payload["zip_base64"]), validate=True)
+            if len(content) > skill_package.MAX_TOTAL_BYTES * 2:
+                raise HTTPException(status_code=413, detail="zip 包太大")
+            package = skill_package.from_zip(content)
+        elif isinstance(payload.get("files"), dict):
+            package = skill_package.from_files(payload["files"])
+        else:
+            raise HTTPException(status_code=422, detail="要传 zip_base64 或 files")
+        source = {"origin": "upload", "note": str(payload.get("filename") or "")[:200]}
+        if payload.get("source_url"):
+            # 网络不通时从外部技能库手动下载再导入：记下来源，以后能对比更新
+            source = {
+                "origin": "manual-import",
+                "url": str(payload["source_url"])[:500],
+                "path": str(payload.get("source_path") or "")[:300],
+                "commit": str(payload.get("source_commit") or "")[:64],
+            }
+        return service.draft_from_skill_package(
+            context.engine,
+            principal,
+            package,
+            title=str(payload.get("title") or ""),
+            scope=str(payload.get("scope") or "user"),
+            department_code=str(payload.get("department_code") or ""),
+            engagement_slug=str(payload.get("engagement_slug") or ""),
+            customer_code=str(payload.get("customer_code") or ""),
+            origin="install" if payload.get("source_url") else "upload",
+            source=source,
+        )
+    except (skill_package.SkillPackageError, service.HarvestError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@router.post("/harvest-candidates/{candidate_id}/skill-model-review")
+def skill_model_review(
+    candidate_id: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """让模型通读一遍技能里的文字，找可疑说法。只给评审人参考，不自动拦截。"""
+    from fde_asset.modules.asset import skill_checks
+    from fde_asset.platform.llm.client import build_client
+
+    candidate = get_candidate(candidate_id, context, principal)
+    if candidate["kind"] != "Skill":
+        raise HTTPException(status_code=422, detail="只有技能有模型通读")
+    llm = build_client(str(settings_store.get(context.engine, "rerank_model") or ""))
+    config = getattr(llm, "config", None)
+    if config is not None:
+        config.timeout = max(config.timeout, 90)
+    return skill_checks.model_review(context.engine, candidate_id, candidate["files"], llm)
 
 
 @router.post("/harvest-candidates/from-upload")
@@ -238,7 +316,11 @@ REVIEWER_RULE = {
     "company": "公司资产评审员（或平台管理员）",
     "department": "本部门的资产评审员或部门主管",
     "engagement": "本项目负责人",
+    "customer": "资产评审员或该客户项目的负责人",
+    "user": "个人专用：不带脚本的免评审；带脚本的由本部门资产评审员或部门主管评",
 }
+#: 从外部技能库安装的技能，不管归属哪一级，都要公司资产评审员评
+INSTALL_REVIEWER_RULE = "公司资产评审员（外部技能库安装的技能）"
 
 
 @router.get("/harvest-candidates/{candidate_id}/review")
@@ -292,7 +374,9 @@ def candidate_review(
         "candidate_id": candidate_id,
         "stage": stage,
         "scope": candidate["scope"],
-        "reviewer_rule": REVIEWER_RULE.get(candidate["scope"], ""),
+        "reviewer_rule": INSTALL_REVIEWER_RULE
+        if candidate.get("origin") == "install"
+        else REVIEWER_RULE.get(candidate["scope"], ""),
         "reviewers": reviewers,
         "current": current,
         "history": history,
@@ -454,6 +538,26 @@ def submit_candidate(
             )
         raise HTTPException(status_code=409, detail=str(exc)) from None
     submitted = service.get_candidate(context.engine, candidate_id)
+    if service.personal_auto_approvable(submitted):
+        # 个人专用、不带脚本、自己写的技能免人工评审（2026-10-25）：提交即入库，只对本人可见
+        decided = service.decide(
+            context.engine,
+            principal,
+            context.repo_port,
+            str(submitted["review_id"]),
+            approve=True,
+            target_repo=target,
+            note="个人专用、不含脚本的技能，按规则免人工评审",
+        )
+        index_repository(
+            context.engine,
+            context.repo_port,
+            target,
+            text_limit=context.settings.index_text_limit,
+            file_store=context.file_store,
+        )
+        finish_index(context.engine, owner_of=context.target_owner)
+        return {**result, "auto_approved": True, "status": decided.get("status")}
     reviewer_ids = [item["user_id"] for item in _reviewers(context, submitted)]
     review_ref = str((submitted.get("review_id") or ""))
     # 平台工作台：给评审人开一条待办；提交人之前那条"被打回"随着重新提交收掉
@@ -604,6 +708,30 @@ def _landed_asset_id(context: ServiceContext, principal: Principal, candidate: A
     return row.asset_id if row else ""
 
 
+def _apply_executables(context, target, review, candidate, requested) -> None:
+    """评审通过的技能：哪些脚本给执行权限。没传就按默认（没有高风险、试跑通过）；只能在可勾选的里面挑。"""
+    current = service.get_candidate(context.engine, candidate.candidate_id)
+    skill = (current.get("checks") or {}).get("skill") or {}
+    tickable = set(skill.get("tickable") or [])
+    if requested is None:
+        chosen = list(skill.get("default_executables") or [])
+    else:
+        if not isinstance(requested, list) or not all(isinstance(p, str) for p in requested):
+            raise HTTPException(status_code=422, detail="executables 要是脚本路径列表")
+        refused = sorted(set(requested) - tickable)
+        if refused:
+            raise HTTPException(
+                status_code=422,
+                detail="这些脚本不能给执行权限（试跑没过或镜像里没有解释器）："
+                + "、".join(refused),
+            )
+        chosen = list(requested)
+    if chosen or (current.get("checks") or {}).get("skill"):
+        service.set_executables(
+            context.repo_port, target, review.branch, current, chosen, engine=context.engine
+        )
+
+
 @router.post("/reviews/{review_id}/decide")
 def decide_review(
     review_id: str,
@@ -622,14 +750,13 @@ def decide_review(
         ).first()
     if review is None or candidate is None:
         raise HTTPException(status_code=404, detail="评审不存在")
-    if not can_review(
-        principal,
-        review.scope,
-        department_code=candidate.department_code,
-        engagement_slug=candidate.engagement_slug,
-        customer_code=candidate.customer_code,
-    ):
-        raise HTTPException(status_code=403, detail="没有该作用域的评审权限")
+    if not may_review(principal, candidate):
+        raise HTTPException(
+            status_code=403,
+            detail="外部技能库安装的技能要由公司资产评审员评"
+            if candidate.origin == "install"
+            else "没有该作用域的评审权限",
+        )
     if review.submitted_by == principal.user_id:
         # 评审的意义就是换一个人看。项目负责人、管理员提交的也一样，要由别的评审人来评
         raise HTTPException(status_code=403, detail="不能评审自己提交的资产，请由其他评审人处理")
@@ -639,12 +766,15 @@ def decide_review(
         engagement_slug=candidate.engagement_slug,
         customer_code=candidate.customer_code,
     )
+    approve = bool(payload.get("approve", True))
+    if approve and candidate.kind == "Skill" and review.status == "open":
+        _apply_executables(context, target, review, candidate, payload.get("executables"))
     result = service.decide(
         context.engine,
         principal,
         context.repo_port,
         review_id,
-        approve=bool(payload.get("approve", True)),
+        approve=approve,
         target_repo=target,
         note=payload.get("note", ""),
     )

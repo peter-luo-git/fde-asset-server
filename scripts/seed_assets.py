@@ -186,19 +186,23 @@ def company_files() -> dict[str, bytes]:
 ## 步骤
 1. 调研与方案确认
    梳理业务现状与目标，输出方案初稿。
-   - 检查点：客户确认方案范围
+   - 检查点[交付物]：`docs/方案.md` 已提交，含「范围」「风险」两节
+   - 检查点[确认:客户]：客户书面确认方案范围
    - 产出：方案文档
 2. 环境与数据准备
    准备环境、打通数据通路。
-   - 检查点：环境连通性验证通过
+   - 检查点[交付物]：`docs/环境清单.md` 已提交，列出每个环境的地址和负责人
+   - 检查点[确认:运维]：环境连通性验证通过
    - 产出：环境清单
 3. 实施与验证
    按方案实施并自测。
-   - 检查点：验收用例全部通过
+   - 检查点[命令]：验收用例全部通过 `pytest -q`
+   - 检查点[判断]：主要风险都有应对措施
    - 产出：实施记录
 4. 验收与复盘
    客户验收，团队复盘并沉淀资产。
-   - 检查点：三件套（方案 / 实施 / 复盘）已提交
+   - 检查点[交付物]：`docs/复盘.md` 已提交，含「做得好的」「要改进的」两节
+   - 检查点[确认:客户]：客户签署验收
    - 产出：复盘报告
 
 ## 异常处理
@@ -237,16 +241,17 @@ def company_files() -> dict[str, bytes]:
 ## 步骤
 2. 环境与数据准备（行业增强）
    除通用要求外，必须准备双跑环境。
-   - 检查点：双跑环境与生产版本一致
+   - 检查点[交付物]：`docs/双跑环境清单.md` 已提交，含「版本对照」一节
+   - 检查点[确认:运维]：双跑环境与生产版本一致
    - 产出：双跑环境清单
 3. 双跑比对
    连续三轮全量比对，差异必须归零。
-   - 检查点：连续三轮差异为 0
-   - 检查点：比对报告已由业务确认
+   - 检查点[命令]：连续三轮差异为 0 `python scripts/compare.py --rounds 3`
+   - 检查点[确认:业务]：比对报告已由业务确认
    - 产出：比对报告
 5. 割接与回滚演练
    按割接方案执行，并演练一次回滚。
-   - 检查点：回滚演练成功
+   - 检查点[确认:运维]：回滚演练成功
    - 产出：割接记录
 
 ## 异常处理
@@ -1149,17 +1154,18 @@ def seed(settings: AssetSettings) -> dict[str, Any]:
 
 
 def seed_mandatory(settings: AssetSettings, file_store: FileStore) -> int:
-    """种子里公司级的规范和流程设成全公司必选。
+    """种子里公司级的规范设成全公司必选，公司级的 L1 流程设成全公司默认流程。
 
-    2026-10-17 起规范和流程不再按类型自动带给 Agent，要人指定必选；种子数据照旧给每个 Agent 带上，
-    演示和测试的行为不变。返回新设了几条。
+    2026-10-17 起规范不再按类型自动带给 Agent，要人指定必选；2026-10-25 起 SOP 只用于执行任务，
+    不再设必选，改成默认流程（之后新建的任务自动按它执行）。返回新设了几条必选。
     """
     import yaml
     from sqlalchemy import select
 
-    from fde_asset.core.db import asset_mandatory, create_engine_for, init_db
+    from fde_asset.core.db import asset_mandatory, create_engine_for, init_db, sop_defaults
 
     wanted: list[str] = []
+    default_flow = ""
     for asset_id, (key, members) in seed_assets_by_id(file_store).items():
         manifest = next(
             (
@@ -1169,8 +1175,14 @@ def seed_mandatory(settings: AssetSettings, file_store: FileStore) -> int:
             ),
             {},
         )
-        if key == "company" and manifest.get("kind") in {"Rule", "Sop"}:
+        if key == "company" and manifest.get("kind") == "Rule":
             wanted.append(asset_id)
+        if (
+            key == "company"
+            and manifest.get("kind") == "Sop"
+            and (manifest.get("spec") or {}).get("layer") == "L1"
+        ):
+            default_flow = default_flow or asset_id
     engine = create_engine_for(settings.database_target())
     init_db(engine)
     added = 0
@@ -1189,6 +1201,17 @@ def seed_mandatory(settings: AssetSettings, file_store: FileStore) -> int:
                     )
                 )
                 added += 1
+        if (
+            default_flow
+            and not conn.execute(
+                select(sop_defaults.c.id).where(sop_defaults.c.scope == "company")
+            ).first()
+        ):
+            conn.execute(
+                sop_defaults.insert().values(
+                    scope="company", code="", asset_id=default_flow, created_by="seed"
+                )
+            )
     engine.dispose()
     return added
 

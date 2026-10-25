@@ -42,15 +42,14 @@ def _bundle(context, tmp_path, **kwargs):
     )
 
 
-def test_bundle_carries_procedures_and_all_knowledge_kinds(indexed, tmp_path) -> None:
-    # 上层的知识要关联了才带；项目自己的案例、流程不用关联
+def test_bundle_carries_all_knowledge_kinds_but_no_procedures(indexed, tmp_path) -> None:
+    # 上层的知识要关联了才带；项目自己的案例不用关联
     _link(indexed, "engagement", "policy-import", "bank-core-migration-solution")
     bundle = _bundle(indexed, tmp_path)
     tops = {"/".join(path.split("/")[:2]) for path in bundle.files if path.startswith("knowledge/")}
     assert "knowledge/cases" in tops and "knowledge/solutions" in tops
-    assert any(
-        path.startswith("knowledge/sops/") and path.endswith("/SOP.md") for path in bundle.files
-    )
+    # SOP 只用于执行任务（2026-10-25）：当前步骤由平台注入，不放进资产包当参考
+    assert not any(path.startswith("knowledge/sops/") for path in bundle.files)
     # 运行镜像里的校验只认这三个顶层目录，多一个 Agent 就起不来
     assert {path.split("/")[0] for path in bundle.files} <= {"rules", "skills", "knowledge"}
     assert not any(path.startswith("applications/") for path in bundle.files), "应用不给 Agent"
@@ -159,11 +158,15 @@ def test_work_item_follows_a_procedure_step_by_step(seeded) -> None:
         first = service.get(path, params=caller, headers=HEADERS).json()
         assert first["found"] is True and first["step"] == 1 and first["prompt_md"]
 
-        # 做完一步换到下一步：不再因为"已经开始过"而锁住
-        service.get("/api/v1/work-items/w-9/sop-step-summary", params={"lock": True})
-        moved = service.post(
+        # 做完一步换到下一步：当前这步还有没通过的检查点时要明确选"仍然进入"
+        blocked = service.post(
             "/api/v1/work-items/w-9/assets",
             json={"asset_id": sop, "role": "sop_step", "sop_step": 2},
+        )
+        assert blocked.status_code == 409
+        moved = service.post(
+            "/api/v1/work-items/w-9/assets",
+            json={"asset_id": sop, "role": "sop_step", "sop_step": 2, "force": True},
         )
         assert moved.status_code == 200, moved.text
         second = service.get(path, params=caller, headers=HEADERS).json()

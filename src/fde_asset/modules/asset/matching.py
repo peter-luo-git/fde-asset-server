@@ -5,7 +5,7 @@
 | 组 | 机制 | 怎么选 |
 |---|---|---|
 | rules | 强制注入 | 可见范围内的规范**全要**，不做相关性筛选——规范是红线，不能因为"不相关"被漏掉 |
-| sops | 流程注入 | 按行业与关键词选最贴的一条主流程 |
+| sops | （停用）| SOP 只用于执行任务，不再匹配，恒为空 |
 | skills | 工具发现 | 关键词命中即挂载，多挂几个成本很低 |
 | knowledge | 文档检索 | 方案/实施/问题/经验按相关性排序，取前 N 条 |
 
@@ -169,8 +169,8 @@ def match(
             # 规范一律带上：红线不挑场景
             buckets["rules"].append(_item(row, score + 10, ["规范强制注入"] + reasons, reuse))
         elif row.kind == "Sop":
-            # 流程没命中关键词也给一条兜底，免得新项目完全没有流程可依
-            buckets["sops"].append(_item(row, score, reasons or ["通用流程"], reuse))
+            # SOP 只用于按步骤执行任务，不参与匹配和推荐（2026-10-25）；项目要用流程就设默认流程
+            continue
         elif relevance > 0 or not prefilter:
             bucket = "skills" if row.kind == "Skill" else "knowledge"
             buckets[bucket].append(_item(row, score, reasons, reuse))

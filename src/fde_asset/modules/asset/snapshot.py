@@ -80,6 +80,7 @@ def select_assets(
     target_id: str = "",
     also_targets: tuple[tuple[str, str], ...] = (),
     username: str = "",
+    skill_names: tuple[str, ...] = (),
 ) -> Selection:
     """`also_targets`：还要一并算上谁的关联，例如这次干活的 Agent。
 
@@ -146,24 +147,41 @@ def select_assets(
     picked = linked_ids & available
     forced = mandatory_ids & available
     selection = "linked" if any(one_type and one_id for one_type, one_id in targets) else "scope"
+    # SOP 只用于按步骤执行任务（当前步骤由平台注入），不进资产包当参考（2026-10-25）
     wanted = {
         row.asset_id
         for row in in_scope
-        if selection == "scope"
-        or row.scope == "engagement"
-        or row.asset_id in picked
-        or row.asset_id in forced
+        if row.kind != "Sop"
+        and (
+            selection == "scope"
+            or row.scope == "engagement"
+            or row.asset_id in picked
+            or row.asset_id in forced
+        )
     }
-    wanted |= _sop_parents(in_scope, wanted)
+    # 个人专用的技能：只在本人和 Agent 的私聊里带（和个人必选一样，username 只在私聊里给）
+    if username:
+        wanted |= {
+            row.asset_id
+            for row in in_scope
+            if row.kind == "Skill" and row.scope == "user" and row.owner_ref == f"user:{username}"
+        }
+    # 当前流程步骤点名要用的技能（SOP「技能：」），没关联也带上；同名的优先项目自己的
+    for name in skill_names:
+        same = [row for row in in_scope if row.kind == "Skill" and row.name == name]
+        same.sort(key=lambda row: (row.scope != "engagement", row.scope != "user", row.asset_id))
+        if same:
+            wanted.add(same[0].asset_id)
     selected = [row for row in in_scope if row.asset_id in wanted]
-    # 关联了、设了必选却带不进来的要说出来：否则负责人以为 Agent 拿到了，其实没有
+    sop_ids = {row.asset_id for row in in_scope if row.kind == "Sop"}
+    # 关联了、设了必选却带不进来的要说出来（以前关联的 SOP 不算：SOP 本来就不进资产包）：否则负责人以为 Agent 拿到了，其实没有
     not_carried = [
         {
             "asset": linked_titles.get(asset_id, asset_id),
             "asset_id": asset_id,
             "reason": "linked_but_not_available",
         }
-        for asset_id in sorted(linked_ids - wanted)
+        for asset_id in sorted(linked_ids - wanted - sop_ids)
     ]
 
     return Selection(
@@ -174,25 +192,6 @@ def select_assets(
         not_carried=not_carried,
         mandatory=len(forced - picked),
     )
-
-
-def _sop_parents(rows: list[Any], wanted: set[str]) -> set[str]:
-    """带上的流程 extends 了谁，就把上层流程也带上（只在候选里找，不越过可见范围）。"""
-    by_name: dict[str, Any] = {}
-    for row in rows:
-        if row.kind == "Sop":
-            by_name.setdefault(row.name, row)
-    extra: set[str] = set()
-    queue = [row for row in rows if row.kind == "Sop" and row.asset_id in wanted]
-    while queue:
-        row = queue.pop()
-        parent_ref = str(json.loads(row.kind_spec_json or "{}").get("extends") or "")
-        parent = by_name.get(parent_ref.split("/")[-1]) if parent_ref else None
-        if parent is None or parent.asset_id in wanted or parent.asset_id in extra:
-            continue
-        extra.add(parent.asset_id)
-        queue.append(parent)
-    return extra
 
 
 def build_snapshot(

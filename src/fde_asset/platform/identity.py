@@ -14,9 +14,20 @@ import json
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import quote
+
+
+def _parse_time(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -142,6 +153,11 @@ class LocalDirectory:
                 raise WorkItemForbidden(work_item_id)
         return slug
 
+    def work_item_created_at(self, work_item_id: str) -> datetime | None:
+        """任务的创建时间：判断默认流程要不要自动绑上用。开发目录里没写就是 None。"""
+        item = self._load().get("work_items", {}).get(work_item_id)
+        return _parse_time(item.get("created_at")) if isinstance(item, dict) else None
+
     def departments(self) -> dict[str, str]:
         """部门代号 → 名称。开发名单里没写就为空，页面显示代号。"""
         return dict(self._load().get("departments", {}))
@@ -258,6 +274,7 @@ class PlatformDirectory:
         self._lock = threading.Lock()
         self._snapshot: tuple[float, dict] | None = None
         self._sessions: dict[str, tuple[float, Principal]] = {}
+        self._created_at: dict[str, datetime | None] = {}
 
     def _http(self):
         if self._client is None:
@@ -299,7 +316,16 @@ class PlatformDirectory:
                 raise ValueError
         except (KeyError, TypeError, ValueError):
             raise PlatformUnavailable("平台任务权限响应格式无效") from None
+        with self._lock:
+            if len(self._created_at) > 5000:
+                self._created_at.clear()
+            self._created_at[work_item_id] = _parse_time(payload.get("created_at"))
         return slug
+
+    def work_item_created_at(self, work_item_id: str) -> datetime | None:
+        """最近一次核验权限时平台给的任务创建时间（老版本平台不给，就是 None）。"""
+        with self._lock:
+            return self._created_at.get(work_item_id)
 
     # ---- 这次请求是谁 ----
 

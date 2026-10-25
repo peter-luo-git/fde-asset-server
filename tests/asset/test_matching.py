@@ -85,6 +85,6 @@ def test_department_alone_does_not_make_it_relevant(indexed) -> None:
     )
     assert result["summary"]["knowledge"] == 0
     assert result["summary"]["skills"] == 0
-    # 规范和流程仍然要有：红线必带，流程兜底
+    # 规范仍然要有：红线必带。SOP 只用于执行任务，不参与匹配（2026-10-25）
     assert result["summary"]["rules"] > 0
-    assert result["summary"]["sops"] > 0
+    assert result["summary"]["sops"] == 0

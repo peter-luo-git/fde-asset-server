@@ -28,6 +28,8 @@ from fde_asset.platform.identity import Principal
 SCOPES = ("company", "department", "customer", "engagement", "user")
 #: 这几类不进 Agent 的资产包，设成必选也没用
 NOT_FOR_AGENT = {"Application"}
+#: SOP 也不进资产包（只用于执行任务）；以前设成必选的 SOP 保留记录但不再生效
+INERT_KINDS = {"Sop"}
 
 
 class MandatoryError(ValueError):
@@ -160,6 +162,11 @@ def add(
             raise MandatoryError("受限资产不进 Agent 的资产包，不能设必选")
         if row.kind in NOT_FOR_AGENT:
             raise MandatoryError("应用不进 Agent 的资产包，不能设必选")
+        if row.kind == "Sop":
+            raise MandatoryError(
+                "SOP 只用于按步骤执行任务，不进资产包，不能设必选；"
+                "要让某个范围里的任务都按它执行，请设为默认流程"
+            )
         if row.lifecycle in {"deprecated", "archived", "draft"}:
             raise MandatoryError("废弃、归档或草稿状态的资产不会带给 Agent，不能设必选")
         if not _visible_in(conn, asset_id, scope, code, context or {}):
@@ -263,6 +270,7 @@ def listing(
             and row.valid
             and not row.restricted
             and row.lifecycle not in {"deprecated", "archived", "draft"}
+            and row.kind not in INERT_KINDS
         )
         result.append(
             {
@@ -277,6 +285,11 @@ def listing(
                 "created_at": entry.created_at.isoformat() if entry.created_at else "",
                 # 资产后来被废弃、删除、改成受限的，这条还在，但组包时不会带
                 "effective": carried,
+                **(
+                    {"inert_reason": "SOP 已不再作为必选资产，请改为设默认流程"}
+                    if row.kind in INERT_KINDS
+                    else {}
+                ),
             }
         )
     return result

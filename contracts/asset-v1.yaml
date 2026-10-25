@@ -14,6 +14,36 @@ components:
           type: array
       title: HTTPValidationError
       type: object
+    SopCheckDecision:
+      additionalProperties: false
+      description: 人对一个检查点的决定：确认通过、退回（不通过）、清空重来。
+      properties:
+        decision:
+          enum:
+          - confirm
+          - reject
+          - reset
+          title: Decision
+          type: string
+        index:
+          description: 检查点在这一步里的序号，从 0 开始。
+          minimum: 0.0
+          title: Index
+          type: integer
+        note:
+          default: ''
+          maxLength: 2000
+          title: Note
+          type: string
+        step:
+          title: Step
+          type: integer
+      required:
+      - step
+      - index
+      - decision
+      title: SopCheckDecision
+      type: object
     ValidationError:
       properties:
         loc:
@@ -49,6 +79,11 @@ components:
           maxLength: 120
           title: Engagement Slug
           type: string
+        force:
+          default: false
+          description: 往后推进时当前步骤还有没通过的检查点，确认仍然进入就传 true。
+          title: Force
+          type: boolean
         role:
           default: reference
           enum:
@@ -145,6 +180,58 @@ paths:
       summary: Rebuild Relations
       tags:
       - assets
+  /api/v1/agent-skills:
+    get:
+      description: 这个 Agent 在这个项目里实际会带哪些技能、各自为什么带（项目自己的、关联的、必选的、个人的）。
+      operationId: agent_skills_api_v1_agent_skills_get
+      parameters:
+      - in: query
+        name: engagement_slug
+        required: true
+        schema:
+          minLength: 1
+          title: Engagement Slug
+          type: string
+      - in: query
+        name: agent_key
+        required: false
+        schema:
+          default: ''
+          title: Agent Key
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Agent Skills Api V1 Agent Skills Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Agent Skills
+      tags:
+      - skill-market
   /api/v1/apps:
     get:
       description: 应用市场：能跑的东西，带演示入口与在线状态。`mine=true` 只要我负责的（我本人或我部门）。
@@ -1916,6 +2003,50 @@ paths:
       summary: Dev Identities
       tags:
       - assets
+  /api/v1/engagements/{engagement_slug}/sop-default:
+    get:
+      description: 项目设置页：这个项目现在用哪条默认流程（可能继承自客户、部门、全公司），我能不能改。
+      operationId: engagement_default_api_v1_engagements__engagement_slug__sop_default_get
+      parameters:
+      - in: path
+        name: engagement_slug
+        required: true
+        schema:
+          title: Engagement Slug
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Engagement Default Api V1 Engagements  Engagement Slug  Sop Default Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Engagement Default
+      tags:
+      - sop
   /api/v1/governance/checkup:
     get:
       description: 资产体检：半年没更新、零复用、被反复拒绝、收到差评，四条规则。
@@ -2085,6 +2216,55 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
           description: Validation Error
       summary: Create From Issue
+      tags:
+      - harvest
+  /api/v1/harvest-candidates/from-skill-package:
+    post:
+      description: '整目录导入技能：`zip_base64`（zip 包）或 `files`（{相对路径: base64}，浏览器选文件夹上传）。
+
+
+        默认个人专用（scope=user）；也可以直接选项目、部门、全公司。'
+      operationId: create_from_skill_package_api_v1_harvest_candidates_from_skill_package_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Create From Skill Package Api V1 Harvest Candidates From Skill Package
+                  Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Create From Skill Package
       tags:
       - harvest
   /api/v1/harvest-candidates/from-upload:
@@ -2501,6 +2681,51 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
           description: Validation Error
       summary: Candidate Review
+      tags:
+      - harvest
+  /api/v1/harvest-candidates/{candidate_id}/skill-model-review:
+    post:
+      description: 让模型通读一遍技能里的文字，找可疑说法。只给评审人参考，不自动拦截。
+      operationId: skill_model_review_api_v1_harvest_candidates__candidate_id__skill_model_review_post
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Skill Model Review Api V1 Harvest Candidates  Candidate Id  Skill Model
+                  Review Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Skill Model Review
       tags:
       - harvest
   /api/v1/harvest-candidates/{candidate_id}/submit:
@@ -3347,6 +3572,356 @@ paths:
       summary: Write Settings
       tags:
       - assets
+  /api/v1/skill-market/assets/{asset_id}/update:
+    get:
+      description: 从技能库装的技能：来源里有没有新版本（按目录内容比，以最近一次刷新为准）。
+      operationId: update_status_api_v1_skill_market_assets__asset_id__update_get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Update Status Api V1 Skill Market Assets  Asset Id  Update Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Update Status
+      tags:
+      - skill-market
+    post:
+      description: 来源有新版本：生成修订草稿（编号不变、版本加一），同样要过检查和评审。
+      operationId: update_installed_api_v1_skill_market_assets__asset_id__update_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Update Installed Api V1 Skill Market Assets  Asset Id  Update Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Update Installed
+      tags:
+      - skill-market
+  /api/v1/skill-market/install:
+    post:
+      description: 装进草稿：选归属范围（默认个人专用）。之后在草稿页看检查结果、补信息、提交评审。
+      operationId: install_api_v1_skill_market_install_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Install Api V1 Skill Market Install Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Install
+      tags:
+      - skill-market
+  /api/v1/skill-market/sources:
+    get:
+      operationId: sources_api_v1_skill_market_sources_get
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Sources Api V1 Skill Market Sources Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Sources
+      tags:
+      - skill-market
+    post:
+      operationId: add_source_api_v1_skill_market_sources_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Add Source Api V1 Skill Market Sources Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Add Source
+      tags:
+      - skill-market
+  /api/v1/skill-market/sources/{source_id}/catalog:
+    get:
+      operationId: source_catalog_api_v1_skill_market_sources__source_id__catalog_get
+      parameters:
+      - in: path
+        name: source_id
+        required: true
+        schema:
+          title: Source Id
+          type: integer
+      - in: query
+        name: q
+        required: false
+        schema:
+          default: ''
+          maxLength: 100
+          title: Q
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Source Catalog Api V1 Skill Market Sources  Source Id  Catalog Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Source Catalog
+      tags:
+      - skill-market
+  /api/v1/skill-market/sources/{source_id}/refresh:
+    post:
+      description: 从来源拉最新的目录。网络不通返回 status=unreachable 和手动导入的做法。
+      operationId: refresh_source_api_v1_skill_market_sources__source_id__refresh_post
+      parameters:
+      - in: path
+        name: source_id
+        required: true
+        schema:
+          title: Source Id
+          type: integer
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Refresh Source Api V1 Skill Market Sources  Source Id  Refresh Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Refresh Source
+      tags:
+      - skill-market
+  /api/v1/skill-market/sources/{source_id}/remove:
+    post:
+      operationId: remove_source_api_v1_skill_market_sources__source_id__remove_post
+      parameters:
+      - in: path
+        name: source_id
+        required: true
+        schema:
+          title: Source Id
+          type: integer
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Remove Source Api V1 Skill Market Sources  Source Id  Remove Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Remove Source
+      tags:
+      - skill-market
   /api/v1/snapshots:
     post:
       operationId: build_snapshot_api_v1_snapshots_post
@@ -3391,6 +3966,323 @@ paths:
       summary: Build Snapshot
       tags:
       - assets
+  /api/v1/sop-defaults:
+    get:
+      description: 默认流程清单：管理员看全部，其他人看自己负责的范围。
+      operationId: list_defaults_api_v1_sop_defaults_get
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response List Defaults Api V1 Sop Defaults Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: List Defaults
+      tags:
+      - sop
+    put:
+      description: 设（或换）某个范围的默认流程。之后在这个范围里新建的任务自动按它执行。
+      operationId: put_default_api_v1_sop_defaults_put
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Put Default Api V1 Sop Defaults Put
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Put Default
+      tags:
+      - sop
+  /api/v1/sop-defaults/remove:
+    post:
+      description: 取消默认流程。已经绑上的任务不受影响。
+      operationId: remove_default_api_v1_sop_defaults_remove_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Remove Default Api V1 Sop Defaults Remove Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Remove Default
+      tags:
+      - sop
+  /api/v1/sop/parents:
+    get:
+      operationId: parent_candidates_api_v1_sop_parents_get
+      parameters:
+      - description: 正在写的流程是哪一层：L2 只列 L1，L3 只列 L2
+        in: query
+        name: layer
+        required: true
+        schema:
+          description: 正在写的流程是哪一层：L2 只列 L1，L3 只列 L2
+          title: Layer
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Parent Candidates Api V1 Sop Parents Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Parent Candidates
+      tags:
+      - sop
+  /api/v1/sop/preview:
+    post:
+      description: 草稿页实时预览：和上层合起来以后的步骤（每步来自哪一层），以及编写检查的提示。
+      operationId: preview_api_v1_sop_preview_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Preview Api V1 Sop Preview Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Preview
+      tags:
+      - sop
+  /api/v1/sop/template:
+    get:
+      description: 草稿页换层级时用：L1 是完整模板，L2、L3 的步骤只写覆盖和新增。
+      operationId: template_api_v1_sop_template_get
+      parameters:
+      - in: query
+        name: layer
+        required: false
+        schema:
+          default: L1
+          title: Layer
+          type: string
+      - in: query
+        name: title
+        required: false
+        schema:
+          default: ''
+          maxLength: 200
+          title: Title
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Template Api V1 Sop Template Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Template
+      tags:
+      - sop
+  /api/v1/sops:
+    get:
+      description: 任务页选流程用：能执行的 SOP，按层级分组（项目自己的 L3 在前，其次 L2、L1）。
+      operationId: executable_sops_api_v1_sops_get
+      parameters:
+      - description: 给任务选流程时传任务编号，任务所属项目自己的流程排在前面
+        in: query
+        name: work_item_id
+        required: false
+        schema:
+          default: ''
+          description: 给任务选流程时传任务编号，任务所属项目自己的流程排在前面
+          title: Work Item Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Executable Sops Api V1 Sops Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Executable Sops
+      tags:
+      - sop
   /api/v1/subscriptions:
     get:
       operationId: list_subscriptions_api_v1_subscriptions_get
@@ -3786,9 +4678,53 @@ paths:
       summary: Link Asset
       tags:
       - work-items
+  /api/v1/work-items/{work_item_id}/sop:
+    get:
+      description: 任务页「执行规范」：按哪条流程、在第几步、每个检查点的状态和证据。
+      operationId: work_item_sop_api_v1_work_items__work_item_id__sop_get
+      parameters:
+      - in: path
+        name: work_item_id
+        required: true
+        schema:
+          title: Work Item Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Work Item Sop Api V1 Work Items  Work Item Id  Sop Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Work Item Sop
+      tags:
+      - work-items
   /api/v1/work-items/{work_item_id}/sop-step:
     delete:
-      description: 这个任务不再按流程走。只有项目成员（或管理员）能解。
+      description: 这个任务不按流程做。记下来，项目设了默认流程也不再自动绑回来。
       operationId: unlink_sop_step_api_v1_work_items__work_item_id__sop_step_delete
       parameters:
       - in: path
@@ -3832,7 +4768,7 @@ paths:
       - work-items
   /api/v1/work-items/{work_item_id}/sop-step-summary:
     get:
-      description: 给 orchestrator 拼提示词用：只返回当前步骤的摘要与检查点。
+      description: 给人看的当前步骤说明（和 Agent 拿到的是同一份）。
       operationId: sop_step_summary_api_v1_work_items__work_item_id__sop_step_summary_get
       parameters:
       - in: path
@@ -3841,13 +4777,6 @@ paths:
         schema:
           title: Work Item Id
           type: string
-      - in: query
-        name: lock
-        required: false
-        schema:
-          default: false
-          title: Lock
-          type: boolean
       - in: header
         name: X-FDE-User
         required: false
@@ -3879,6 +4808,100 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
           description: Validation Error
       summary: Sop Step Summary
+      tags:
+      - work-items
+  /api/v1/work-items/{work_item_id}/sop/checks:
+    post:
+      description: 人确认、退回或清空一个检查点。项目里能改任务的人都能做，记下是谁。
+      operationId: decide_check_api_v1_work_items__work_item_id__sop_checks_post
+      parameters:
+      - in: path
+        name: work_item_id
+        required: true
+        schema:
+          title: Work Item Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SopCheckDecision'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Decide Check Api V1 Work Items  Work Item Id  Sop Checks Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Decide Check
+      tags:
+      - work-items
+  /api/v1/work-items/{work_item_id}/sop/refresh:
+    post:
+      description: 流程出了新版本：换成新版本的步骤，文字没变的检查点保留状态。
+      operationId: refresh_sop_api_v1_work_items__work_item_id__sop_refresh_post
+      parameters:
+      - in: path
+        name: work_item_id
+        required: true
+        schema:
+          title: Work Item Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Refresh Sop Api V1 Work Items  Work Item Id  Sop Refresh Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Refresh Sop
       tags:
       - work-items
   /api/v1/workbench:

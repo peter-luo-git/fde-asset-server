@@ -128,6 +128,7 @@ def _select(engine: Engine, request: dict[str, str]) -> Selection:
         target_id=request.get("target_id", ""),
         also_targets=(("agent", agent_key),) if agent_key else (),
         username=request.get("username", ""),
+        skill_names=tuple(name for name in str(request.get("sop_skills", "")).split(",") if name),
     )
 
 
@@ -211,6 +212,7 @@ def build_bundle(
     target_id: str = "",
     agent_key: str = "",
     username: str = "",
+    sop_skills: str = "",
 ) -> AgentBundle:
     """`agent_key`：这次干活的是哪个 Agent；给它关联过的资产和项目关联的合在一起挑。
 
@@ -224,6 +226,7 @@ def build_bundle(
         "target_id": target_id,
         "agent_key": agent_key,
         **({"username": username} if username else {}),
+        **({"sop_skills": sop_skills} if sop_skills else {}),
     }
     chosen = _select(engine, request)
     heads = _heads(repo_port, chosen)
@@ -254,17 +257,21 @@ def build_bundle(
         except FileNotFoundError:
             skipped.append({"asset": row.title, "asset_id": row.asset_id, "reason": "file_missing"})
             continue
-        carried.append(
-            {
-                "asset_id": row.asset_id,
-                "kind": row.kind,
-                "name": row.name,
-                "mount_name": mount,
-                "owner": row.owner_ref,
-                "version": row.version,
-                "commit_sha": row.commit_sha,
-            }
-        )
+        item = {
+            "asset_id": row.asset_id,
+            "kind": row.kind,
+            "name": row.name,
+            "mount_name": mount,
+            "owner": row.owner_ref,
+            "version": row.version,
+            "commit_sha": row.commit_sha,
+        }
+        if row.kind == "Skill" and _COMMIT.match(row.commit_sha or ""):
+            # 技能目录的完整文件清单：平台据此校验内容，并只给评审时允许的脚本加执行权限
+            item["resource_manifest"] = _resource_manifest(
+                files, f"{BUNDLE_DIR['Skill']}/{mount}", row
+            )
+        carried.append(item)
 
     digest = hashlib.sha1(usedforsecurity=False)
     for path in sorted(files):
@@ -276,6 +283,28 @@ def build_bundle(
     if _heads(repo_port, chosen) == heads:
         _remember(_selection_key(chosen, heads, request), bundle.revision)
     return bundle
+
+
+_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _resource_manifest(files: dict[str, bytes], prefix: str, row: Any) -> dict[str, Any]:
+    allowed = {
+        str(path)
+        for path in (json.loads(row.kind_spec_json or "{}").get("executables") or [])
+        if isinstance(path, str)
+    }
+    listed = {}
+    for path in sorted(files):
+        if not path.startswith(prefix + "/"):
+            continue
+        relative = path[len(prefix) + 1 :]
+        listed[relative] = {
+            "sha256": hashlib.sha256(files[path]).hexdigest(),
+            "bytes": len(files[path]),
+            "executable": relative in allowed,
+        }
+    return {"version": 1, "source_revision": row.commit_sha, "files": listed}
 
 
 def _store(root: Path, bundle: AgentBundle) -> None:

@@ -313,9 +313,12 @@ def link(
     target = _target(context, payload, override_context=False)
     if not _owns(principal, target):
         raise HTTPException(status_code=403, detail="只有目标负责人或管理员能关联资产")
-    result = service.link(
-        context.engine, principal, target.target_type, target.target_id, payload["asset_id"]
-    )
+    try:
+        result = service.link(
+            context.engine, principal, target.target_type, target.target_id, payload["asset_id"]
+        )
+    except service.RecommendError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     # 关联之后推荐结果就变了（已关联的不再推），清掉这个目标的缓存
     recommendation_cache.invalidate()
     return result

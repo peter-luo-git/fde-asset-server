@@ -18,10 +18,10 @@ from sqlalchemy import select
 
 from fde_asset.api.deps import ServiceContext, get_context
 from fde_asset.api.work_item_access import require_binding_project, require_work_item
-from fde_asset.core.db import asset_audiences, assets, work_item_assets
+from fde_asset.core.db import asset_audiences, assets
 from fde_asset.modules.asset import agent_bundle as agent_bundle_module
 from fde_asset.modules.asset import catalog
-from fde_asset.modules.asset import sop as sop_module
+from fde_asset.modules.asset import sop_progress
 from fde_asset.modules.asset import usage as usage_module
 from fde_asset.modules.asset.visibility import audience_clause
 from fde_asset.modules.asset.manifest import KIND_RULES
@@ -210,6 +210,30 @@ async def gitea_push(
     return {"accepted": True}
 
 
+def _sop_step_skills(context, principal, engagement_slug: str, work_item_ids: Any) -> list[str]:
+    """这一轮涉及的任务当前流程步骤点名要用的技能（SOP「技能：」）。拿不到的任务跳过。"""
+    if not isinstance(work_item_ids, list):
+        return []
+    names: list[str] = []
+    for work_item_id in work_item_ids[:3]:
+        if not isinstance(work_item_id, str):
+            continue
+        try:
+            if require_work_item(context, work_item_id, principal) != engagement_slug:
+                continue
+        except HTTPException:
+            continue
+        with context.engine.connect() as conn:
+            row = sop_progress.binding_row(conn, work_item_id)
+        if row is None:
+            continue
+        step = sop_progress.agent_step(context.engine, row, "")
+        for name in step.get("skills", []) if step.get("found") else []:
+            if name not in names:
+                names.append(name)
+    return sorted(names)[:20]
+
+
 @router.post("/agent-bundle", dependencies=[Depends(require_service_key)])
 def agent_bundle(
     payload: dict[str, Any] = Body(...),
@@ -261,6 +285,9 @@ def agent_bundle(
     if payload.get("personal") is True:
         # 平台说这一轮是这个人和 Agent 的私聊：带上他的个人必选资产。共享会话不带
         request["username"] = principal.user_id
+    skills = _sop_step_skills(context, principal, engagement_slug, payload.get("work_item_ids"))
+    if skills:
+        request["sop_skills"] = ",".join(skills)
     known = str(payload.get("known_revision") or "")
     if known and agent_bundle_module.unchanged(context.engine, context.repo_port, known, **request):
         return {"revision": known, "unchanged": True}
@@ -333,17 +360,9 @@ def agent_usage(
     return {**result, "ignored": unknown}
 
 
-@router.get("/work-items/{work_item_id}/sop-step", dependencies=[Depends(require_service_key)])
-def work_item_sop_step(
-    work_item_id: str,
-    username: str = Query(min_length=1, max_length=80),
-    engagement_slug: str = Query(min_length=1, max_length=120),
-    context: ServiceContext = Depends(get_context),
-) -> dict[str, Any]:
-    """这个任务现在绑在哪条流程的第几步，以及给 Agent 看的这一步的说明。
-
-    平台在生成给 Agent 的任务说明时来取。没绑、流程已下架、步骤不存在，都返回 found=false。
-    """
+def _internal_work_item(
+    context: ServiceContext, work_item_id: str, username: str, engagement_slug: str
+) -> tuple[Any, str]:
     try:
         principal = context.directory.resolve(username)
     except PrincipalNotFound:
@@ -353,39 +372,124 @@ def work_item_sop_step(
     actual_slug = require_work_item(context, work_item_id, principal)
     if actual_slug != engagement_slug:
         raise HTTPException(status_code=404, detail="任务不存在或无权访问")
+    return principal, actual_slug
+
+
+@router.get("/work-items/{work_item_id}/sop-step", dependencies=[Depends(require_service_key)])
+def work_item_sop_step(
+    work_item_id: str,
+    username: str = Query(min_length=1, max_length=80),
+    engagement_slug: str = Query(min_length=1, max_length=120),
+    context: ServiceContext = Depends(get_context),
+) -> dict[str, Any]:
+    """这个任务现在按哪条流程走到第几步，以及给 Agent 看的这一步的说明。
+
+    平台每次让 Agent 执行这个任务时来取：当前这一步 + 全流程提纲 + 这一步要用的技能 +
+    怎么回报检查点，另给结构化的检查点（fde-server 核对命令类、交付物类要用）。
+    没绑、流程已下架、步骤不存在，都返回 found=false。
+    """
+    principal, actual_slug = _internal_work_item(context, work_item_id, username, engagement_slug)
+    from fde_asset.api.routes_work_items import apply_default
+
+    apply_default(context, work_item_id, actual_slug)
     with context.engine.connect() as conn:
-        row = conn.execute(
-            select(work_item_assets).where(
-                work_item_assets.c.work_item_id == work_item_id,
-                work_item_assets.c.role == "sop_step",
-            )
-        ).first()
-        asset = (
-            conn.execute(
-                select(assets).where(
-                    assets.c.asset_id == row.asset_id,
-                    assets.c.deleted_at.is_(None),
-                    assets.c.valid.is_(True),
-                    assets.c.lifecycle.notin_(["deprecated", "archived", "draft"]),
-                )
-            ).first()
-            if row is not None
-            else None
-        )
+        row = sop_progress.binding_row(conn, work_item_id)
+        asset = sop_progress.usable_asset(conn, row.asset_id) if row is not None else None
     if row is None or asset is None:
         return {"found": False, "work_item_id": work_item_id}
     require_binding_project(row, actual_slug)
     if catalog.get_asset(context.engine, principal, row.asset_id) is None:
         return {"found": False, "work_item_id": work_item_id}
-    summary = sop_module.step_summary(context.engine, row.asset_id, row.sop_step or 1)
+    summary = sop_progress.agent_step(context.engine, row, asset.title)
     if not summary.get("found"):
         return {"found": False, "work_item_id": work_item_id}
     return {
-        "found": True,
+        **summary,
         "work_item_id": work_item_id,
         "asset_id": row.asset_id,
         "title": asset.title,
-        "step": summary["step"],
-        "total_steps": summary["total_steps"],
-        "prompt_md": summary["prompt_md"],
     }
+
+
+@router.post("/work-items/{work_item_id}/sop-report", dependencies=[Depends(require_service_key)])
+def work_item_sop_report(
+    work_item_id: str,
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+) -> dict[str, Any]:
+    """Agent 收尾时逐条回报当前步骤的检查点（fde-server 已核对过命令类和交付物类）。
+
+    payload：username、engagement_slug、step、results[{index, status, evidence, note,
+    verified, verify_detail}]、agent、turn_id。规则见 sop_progress.judge_agent_claim。
+    """
+    username = str(payload.get("username") or "")
+    engagement_slug = str(payload.get("engagement_slug") or "")
+    results = payload.get("results")
+    step = payload.get("step")
+    if (
+        not username
+        or not engagement_slug
+        or type(step) is not int
+        or not isinstance(results, list)
+        or not 1 <= len(results) <= 50
+        or not all(isinstance(item, dict) for item in results)
+    ):
+        raise HTTPException(status_code=422, detail="回报格式不对")
+    _, actual_slug = _internal_work_item(context, work_item_id, username, engagement_slug)
+    with context.engine.connect() as conn:
+        row = sop_progress.binding_row(conn, work_item_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="这个任务没按流程执行")
+    require_binding_project(row, actual_slug)
+    try:
+        outcome = sop_progress.apply_report(
+            context.engine,
+            work_item_id=work_item_id,
+            step=step,
+            results=results,
+            agent=str(payload.get("agent") or "agent")[:80],
+            turn_id=str(payload.get("turn_id") or "")[:64],
+        )
+    except sop_progress.SopProgressError as error:
+        raise HTTPException(
+            status_code=error.status,
+            detail={"code": error.code, "message": str(error)} if error.code else str(error),
+        ) from None
+    # 按流程执行了一次，算这条流程用了一次（同一轮只计一次）
+    usage_module.record_usages(
+        context.engine,
+        [
+            usage_module.UsageInput(
+                asset_id=row.asset_id,
+                event="applied",
+                session_id=str(payload.get("turn_id") or ""),
+                engagement_slug=actual_slug,
+                work_item_id=work_item_id,
+                actor_type="agent",
+                actor_id=str(payload.get("agent") or ""),
+            )
+        ],
+    )
+    return outcome
+
+
+@router.post("/skill-trials/claim", dependencies=[Depends(require_service_key)])
+def claim_skill_trial(context: ServiceContext = Depends(get_context)) -> dict[str, Any]:
+    """fde-server worker 领一个待试跑的技能：技能目录（base64）和要跑的命令。没有就是 {}。"""
+    from fde_asset.modules.asset import skill_checks
+
+    return skill_checks.claim(context.engine) or {}
+
+
+@router.post("/skill-trials/{trial_id}/result", dependencies=[Depends(require_service_key)])
+def finish_skill_trial(
+    trial_id: int,
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+) -> dict[str, Any]:
+    from fde_asset.modules.asset import skill_checks
+
+    try:
+        return skill_checks.finish(context.engine, trial_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None

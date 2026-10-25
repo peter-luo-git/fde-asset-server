@@ -84,14 +84,19 @@ def test_outsider_cannot_replace_a_binding_by_omitting_project(service):
     assert stored(service)[0].sop_step == 1
 
 
-def test_viewer_can_read_but_cannot_bind_delete_or_lock(service):
+def test_viewer_can_read_but_cannot_bind_delete_or_confirm(service):
     assert bind(service).status_code == 200
     service.headers.update({"X-FDE-User": "viewer"})
     assert service.get(PATH + "/assets").status_code == 200
     assert service.get(PATH + "/sop-step-summary").json()["found"] is True
     assert bind(service, sop_step=2).status_code == 403
     assert service.delete(PATH + "/sop-step").status_code == 403
-    assert service.get(PATH + "/sop-step-summary", params={"lock": True}).status_code == 403
+    assert (
+        service.post(
+            PATH + "/sop/checks", json={"step": 1, "index": 0, "decision": "confirm"}
+        ).status_code
+        == 403
+    )
     assert stored(service)[0].locked is False
 
 
@@ -128,7 +133,7 @@ def test_legacy_empty_project_binding_is_readable_and_repaired_on_update(service
         )
     assert service.get(PATH + "/assets").json()["items"][0]["sop_step"] == 1
     assert service.get(INTERNAL, params=CALLER, headers=HEADERS).json()["found"] is True
-    assert bind(service, sop_step=2).status_code == 200
+    assert bind(service, sop_step=2, force=True).status_code == 200
     assert stored(service)[0].engagement_slug == "policy-import"
 
 
