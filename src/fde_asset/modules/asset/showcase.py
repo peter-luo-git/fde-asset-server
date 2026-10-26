@@ -86,6 +86,23 @@ def listing(engine: Engine) -> list[dict[str, Any]]:
     return result
 
 
+def _repo_files(repo_port: Any, row: Any) -> dict[str, str]:
+    """已入库示范资产现在的文件（不含 asset.yaml），用来判断内容有没有更新。"""
+    from fde_asset.platform.repo.ports import RepoRef
+
+    repo = RepoRef(name=row.repo)
+    files: dict[str, str] = {}
+    for entry in repo_port.list_tree(repo, row.path):
+        relative = entry.path[len(row.path) + 1 :]
+        if not relative or relative == "asset.yaml":
+            continue
+        try:
+            files[relative] = repo_port.read_file(repo, entry.path).decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+    return files
+
+
 def install(
     engine: Engine,
     principal: Any,
@@ -94,11 +111,13 @@ def install(
     target_repo: Any,
     scan_context: Any = None,
 ) -> dict[str, Any]:
-    """把还没入库的示范资产装进去。返回装了哪些、跳过哪些、哪些失败（附原因）。"""
+    """把示范资产装进去：没装的新装；装过但平台更新了内容的，按修订入库（编号不变、版本加一，
+    项目里已经关联、设成默认流程的不受影响）；内容一样的跳过。返回装了、更新了、跳过、失败（附原因）。"""
     present = installed(engine)
-    done, skipped, failed = [], [], []
+    done, updated, skipped, failed = [], [], [], []
     for item in SHOWCASE:
-        if item["name"] in present:
+        row = present.get(item["name"])
+        if row is not None and _repo_files(repo_port, row) == item["files"]:
             skipped.append(item["name"])
             continue
         files = {**item["files"], "asset.yaml": _manifest(item)}
@@ -114,6 +133,7 @@ def install(
                     origin=ORIGIN,
                     source={"origin": ORIGIN},
                     files=files,
+                    revises_asset_id=row.asset_id if row is not None else "",
                 ),
             )
             submitted = harvest.submit(
@@ -135,10 +155,10 @@ def install(
                 target_repo=target_repo,
                 note="FCP 平台预置的示范资产，由管理员安装",
             )
-            done.append(item["name"])
+            (updated if row is not None else done).append(item["name"])
         except harvest.HarvestError as exc:
             failed.append({"name": item["name"], "reason": str(exc)})
-    return {"installed": done, "skipped": skipped, "failed": failed}
+    return {"installed": done, "updated": updated, "skipped": skipped, "failed": failed}
 
 
 # ---------- 复制为草稿 ----------

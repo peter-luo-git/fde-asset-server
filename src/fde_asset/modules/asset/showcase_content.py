@@ -95,7 +95,7 @@ CODE_SOP = """# 代码改动交付流程（示范）
 SLIDES_SOP = """# 汇报材料（PPT）制作流程（示范）
 
 ## 结论与目的
-做一份结论先行、每页一个观点的汇报材料：先定受众和核心结论，再写页面，最后走查定稿。
+做一份结论先行、每页一个观点的汇报材料：先定受众和核心结论，再写页面，最后生成可编辑的 PPT 并走查定稿。
 
 ## 适用范围
 项目周报、方案汇报、复盘分享等需要对外讲解的材料。
@@ -119,11 +119,14 @@ SLIDES_SOP = """# 汇报材料（PPT）制作流程（示范）
    - 检查点[命令]：页数不超过 15 页 `python3 -c "import pathlib,sys; t=pathlib.Path('slides/汇报.md').read_text(encoding='utf-8'); sys.exit(0 if t.count('\\n---') <= 15 else 1)"`
    - 产出：页面草稿
    - 技能：fcp-markdown-slides
-3. 走查定稿
-   从头到尾讲一遍，删掉和核心结论无关的页。
+3. 生成 PPT 并走查定稿
+   把页面稿转成可编辑的 PPT，从头到尾讲一遍，删掉和核心结论无关的页。
+   - 检查点[交付物]：`slides/汇报.pptx` 已生成
+   - 检查点[命令]：PPT 能打开且页数在 2～16 页之间 `python3 -c "import sys; from pptx import Presentation; n=len(Presentation('slides/汇报.pptx').slides); sys.exit(0 if 2 <= n <= 16 else 1)"`
    - 检查点[判断]：每页一个观点、标题即结论、数据有出处
    - 检查点[确认:汇报人]：汇报人确认定稿
-   - 产出：定稿材料
+   - 产出：定稿 PPT
+   - 技能：fcp-pptx-builder
 
 ## 异常处理
 时长不够时先砍细节页，不砍结论页。
@@ -269,7 +272,7 @@ description: 在需要做汇报 PPT、分享材料或演示页面时使用：先
 3. 运行 `python3 scripts/outline_to_slides.py slides/提纲.md slides/汇报.md`，把提纲转成页面骨架（每页用 `---` 分隔）。
 4. 按 `templates/页面模板.md` 填每一页：标题是结论，正文最多 3 条要点，数据写出处。
 5. 页数控制在 15 页以内；第一页给结论，最后一页给需要对方做的决定。
-6. 生成的 Markdown 可以用 Marp、Slidev 等工具直接转成 PPT。
+6. 要交付 .pptx 文件时，加载 fcp-pptx-builder 技能，把这份 Markdown 转成可编辑的 PPT。
 
 ## 注意事项
 - 一页只讲一个观点；放不下就拆页，不要缩小字号。
@@ -345,6 +348,424 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+'''
+
+PPTX_SKILL = """---
+name: fcp-pptx-builder
+description: 在需要交付 PowerPoint 文件（.pptx）时使用：把 Markdown 页面稿一键转成可编辑的 PPT（文字、表格、讲稿备注都能再改），或用 python-pptx 直接生成、修改 PPT，交付前核对页数和内容
+---
+
+# 生成可编辑的 PPT
+
+## 适用场景
+- 用户要的是 .pptx 文件，而不只是提纲或 Markdown
+- 已有一份 .pptx，要改其中的文字、表格或补几页
+
+## 做法一：Markdown 页面稿转 PPT（首选）
+1. 先写页面稿，比如 `slides/汇报.md`，写法见 `references/写法.md`。还没有提纲时，可以先用 fcp-markdown-slides 技能写提纲和页面。
+2. 转换：`python3 <本技能目录>/scripts/md_to_pptx.py slides/汇报.md slides/汇报.pptx`
+   - 公司有 PPT 模板时加 `--template 模板.pptx`，会沿用模板的母版和配色
+3. 核对：`python3 <本技能目录>/scripts/check_pptx.py slides/汇报.pptx`
+   - 会列出页数、每页标题，并提示空页、要点过多、文字过长的页
+   - 有提示就回到页面稿改，再转一次
+4. 交付时告诉用户：文件路径、页数、每页标题，以及需要他在 PowerPoint 或 WPS 里过一遍的地方。
+
+## 做法二：直接用 python-pptx
+要画原生图表、或者改一份已有的 PPT 时用。
+- 改已有 PPT：先列出每页的版式、文本框、表格和图表，只改用户要求的内容，保留原有格式，另存为新文件，除非用户要求原地修改。
+- 新建：版式用空白页，位置和大小用 `Inches` 或 `Cm`，字号用 `Pt`，都写明确的值。
+- 脚本按用途命名，比如 `edit_pptx.py`。不要命名成 `pptx.py`、`inspect.py`，否则会遮住同名的库。
+
+一个带图表的最小例子：
+
+```python
+from pptx import Presentation
+from pptx.chart.data import CategoryChartData
+from pptx.enum.chart import XL_CHART_TYPE
+from pptx.util import Inches, Pt
+
+prs = Presentation()
+prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+slide = prs.slides.add_slide(prs.slide_layouts[6])
+title = slide.shapes.add_textbox(Inches(0.6), Inches(0.4), Inches(12), Inches(0.8))
+title.text_frame.text = "告警量连续三周下降"
+title.text_frame.paragraphs[0].runs[0].font.size = Pt(30)
+data = CategoryChartData()
+data.categories = ["第 1 周", "第 2 周", "第 3 周"]
+data.add_series("告警数", [120, 86, 54])
+slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(0.8), Inches(1.6), Inches(11.5), Inches(4.8), data)
+prs.save("slides/告警趋势.pptx")
+```
+
+## 交付前检查
+- 重新打开文件，核对页数、每页标题、表格和图表的数据、讲稿备注
+- 文字放不放得下：每页要点不超过 6 条，单条不超过 40 个字
+- 原生图表里嵌的数据表也是交付内容，数字要和来源一致
+- python-pptx 不是渲染引擎，上面的检查保证不了视觉效果，要提醒用户打开看一遍
+
+## 注意事项
+- 运行环境已经预装了 python-pptx，直接用，不要另行安装；真缺依赖时如实告诉用户
+- 产出放在工作目录里（比如 `slides/`），不要写进技能目录
+- 图片用本地文件，不要用网络图片地址
+
+## 来源
+改编自 DeepSeek Harness 的 office-pptx 技能（MIT 许可），许可全文见 `references/LICENSE-office-pptx.md`。
+"""
+
+PPTX_SYNTAX = """# 页面稿写法
+
+一份页面稿就是一个 Markdown 文件，`md_to_pptx.py` 按下面的规则转成 PPT。
+
+| 写法 | 变成 |
+|---|---|
+| `# 标题` | 封面页的大标题；紧跟的普通文字作为副标题 |
+| `## 标题` | 新的一页，标题写这一页的结论 |
+| `- 要点` | 项目符号；前面缩进 2 个空格是下一级，最多三级 |
+| `1. 步骤` | 编号要点 |
+| 普通文字 | 正文段落 |
+| Markdown 表格 | PPT 原生表格，第一行是表头 |
+| `> 文字` | 页面底部的小字，用来写数据来源 |
+| `备注：文字` 或 `Note: 文字` | 演讲者备注，放映时观众看不到 |
+| `**加粗**` | 加粗 |
+| `---`、Marp 头部 | 忽略，可以照常保留 |
+
+## 例子
+
+```markdown
+# 内部运维看板项目周报
+第 43 周 · 平台部
+
+## 告警量连续三周下降，误报减少是主因
+- 本周告警 54 条，比上周少 37%
+- 误报规则下线 6 条
+  - 磁盘水位规则改为按增速告警
+> 数据来源：运维看板告警统计
+备注：这一页先讲结论，再讲原因
+
+## 下周计划
+| 事项 | 负责人 | 完成时间 |
+|---|---|---|
+| 接入日志告警 | 陈 | 周三 |
+| 告警分级 | 罗 | 周五 |
+```
+"""
+
+PPTX_LICENSE = """# office-pptx 许可
+
+本技能改编自 DeepSeek Harness（https://github.com/deepseek-ai/deepseek-harness）中的
+`packages/skill/skill-office/assets/office-pptx` 技能，原技能许可如下。
+
+MIT License
+
+Copyright (c) 2026 DeepSeek
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
+PPTX_SCRIPT = r'''#!/usr/bin/env python3
+"""把 Markdown 页面稿转成可编辑的 PowerPoint（.pptx）。
+
+用法：python3 md_to_pptx.py 输入.md 输出.pptx [--template 模板.pptx]
+写法见本技能的 references/写法.md。依赖 python-pptx（FCP 运行镜像已预装）。
+"""
+
+import re
+import sys
+from pathlib import Path
+
+try:
+    from pptx import Presentation
+    from pptx.dml.color import RGBColor
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.oxml.ns import qn
+    from pptx.util import Inches, Pt
+except ImportError:
+    print("缺少 python-pptx：请让管理员在运行镜像里预装，或在技能依赖里声明 python-pptx", file=sys.stderr)
+    sys.exit(3)
+
+FONT = "Microsoft YaHei"
+DARK = RGBColor(0x1F, 0x2D, 0x3D)
+ACCENT = RGBColor(0x32, 0x71, 0xC8)
+GREY = RGBColor(0x6B, 0x77, 0x85)
+LIGHT = RGBColor(0xEE, 0xF3, 0xFA)
+BULLET_SIZES = (20, 18, 16)
+NOTE = re.compile(r"^(note|notes|备注)\s*[:：]\s*(.*)$", re.I)
+BULLET = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
+RULE = re.compile(r"^:?-{2,}:?$")
+BOLD = re.compile(r"\*\*(.+?)\*\*")
+
+
+def parse(text):
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":  # Marp / YAML 头
+        for index in range(1, len(lines)):
+            if lines[index].strip() == "---":
+                lines = lines[index + 1 :]
+                break
+    slides, current = [], None
+    for raw in lines:
+        line = raw.rstrip()
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            current = {"cover": True, "title": stripped[2:].strip(), "items": [], "notes": [], "source": []}
+            slides.append(current)
+            continue
+        if stripped.startswith("## "):
+            current = {"cover": False, "title": stripped[3:].strip(), "items": [], "notes": [], "source": []}
+            slides.append(current)
+            continue
+        if current is None or not stripped or stripped == "---" or stripped.startswith("<!--"):
+            continue
+        note = NOTE.match(stripped)
+        if note:
+            current["notes"].append(note.group(2))
+        elif stripped.startswith(">"):
+            current["source"].append(stripped.lstrip(">").strip())
+        elif stripped.startswith("|"):
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if all(RULE.match(cell) for cell in cells if cell):
+                continue
+            items = current["items"]
+            if items and items[-1][0] == "table":
+                items[-1][1].append(cells)
+            else:
+                items.append(("table", [cells]))
+        else:
+            bullet = BULLET.match(line)
+            if bullet:
+                level = min(len(bullet.group(1).replace("\t", "  ")) // 2, 2)
+                numbered = bullet.group(2)[0].isdigit()
+                label = (bullet.group(2) + " ") if numbered else ""
+                current["items"].append(("bullet", (level, label + bullet.group(3))))
+            else:
+                current["items"].append(("text", stripped))
+    return slides
+
+
+def style(run, size, *, bold=False, color=DARK):
+    run.font.size = Pt(size)
+    run.font.bold = bold
+    run.font.color.rgb = color
+    run.font.name = FONT
+    properties = run._r.get_or_add_rPr()
+    east_asian = properties.find(qn("a:ea"))
+    if east_asian is None:
+        east_asian = properties.makeelement(qn("a:ea"), {})
+        properties.append(east_asian)
+    east_asian.set("typeface", FONT)
+
+
+def write(paragraph, text, size, *, bold=False, color=DARK):
+    """支持 **加粗** 的一段文字。"""
+    position = 0
+    for match in BOLD.finditer(text):
+        if match.start() > position:
+            style(paragraph.add_run(), size, bold=bold, color=color)
+            paragraph.runs[-1].text = text[position : match.start()]
+        style(paragraph.add_run(), size, bold=True, color=color)
+        paragraph.runs[-1].text = match.group(1)
+        position = match.end()
+    if position < len(text) or not paragraph.runs:
+        style(paragraph.add_run(), size, bold=bold, color=color)
+        paragraph.runs[-1].text = text[position:]
+
+
+def textbox(slide, left, top, width, height):
+    box = slide.shapes.add_textbox(left, top, width, height)
+    box.text_frame.word_wrap = True
+    return box.text_frame
+
+
+def bar(slide, left, top, width, height, color):
+    shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, width, height)
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = color
+    shape.line.fill.background()
+    return shape
+
+
+def cover(slide, spec, width, height):
+    bar(slide, 0, 0, width, height, LIGHT)
+    bar(slide, Inches(0.8), int(height * 0.36), Inches(0.12), Inches(1.3), ACCENT)
+    frame = textbox(slide, Inches(1.1), int(height * 0.34), width - Inches(2), Inches(1.2))
+    write(frame.paragraphs[0], spec["title"], 40, bold=True)
+    subtitle = [value for kind, value in spec["items"] if kind == "text"]
+    if subtitle:
+        frame = textbox(slide, Inches(1.1), int(height * 0.34) + Inches(1.3), width - Inches(2), Inches(1))
+        write(frame.paragraphs[0], " · ".join(subtitle), 20, color=GREY)
+
+
+def content(slide, spec, width, height, number):
+    frame = textbox(slide, Inches(0.6), Inches(0.35), width - Inches(1.2), Inches(0.9))
+    write(frame.paragraphs[0], spec["title"], 28, bold=True)
+    bar(slide, Inches(0.6), Inches(1.25), Inches(1.2), Inches(0.06), ACCENT)
+    top, bottom = Inches(1.55), height - Inches(0.9)
+    groups = []
+    for kind, value in spec["items"]:
+        if kind == "table":
+            groups.append(("table", value))
+        elif groups and groups[-1][0] == "text":
+            groups[-1][1].append((kind, value))
+        else:
+            groups.append(("text", [(kind, value)]))
+    for kind, value in groups:
+        if top >= bottom:
+            print(f"提示：第 {number} 页内容放不下，请拆页", file=sys.stderr)
+            break
+        if kind == "table":
+            columns = max(len(row) for row in value)
+            row_height = Inches(0.45)
+            shape = slide.shapes.add_table(
+                len(value), columns, Inches(0.6), top, width - Inches(1.2), row_height * len(value)
+            )
+            for r, row in enumerate(value):
+                for c in range(columns):
+                    cell = shape.table.cell(r, c)
+                    cell.text_frame.paragraphs[0].text = ""
+                    write(cell.text_frame.paragraphs[0], row[c] if c < len(row) else "", 14, bold=(r == 0),
+                          color=RGBColor(0xFF, 0xFF, 0xFF) if r == 0 else DARK)
+            top += row_height * len(value) + Inches(0.25)
+        else:
+            lines = len(value)
+            box_height = min(bottom - top, Inches(0.5) * lines + Inches(0.2))
+            frame = textbox(slide, Inches(0.6), top, width - Inches(1.2), box_height)
+            for index, (item_kind, item) in enumerate(value):
+                paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
+                paragraph.space_after = Pt(8)
+                if item_kind == "bullet":
+                    level, text = item
+                    paragraph.level = level
+                    marker = "" if text[:1].isdigit() else ("• " if level == 0 else "– ")
+                    write(paragraph, "    " * level + marker + text, BULLET_SIZES[level])
+                else:
+                    write(paragraph, item, 18)
+            top += box_height + Inches(0.15)
+    if spec["source"]:
+        frame = textbox(slide, Inches(0.6), height - Inches(0.75), width - Inches(2), Inches(0.4))
+        write(frame.paragraphs[0], "；".join(spec["source"]), 11, color=GREY)
+    frame = textbox(slide, width - Inches(1.2), height - Inches(0.75), Inches(0.8), Inches(0.4))
+    write(frame.paragraphs[0], str(number), 11, color=GREY)
+
+
+def build(slides, output, template=None):
+    prs = Presentation(template) if template else Presentation()
+    if not template:
+        prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+    layouts = prs.slide_layouts
+    blank = layouts[6] if len(layouts) > 6 else layouts[len(layouts) - 1]
+    for number, spec in enumerate(slides, 1):
+        slide = prs.slides.add_slide(blank)
+        if spec["cover"]:
+            cover(slide, spec, prs.slide_width, prs.slide_height)
+        else:
+            content(slide, spec, prs.slide_width, prs.slide_height, number)
+        if spec["notes"]:
+            slide.notes_slide.notes_text_frame.text = "\n".join(spec["notes"])
+    output.parent.mkdir(parents=True, exist_ok=True)
+    prs.save(str(output))
+
+
+def main(argv):
+    args = list(argv)
+    template = None
+    if "--template" in args:
+        index = args.index("--template")
+        template = args[index + 1] if index + 1 < len(args) else None
+        del args[index : index + 2]
+    if len(args) != 2 or (template is not None and not Path(template).is_file()):
+        print("用法：python3 md_to_pptx.py 输入.md 输出.pptx [--template 模板.pptx]")
+        return 2
+    source, output = Path(args[0]), Path(args[1])
+    slides = parse(source.read_text(encoding="utf-8"))
+    if not slides:
+        print("页面稿里没有找到 # 或 ## 标题，没有生成 PPT", file=sys.stderr)
+        return 1
+    build(slides, output, template)
+    print(f"已生成 {output}，共 {len(slides)} 页")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
+'''
+
+PPTX_CHECK_SCRIPT = r'''#!/usr/bin/env python3
+"""交付前核对 PPT：页数、每页标题，提示空页、要点过多和文字过长的页。
+
+用法：python3 check_pptx.py 文件.pptx [--max-slides N]
+只做内容核对，保证不了视觉效果；有超出 --max-slides 的页数时退出码为 1。
+"""
+
+import sys
+
+try:
+    from pptx import Presentation
+except ImportError:
+    print("缺少 python-pptx：请让管理员在运行镜像里预装", file=sys.stderr)
+    sys.exit(3)
+
+
+def main(argv):
+    args = list(argv)
+    limit = None
+    if "--max-slides" in args:
+        index = args.index("--max-slides")
+        limit = int(args[index + 1])
+        del args[index : index + 2]
+    if len(args) != 1:
+        print("用法：python3 check_pptx.py 文件.pptx [--max-slides N]")
+        return 2
+    prs = Presentation(args[0])
+    warnings = 0
+    print(f"共 {len(prs.slides)} 页")
+    for number, slide in enumerate(prs.slides, 1):
+        texts = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                texts.extend(p.text.strip() for p in shape.text_frame.paragraphs if p.text.strip())
+            if getattr(shape, "has_table", False) and shape.has_table:
+                texts.append("[表格]")
+        title = texts[0] if texts else "（空页）"
+        notes = ""
+        if slide.has_notes_slide and slide.notes_slide.notes_text_frame.text.strip():
+            notes = "  [有备注]"
+        print(f"{number:>2}. {title}{notes}")
+        body = [t for t in texts[1:] if not t.isdigit()]
+        if not texts:
+            print("    提示：空页")
+            warnings += 1
+        if len(body) > 7:
+            print(f"    提示：要点 {len(body)} 条，建议不超过 6 条，考虑拆页")
+            warnings += 1
+        for text in body:
+            if len(text) > 60:
+                print(f"    提示：这一条有 {len(text)} 个字，可能放不下：{text[:20]}…")
+                warnings += 1
+    print(f"提示 {warnings} 处" if warnings else "没有发现问题；视觉效果请在 PowerPoint 或 WPS 里过一遍")
+    if limit is not None and len(prs.slides) > limit:
+        print(f"页数超过上限 {limit}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
 '''
 
 ENGLISH_SKILL = """---
@@ -438,11 +859,11 @@ SHOWCASE: list[dict[str, Any]] = [
     _sop(
         "fcp-presentation-sop",
         "汇报材料（PPT）制作流程（示范）",
-        "定受众和核心结论 → 写页面 → 走查定稿，做一份结论先行的汇报材料",
+        "定受众和核心结论 → 写页面 → 生成 PPT 并走查定稿，交付一份结论先行、可编辑的 .pptx",
         "项目周报、方案汇报、复盘分享",
         "需要精美视觉设计的对外宣传材料",
         SLIDES_SOP,
-        "新建任务「做一份运维看板的项目周报」，绑这条流程；看 Agent 先出提纲、再用 fcp-markdown-slides 生成页面",
+        "新建任务「做一份运维看板的项目周报」，绑这条流程；看 Agent 先出提纲、再写页面，最后用 fcp-pptx-builder 生成 slides/汇报.pptx",
     ),
     _skill(
         "fcp-tech-doc-writer",
@@ -473,6 +894,20 @@ SHOWCASE: list[dict[str, Any]] = [
         },
     ),
     _skill(
+        "fcp-pptx-builder",
+        "生成可编辑的 PPT（示范）",
+        "把 Markdown 页面稿一键转成可编辑的 .pptx，或用 python-pptx 直接生成、修改 PPT，交付前核对页数和内容",
+        "需要交付 .pptx 文件的汇报、周报、方案讲解；修改已有 PPT 的文字和表格",
+        "需要复杂动画、精美视觉设计的对外宣传材料",
+        {
+            "SKILL.md": PPTX_SKILL,
+            "references/写法.md": PPTX_SYNTAX,
+            "references/LICENSE-office-pptx.md": PPTX_LICENSE,
+            "scripts/md_to_pptx.py": PPTX_SCRIPT,
+            "scripts/check_pptx.py": PPTX_CHECK_SCRIPT,
+        },
+    ),
+    _skill(
         "fcp-english-sentence-coach",
         "英语句型教练（示范）",
         "先让你自己造句，再指出错因、给地道说法和同类练习",
@@ -486,6 +921,8 @@ TRY_SKILL = {
     "fcp-tech-doc-writer": "在私聊里说「帮我写一份内部运维看板的部署说明大纲」，看 Agent 是否加载这个技能、按模板出大纲",
     "fcp-code-review-checklist": "在私聊里说「帮我评审一下 xxx 这段代码」，看 Agent 是否按清单逐项检查",
     "fcp-markdown-slides": "在私聊里说「帮我做一份运维看板项目周报的 PPT 提纲」，看 Agent 是否先问受众、再按每页一个结论写",
+    "fcp-pptx-builder": "在私聊里说「把运维看板项目周报做成 PPT 文件」，看 Agent 是否先写页面稿、再转成 .pptx 并核对页数；"
+    "生成的文件在工作目录的 slides/ 下",
     "fcp-english-sentence-coach": "在私聊里说「我想练英语：把『这个问题我们下周再讨论』翻成英文」，看 Agent 是否先让你自己写",
 }
 for _item in SHOWCASE:

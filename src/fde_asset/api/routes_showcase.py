@@ -32,7 +32,7 @@ def showcase_install(
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
-    """管理员把还没入库的示范资产装进去（全公司可见），已装的跳过。"""
+    """管理员安装示范资产（全公司可见）：没装的新装，平台更新过内容的升级版本，其余跳过。"""
     if not principal.is_admin:
         raise HTTPException(status_code=403, detail="只有管理员能安装示范资产")
     target = context.repo_for("company")
@@ -43,7 +43,7 @@ def showcase_install(
         target_repo=target,
         scan_context=_scan_context(context),
     )
-    if result["installed"]:
+    if result["installed"] or result["updated"]:
         index_repository(
             context.engine,
             context.repo_port,

@@ -20,6 +20,21 @@ def test_install_showcase_then_copy_as_draft(client) -> None:
     assert len(result["installed"]) == len(listed["items"])
     again = admin.post("/api/v1/showcase/install").json()
     assert again["installed"] == [] and len(again["skipped"]) == len(listed["items"])
+    # 平台更新了示范内容：按修订入库，编号不变、版本加一
+    from fde_asset.modules.asset import showcase_content
+
+    item = next(i for i in showcase_content.SHOWCASE if i["name"] == "fcp-english-sentence-coach")
+    before = {i["name"]: i["asset_id"] for i in admin.get("/api/v1/showcase").json()["items"]}
+    original = dict(item["files"])
+    item["files"]["references/常见错误.md"] += "| 新增 | x | y |\n"
+    try:
+        upgraded = admin.post("/api/v1/showcase/install").json()
+    finally:
+        item["files"].clear()
+        item["files"].update(original)
+    assert upgraded["updated"] == ["fcp-english-sentence-coach"], upgraded
+    asset_id = before["fcp-english-sentence-coach"]
+    assert admin.get(f"/api/v1/assets/{asset_id}").json()["version"] == "1.1.0"
 
     chen = as_user(client, "chen")
     items = {i["name"]: i for i in chen.get("/api/v1/showcase").json()["items"]}
