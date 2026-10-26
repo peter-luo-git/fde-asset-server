@@ -28,7 +28,8 @@ class LocalGitRepo:
 
     def _git(self, args: list[str], cwd: Path) -> str:
         result = subprocess.run(
-            ["git", *args],
+            # core.quotepath=off：中文等非 ASCII 文件名原样输出，不转成八进制转义，否则按名字读不到文件
+            ["git", "-c", "core.quotepath=off", *args],
             cwd=str(cwd),
             capture_output=True,
             text=True,

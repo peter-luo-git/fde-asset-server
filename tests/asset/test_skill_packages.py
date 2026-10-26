@@ -354,7 +354,7 @@ def test_agent_skills_preview_explains_reasons(service) -> None:
 
 def test_market_lists_default_source_and_install_from_cache(service, tmp_path) -> None:
     sources = service.get("/api/v1/skill-market/sources").json()
-    assert sources["items"][0]["url"] == "https://github.com/anthropics/skills"
+    assert sources["items"][0]["url"] == "https://github.com/deepseek-ai/deepseek-harness"
     ctx = service.app.state.context
     source_id = sources["items"][0]["id"]
     cache = ctx.settings.root / "skill-sources" / str(source_id) / "skills" / "pdf"
@@ -376,7 +376,7 @@ def test_market_lists_default_source_and_install_from_cache(service, tmp_path) -
     assert installed.status_code == 200, installed.text
     body = installed.json()
     assert body["origin"] == "install" and body["source"]["commit"] == "b" * 40
-    assert "url: https://github.com/anthropics/skills" in body["files"]["asset.yaml"]
+    assert "url: https://github.com/deepseek-ai/deepseek-harness" in body["files"]["asset.yaml"]
     assert (
         _as(service, "chen")
         .post("/api/v1/skill-market/sources", json={"url": "https://x.example/a"})

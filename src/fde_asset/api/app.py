@@ -16,6 +16,7 @@ from fde_asset.api import (
     routes_notify,
     routes_recommend,
     routes_visibility,
+    routes_showcase,
     routes_skill_market,
     routes_sop,
     routes_work_items,
@@ -63,6 +64,7 @@ def create_app(settings: AssetSettings | None = None) -> FastAPI:
     app.include_router(routes_work_items.router)
     app.include_router(routes_sop.router)
     app.include_router(routes_skill_market.router)
+    app.include_router(routes_showcase.router)
     app.include_router(routes_mandatory.router)
     app.include_router(routes_visibility.router)
     app.include_router(routes_recommend.router)

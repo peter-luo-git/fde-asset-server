@@ -34,7 +34,10 @@ def sources(
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
-    return {"items": skill_sources.listing(context.engine), "can_manage": principal.is_admin}
+    return {
+        "items": skill_sources.listing(context.engine, _cache(context)),
+        "can_manage": principal.is_admin,
+    }
 
 
 @router.post("/skill-market/sources")

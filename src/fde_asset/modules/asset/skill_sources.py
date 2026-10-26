@@ -25,8 +25,15 @@ from fde_asset.core.db import assets, skill_sources
 from fde_asset.modules.asset import skill_package
 
 DEFAULT_SOURCES = (
-    {"name": "Anthropic 官方技能库", "url": "https://github.com/anthropics/skills", "branch": ""},
+    # Agent 运行时用的就是 DeepSeek Harness（dsh），它仓库里的技能和运行环境最匹配（2026-10-26）
+    {
+        "name": "DeepSeek Harness 技能库",
+        "url": "https://github.com/deepseek-ai/deepseek-harness",
+        "branch": "",
+    },
 )
+#: 以前默认配的来源：还是系统自动配的（没人改过）就换成现在的默认来源
+RETIRED_DEFAULTS = ("https://github.com/anthropics/skills",)
 URL_PATTERN = re.compile(r"^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9._~/-]+$")
 GIT_TIMEOUT = 90
 MAX_DEPTH = 5
@@ -44,15 +51,41 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def ensure_defaults(engine: Engine) -> None:
+def ensure_defaults(engine: Engine, cache_root: Path | None = None) -> None:
     with engine.begin() as conn:
         if conn.execute(select(skill_sources.c.id).limit(1)).first() is None:
             for source in DEFAULT_SOURCES:
                 conn.execute(skill_sources.insert().values(**source, created_by="seed"))
+            return
+        default = DEFAULT_SOURCES[0]
+        for row in conn.execute(
+            select(skill_sources).where(
+                skill_sources.c.created_by == "seed", skill_sources.c.url.in_(RETIRED_DEFAULTS)
+            )
+        ).fetchall():
+            if conn.execute(
+                select(skill_sources.c.id).where(skill_sources.c.url == default["url"])
+            ).first():
+                conn.execute(delete(skill_sources).where(skill_sources.c.id == row.id))
+            else:
+                conn.execute(
+                    update(skill_sources)
+                    .where(skill_sources.c.id == row.id)
+                    .values(
+                        **default,
+                        status="",
+                        error="",
+                        commit_sha="",
+                        catalog_json="[]",
+                        checked_at=None,
+                    )
+                )
+            if cache_root is not None:
+                shutil.rmtree(cache_root / str(row.id), ignore_errors=True)
 
 
-def listing(engine: Engine) -> list[dict[str, Any]]:
-    ensure_defaults(engine)
+def listing(engine: Engine, cache_root: Path | None = None) -> list[dict[str, Any]]:
+    ensure_defaults(engine, cache_root)
     with engine.connect() as conn:
         rows = conn.execute(select(skill_sources).order_by(skill_sources.c.id)).fetchall()
     return [_view(row) for row in rows]
