@@ -732,6 +732,21 @@ def _apply_executables(context, target, review, candidate, requested) -> None:
         )
 
 
+def _confirm_deps(context, candidate, confirmed) -> None:
+    """共享技能要装运行镜像里没有的依赖：评审人要明确确认（个人技能免确认，只限数量）。"""
+    if candidate.scope == "user":
+        return
+    current = service.get_candidate(context.engine, candidate.candidate_id)
+    deps = ((current.get("checks") or {}).get("skill") or {}).get("deps") or {}
+    if deps.get("new") and confirmed is not True:
+        raise HTTPException(
+            status_code=422,
+            detail="这个技能要预装运行环境里没有的依赖："
+            + "、".join(deps["new"])
+            + "。确认来源可信后勾选「确认预装这些依赖」再通过",
+        )
+
+
 @router.post("/reviews/{review_id}/decide")
 def decide_review(
     review_id: str,
@@ -768,6 +783,7 @@ def decide_review(
     )
     approve = bool(payload.get("approve", True))
     if approve and candidate.kind == "Skill" and review.status == "open":
+        _confirm_deps(context, candidate, payload.get("deps_confirmed"))
         _apply_executables(context, target, review, candidate, payload.get("executables"))
     result = service.decide(
         context.engine,

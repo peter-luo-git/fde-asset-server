@@ -790,7 +790,7 @@ def run_checks(
         )
         findings.extend({"code": f.code, "message": f.message} for f in parsed.findings)
         if candidate["kind"] == "Skill":
-            from fde_asset.modules.asset import skill_checks, skill_package
+            from fde_asset.modules.asset import skill_checks, skill_deps, skill_package
 
             findings.extend(skill_package.frontmatter_findings(main_text, name=candidate["name"]))
             extra = manifest.spec.model_extra or {}
@@ -799,11 +799,36 @@ def run_checks(
             package_files = skill_checks.skill_files(files)
             report = skill_package.scan(package_files)
             trial = skill_checks.ensure_trial(engine, candidate_id, package_files, selftest)
+            deps = skill_deps.analyze(package_files)
+            hints = skill_package.writing_hints(main_text)
+            if deps["error"]:
+                findings.append({"code": "requirements_invalid", "message": deps["error"]})
+            if deps["undeclared_imports"]:
+                hints.append(
+                    {
+                        "level": "warning",
+                        "message": "脚本用到了 "
+                        + "、".join(deps["undeclared_imports"])
+                        + "，运行环境没有预装，也没在 requirements.txt 里声明；"
+                        "不声明的话 Agent 执行时会找不到",
+                    }
+                )
+            if deps["declared"] and candidate["scope"] == "user":
+                used = _personal_skills_with_deps(engine, candidate)
+                if len(used) >= skill_deps.PERSONAL_LIMIT:
+                    findings.append(
+                        {
+                            "code": "personal_deps_limit",
+                            "message": f"你已有 {len(used)} 个带依赖的个人技能，"
+                            f"最多 {skill_deps.PERSONAL_LIMIT} 个；请先删掉不用的再提交",
+                        }
+                    )
             skill_report = {
+                "deps": deps,
                 "report": report,
                 "trial": trial,
                 "model": skill_checks.model_for(engine, package_files),
-                "hints": skill_package.writing_hints(main_text),
+                "hints": hints,
                 "default_executables": skill_package.default_executables(report, trial),
                 "tickable": skill_package.allowed_to_tick(report, trial),
                 "rejected": (candidate.get("source") or {}).get("rejected_files", []),
@@ -871,6 +896,26 @@ def run_checks(
             .values(checks_json=json.dumps(checks, ensure_ascii=False), updated_at=_now())
         )
     return checks
+
+
+def _personal_skills_with_deps(engine: Engine, candidate: dict[str, Any]) -> set[str]:
+    """这个人已经入库的、带依赖的个人技能（按标识去重，不含这一份）。"""
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(harvest_candidates.c.name, harvest_candidates.c.checks_json).where(
+                harvest_candidates.c.kind == "Skill",
+                harvest_candidates.c.scope == "user",
+                harvest_candidates.c.created_by == candidate.get("created_by", ""),
+                harvest_candidates.c.status == "merged",
+                harvest_candidates.c.name != candidate["name"],
+            )
+        ).fetchall()
+    names = set()
+    for row in rows:
+        checks = json.loads(row.checks_json or "{}")
+        if ((checks.get("skill") or {}).get("deps") or {}).get("declared"):
+            names.add(row.name)
+    return names
 
 
 def submit(
