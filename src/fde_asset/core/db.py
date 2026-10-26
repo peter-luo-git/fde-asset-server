@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     DateTime,
@@ -461,6 +462,19 @@ work_item_assets = Table(
 )
 
 #: 技能包的两类检查结果，按内容摘要存：试跑（fde-server worker 在 Agent 同款镜像里断网跑）、模型通读
+skill_deps_status = Table(
+    # 技能依赖在 Agent 机器上的安装状态（fde-server worker 回报）：键和 fde-server 的算法一致
+    "skill_deps_status",
+    metadata,
+    Column("key", String(64), primary_key=True),
+    Column("requirements_json", Text, nullable=False, default="[]"),
+    # ready | failed | installing | missing
+    Column("state", String(16), nullable=False, default="missing"),
+    Column("bytes", BigInteger, nullable=False, default=0),
+    Column("reason", Text, nullable=False, default=""),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=_now),
+)
+
 skill_checks = Table(
     "skill_checks",
     metadata,

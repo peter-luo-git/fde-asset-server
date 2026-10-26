@@ -18,6 +18,11 @@ import sys
 from typing import Any
 
 REQUIREMENTS_FILE = "requirements.txt"
+#: 键算法和 fde-server、fde-runtime 一致（三边测试用同一组对照值）
+PYTHON_TAG = "cp311-debian12"
+KEY_PREFIX = "fde-skill-deps/v1"
+#: 每人个人技能的依赖合计上限（按 worker 回报的安装大小算）
+PERSONAL_BYTES_LIMIT = 1024 * 1024 * 1024
 MAX_LINES = 30
 #: 个人技能里带依赖的最多几个
 PERSONAL_LIMIT = 10
@@ -91,6 +96,13 @@ def parse_requirements(text: str) -> list[str]:
     return [lines[name] for name in sorted(lines)]
 
 
+def deps_key(requirements: list[str], python_tag: str = PYTHON_TAG) -> str:
+    import hashlib
+
+    payload = "\n".join([KEY_PREFIX, python_tag, *requirements])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def requirement_name(line: str) -> str:
     return re.split(r"[\[=<>!~]", line, maxsplit=1)[0]
 
@@ -137,9 +149,107 @@ def analyze(files: dict[str, str]) -> dict[str, Any]:
         if path.endswith(".py") or text.startswith("#!/usr/bin/env python"):
             used |= _imports(text)
     return {
+        "key": deps_key(declared) if declared else "",
         "declared": declared,
         "preinstalled": [line for line in declared if requirement_name(line) in PREINSTALLED],
         "new": [line for line in declared if requirement_name(line) not in PREINSTALLED],
         "undeclared_imports": sorted(name for name in used if name not in known),
         "error": error,
     }
+
+
+# ---------- 安装状态（fde-server worker 回报）----------
+
+
+def wanted(engine) -> list[dict[str, Any]]:
+    """已入库技能声明的依赖（去重）：worker 据此在评审通过后就预装，不等第一次用到。"""
+    import json
+
+    from sqlalchemy import select
+
+    from fde_asset.core.db import harvest_candidates
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(harvest_candidates.c.checks_json).where(
+                harvest_candidates.c.kind == "Skill", harvest_candidates.c.status == "merged"
+            )
+        ).fetchall()
+    found: dict[str, list[str]] = {}
+    for row in rows:
+        deps = ((json.loads(row.checks_json or "{}").get("skill") or {}).get("deps")) or {}
+        declared = deps.get("declared") or []
+        if declared and not deps.get("error"):
+            found[deps_key(declared)] = declared
+    return [{"key": key, "requirements": value} for key, value in sorted(found.items())]
+
+
+def record_status(engine, items: list[dict[str, Any]]) -> int:
+    """worker 回报安装状态：键要和清单对得上（防止乱写），按键覆盖。"""
+    import json
+    from datetime import datetime, timezone
+
+    from sqlalchemy import delete, insert
+
+    from fde_asset.core.db import skill_deps_status
+
+    saved = 0
+    with engine.begin() as conn:
+        for item in items[:500]:
+            try:
+                requirements = parse_requirements("\n".join(item.get("requirements") or []))
+            except RequirementsError:
+                continue
+            key = deps_key(requirements)
+            if not requirements or item.get("key") != key:
+                continue
+            state = str(item.get("state") or "missing")
+            if state not in {"ready", "failed", "installing", "missing"}:
+                continue
+            conn.execute(delete(skill_deps_status).where(skill_deps_status.c.key == key))
+            conn.execute(
+                insert(skill_deps_status).values(
+                    key=key,
+                    requirements_json=json.dumps(requirements),
+                    state=state,
+                    bytes=max(0, int(item.get("bytes") or 0)),
+                    reason=str(item.get("reason") or "")[:500],
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            saved += 1
+    return saved
+
+
+def status_of(engine, key: str) -> dict[str, Any] | None:
+    from sqlalchemy import select
+
+    from fde_asset.core.db import skill_deps_status
+
+    if not key:
+        return None
+    with engine.connect() as conn:
+        row = conn.execute(select(skill_deps_status).where(skill_deps_status.c.key == key)).first()
+    if row is None:
+        return None
+    return {
+        "state": row.state,
+        "bytes": row.bytes,
+        "reason": row.reason,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def personal_bytes(engine, keys: set[str]) -> int:
+    """这些依赖键已装好的大小合计（同一份依赖只算一次）。"""
+    from sqlalchemy import select
+
+    from fde_asset.core.db import skill_deps_status
+
+    if not keys:
+        return 0
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(skill_deps_status.c.bytes).where(skill_deps_status.c.key.in_(sorted(keys)))
+        ).fetchall()
+    return sum(int(row.bytes or 0) for row in rows)

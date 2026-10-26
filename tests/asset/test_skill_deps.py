@@ -113,3 +113,46 @@ def test_personal_skills_with_deps_are_limited(service, monkeypatch) -> None:  #
 def test_rejects_non_index_requirements(line) -> None:
     with pytest.raises(skill_deps.RequirementsError):
         skill_deps.parse_requirements(line)
+
+
+def test_key_matches_server_and_runtime_vector() -> None:
+    assert (
+        skill_deps.deps_key(VECTOR_LINES)
+        == "13a4ccc826ee6691ab0be8df51bc8143bbfc270365ce152cd0d4899b847fbdec"
+    )
+
+
+def test_wanted_status_report_and_personal_bytes_limit(service, monkeypatch) -> None:  # noqa: F811
+    # 一个带依赖的个人技能入库
+    draft = _upload(
+        service,
+        {"SKILL.md": SKILL_MD.format(name="deps-a"), "requirements.txt": "tabulate==0.9.0\n"},
+    )
+    _pass_trial(service)
+    result = _fill_and_submit(service, draft).json()
+    if not result.get("auto_approved"):
+        _as(service, "li").post(
+            f"/api/v1/reviews/{result['review_id']}/decide", json={"approve": True}
+        )
+        _as(service, "chen")
+    wanted = service.get("/internal/v1/skill-deps/wanted", headers=HEADERS).json()["items"]
+    key = skill_deps.deps_key(["tabulate==0.9.0"])
+    assert {"key": key, "requirements": ["tabulate==0.9.0"]} in wanted
+    # worker 回报：键要和清单对得上，乱写的不收
+    report = {
+        "items": [
+            {"key": key, "requirements": ["tabulate==0.9.0"], "state": "ready", "bytes": 2048},
+            {"key": "0" * 64, "requirements": ["tabulate==0.9.0"], "state": "ready", "bytes": 1},
+        ]
+    }
+    assert service.post("/internal/v1/skill-deps/status", json=report, headers=HEADERS).json() == {
+        "saved": 1
+    }
+    # 再提交一个带依赖的个人技能：合计超过上限就挡
+    monkeypatch.setattr(skill_deps, "PERSONAL_BYTES_LIMIT", 1024)
+    draft = _upload(
+        service, {"SKILL.md": SKILL_MD.format(name="deps-b"), "requirements.txt": "rich==13.0.0\n"}
+    )
+    checked = service.post(f"/api/v1/harvest-candidates/{draft['candidate_id']}/checks").json()
+    assert [f for f in checked["format"] if f["code"] == "personal_deps_bytes_limit"]
+    assert checked["skill"]["deps"]["key"] == skill_deps.deps_key(["rich==13.0.0"])
