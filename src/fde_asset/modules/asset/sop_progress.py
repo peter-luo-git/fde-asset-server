@@ -458,7 +458,8 @@ def human_decide(
             states[str(index)] = {
                 **{
                     k: previous.get(k)
-                    for k in ("evidence", "verified", "verify_detail")
+                    # 保留 Agent 回报时的轮次：执行规范里据此显示"本步 Agent 回复"
+                    for k in ("evidence", "verified", "verify_detail", "turn_id")
                     if k in previous
                 },
                 "status": "passed" if decision == "confirm" else "failed",
