@@ -16,3 +16,17 @@ class WorkItemAssetLink(BaseModel):
     sop_step: StrictInt | None = Field(
         default=None, description="SOP 关联必须填写实际存在的整数步骤。"
     )
+    force: bool = Field(
+        default=False, description="往后推进时当前步骤还有没通过的检查点，确认仍然进入就传 true。"
+    )
+
+
+class SopCheckDecision(BaseModel):
+    """人对一个检查点的决定：确认通过、退回（不通过）、清空重来。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step: StrictInt
+    index: StrictInt = Field(ge=0, description="检查点在这一步里的序号，从 0 开始。")
+    decision: Literal["confirm", "reject", "reset"]
+    note: str = Field(default="", max_length=2000)

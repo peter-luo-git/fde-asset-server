@@ -15,10 +15,12 @@ def _build(context, **kwargs):
     )
 
 
-def test_snapshot_has_four_directories(indexed) -> None:
+def test_snapshot_has_rules_skills_knowledge_but_no_sops(indexed) -> None:
     result = _build(indexed, department_code="data-intel", engagement_slug="policy-import")
-    for sub in ("rules", "skills", "sops", "knowledge"):
+    for sub in ("rules", "skills", "knowledge"):
         assert (result.path / sub).exists()
+    # SOP 只用于执行任务，当前步骤由平台注入，不进资产包
+    assert not any((result.path / "sops").glob("*/SOP.md"))
     assert (result.path / "knowledge" / "INDEX.md").exists()
 
 

@@ -446,12 +446,70 @@ work_item_assets = Table(
     Column("engagement_slug", String(64), nullable=False),
     Column("work_item_id", String(64), nullable=False),
     Column("asset_id", String(64), nullable=False),
-    Column("role", String(16), nullable=False, default="reference"),  # sop_step | reference
+    # sop_step：按这条流程执行；sop_none：明确不按流程做（项目设了默认流程也不再自动绑）；
+    # reference：参考资产（SOP 不能当参考）
+    Column("role", String(16), nullable=False, default="reference"),
     Column("sop_step", Integer),
     Column("locked", Boolean, nullable=False, default=False),
     Column("created_by", String(64), nullable=False, default=""),
     Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    # 绑定时的流程版本，以及绑定时冻结下来的合并后步骤和每个检查点的状态（见 sop_progress）
+    Column("sop_version", String(32), nullable=False, default=""),
+    Column("progress_json", Text, nullable=False, default="{}"),
+    Column("updated_at", DateTime(timezone=True)),
     UniqueConstraint("work_item_id", "asset_id", "role", name="uq_work_item_asset"),
+)
+
+#: 技能包的两类检查结果，按内容摘要存：试跑（fde-server worker 在 Agent 同款镜像里断网跑）、模型通读
+skill_checks = Table(
+    "skill_checks",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("digest", String(64), nullable=False),
+    # trial | model
+    Column("kind", String(16), nullable=False),
+    # pending | running | passed | failed | unavailable | done
+    Column("status", String(16), nullable=False, default="pending"),
+    Column("candidate_id", String(32), nullable=False, default=""),
+    Column("payload_json", Text, nullable=False, default="{}"),
+    Column("result_json", Text, nullable=False, default="{}"),
+    Column("claimed_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    Column("updated_at", DateTime(timezone=True)),
+    UniqueConstraint("digest", "kind", name="uq_skill_check"),
+)
+
+#: 公开技能库：管理员配的来源；目录清单缓存在 catalog_json
+skill_sources = Table(
+    "skill_sources",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String(100), nullable=False),
+    Column("url", String(500), nullable=False),
+    Column("branch", String(100), nullable=False, default=""),
+    Column("enabled", Boolean, nullable=False, default=True),
+    Column("status", String(16), nullable=False, default=""),
+    Column("error", Text, nullable=False, default=""),
+    Column("commit_sha", String(64), nullable=False, default=""),
+    Column("catalog_json", Text, nullable=False, default="[]"),
+    Column("checked_at", DateTime(timezone=True)),
+    Column("created_by", String(64), nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    UniqueConstraint("url", name="uq_skill_source_url"),
+)
+
+#: 默认流程：在这个范围里新建的任务自动按这条流程执行（每个范围一条）
+sop_defaults = Table(
+    "sop_defaults",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    # company | department | customer | engagement
+    Column("scope", String(16), nullable=False),
+    Column("code", String(64), nullable=False, default=""),
+    Column("asset_id", String(64), nullable=False),
+    Column("created_by", String(64), nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    UniqueConstraint("scope", "code", name="uq_sop_default_scope"),
 )
 
 

@@ -169,10 +169,17 @@ def create_draft(engine: Engine, principal: Principal, data: CandidateInput) -> 
         if not principal.is_admin and data.customer_code not in principal.customer_codes:
             raise HarvestError(f"你没有参与客户 {data.customer_code} 的项目，不能为它沉淀资产")
 
+    if data.scope not in {"company", "department", "customer", "engagement", "user"}:
+        raise HarvestError("归属范围只能是 company、department、customer、engagement、user")
+    if data.scope == "user" and data.kind != "Skill":
+        raise HarvestError("个人专用目前只支持技能")
+    if data.scope == "user":
+        # 个人专用：负责人是本人；部门记下来，带脚本时由本部门评审员看
+        data = replace(data, department_code=principal.department_code)
     owner = (
-        f"department:{principal.department_code}"
-        if principal.department_code
-        else f"user:{principal.user_id}"
+        f"user:{principal.user_id}"
+        if data.scope == "user" or not principal.department_code
+        else f"department:{principal.department_code}"
     )
     files = data.files or render_template(
         data.kind,
@@ -352,6 +359,11 @@ def draft_from_upload(
     body = (
         f"# {title}\n\n## 结论\n<请用一句话写清楚结论>\n\n{sections}\n\n## 原文摘录\n\n{excerpt}\n"
     )
+    if kind == "Skill":
+        # 技能靠开头的 name、description 被 Agent 发现，没有它入库了也用不上
+        from fde_asset.modules.asset.skill_package import with_frontmatter
+
+        body = with_frontmatter(body, name=name, description="")
     manifest = "\n".join(
         [
             "apiVersion: fde.asset/v1",
@@ -403,6 +415,131 @@ def draft_from_upload(
         "detail": extraction.detail,
     }
     return result
+
+
+def draft_from_skill_package(
+    engine: Engine,
+    principal: Principal,
+    package: Any,
+    *,
+    title: str = "",
+    scope: str = "user",
+    department_code: str = "",
+    engagement_slug: str = "",
+    customer_code: str = "",
+    origin: str = "upload",
+    source: dict[str, Any] | None = None,
+    revises_asset_id: str = "",
+) -> dict[str, Any]:
+    """整目录导入技能（上传文件夹/zip，或从公开技能库安装）：目录原样进草稿，补上 asset.yaml。
+
+    标识和标题取 SKILL.md 开头的 name；一句话结论、适用取 description，不适用要人补。
+    """
+    import yaml
+
+    from fde_asset.modules.asset import skill_package
+
+    files = dict(package.files)
+    front = skill_package.parse_frontmatter(files.get("SKILL.md", "")) or {}
+    name = str(front.get("name") or "").strip()
+    if not name or not NAME_PATTERN.match(name) or len(name) > 64:
+        name = generate_name(engine, "Skill")
+        files["SKILL.md"] = skill_package.with_frontmatter(
+            files["SKILL.md"], name=name, description=str(front.get("description") or "")
+        )
+    description = " ".join(str(front.get("description") or "").split())
+    origin_note = dict(source or {})
+    if package.rejected:
+        origin_note["rejected_files"] = package.rejected[:50]
+    owner = (
+        f"user:{principal.user_id}"
+        if scope == "user" or not principal.department_code
+        else f"department:{principal.department_code}"
+    )
+    manifest = {
+        "apiVersion": "fde.asset/v1",
+        "kind": "Skill",
+        "metadata": {
+            "name": name,
+            "title": (title or name)[:50],
+            "summary": description[:120],
+            "tags": [],
+        },
+        "spec": {
+            "owner": owner,
+            "lifecycle": "experimental",
+            "industry": [],
+            "applicability": {
+                "suitable": description[:2000],
+                "notSuitable": "",
+            },
+            "version": "0.1.0",
+            "source": {k: v for k, v in origin_note.items() if k != "rejected_files"},
+        },
+    }
+    if not manifest["spec"]["source"]:
+        manifest["spec"].pop("source")
+    files.pop("asset.yaml", None)
+    files["asset.yaml"] = yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False)
+    return create_draft(
+        engine,
+        principal,
+        CandidateInput(
+            kind="Skill",
+            name=name,
+            title=(title or name)[:50],
+            scope=scope,
+            department_code=department_code,
+            engagement_slug=engagement_slug,
+            customer_code=customer_code,
+            origin=origin,
+            source=origin_note,
+            files=files,
+            revises_asset_id=revises_asset_id,
+        ),
+    )
+
+
+def personal_auto_approvable(candidate: dict[str, Any]) -> bool:
+    """个人专用、不带脚本、自己写的技能免人工评审（2026-10-25）；外部安装的不免。"""
+    if candidate.get("kind") != "Skill" or candidate.get("scope") != "user":
+        return False
+    if candidate.get("origin") == "install":
+        return False
+    report = ((candidate.get("checks") or {}).get("skill") or {}).get("report") or {}
+    return not report.get("scripts") and report.get("level") != "high"
+
+
+def set_executables(
+    repo_port: Any,
+    target_repo: Any,
+    branch: str,
+    candidate: dict[str, Any],
+    executables: list[str],
+    *,
+    engine: Engine | None = None,
+) -> None:
+    """评审通过时把允许执行的脚本写进分支上的 asset.yaml（spec.executables），再合并。"""
+    import yaml
+
+    revised = _revised_row(engine, candidate) if engine is not None else None
+    prefix = revised.path if revised is not None else f"{ASSET_ROOT}/{landed_asset_id(candidate)}"
+    path = f"{prefix}/asset.yaml"
+    raw = repo_port.read_file(target_repo, path, ref=branch)
+    document = yaml.safe_load(raw) or {}
+    spec = document.setdefault("spec", {})
+    if executables:
+        spec["executables"] = sorted(executables)
+    else:
+        spec.pop("executables", None)
+    repo_port.commit_files(
+        target_repo,
+        branch,
+        {path: yaml.safe_dump(document, allow_unicode=True, sort_keys=False).encode("utf-8")},
+        "chore(asset): 评审定下技能里可以执行的脚本",
+        author_name="资产中心",
+        author_email="asset-center@fde.local",
+    )
 
 
 def delete_draft(
@@ -540,7 +677,16 @@ def update_candidate(engine: Engine, candidate_id: str, files: dict[str, str]) -
 
 
 #: 允许前端直接改的元数据字段，其余字段仍靠编辑 asset.yaml
-EDITABLE_META = ("title", "summary", "tags", "lifecycle", "industry", "suitable", "notSuitable")
+EDITABLE_META = (
+    "title",
+    "summary",
+    "tags",
+    "lifecycle",
+    "industry",
+    "suitable",
+    "notSuitable",
+    "sop",
+)
 
 
 def update_meta(engine: Engine, candidate_id: str, meta: dict[str, Any]) -> dict[str, Any]:
@@ -568,6 +714,19 @@ def update_meta(engine: Engine, candidate_id: str, meta: dict[str, Any]) -> dict
     for key in ("suitable", "notSuitable"):
         if key in meta:
             applicability[key] = str(meta[key] or "")
+
+    # SOP：层级和上层流程。L1 不继承谁；L2 继承一份 L1，L3 继承一份 L2（写上层流程的名字）
+    sop = meta.get("sop")
+    if isinstance(sop, dict) and document.get("kind") == "Sop":
+        if "layer" in sop:
+            layer = str(sop["layer"] or "L1")
+            if layer not in {"L1", "L2", "L3"}:
+                raise HarvestError("层级只能是 L1、L2、L3")
+            spec["layer"] = layer
+        if "extends" in sop:
+            spec["extends"] = str(sop["extends"] or "").strip()
+        if spec.get("layer", "L1") == "L1" or not spec.get("extends"):
+            spec.pop("extends", None)
 
     # 应用：项目来源、成熟度、代码仓库、怎么跑、演示入口。登记一个已经在别处跑着的应用，
     # 填的就是这几项（运行方式选 url，写上演示地址和在哪能打开）
@@ -613,6 +772,8 @@ def run_checks(
     context = scan_context or ScanContext()
     rule = KIND_RULES[candidate["kind"]]
     findings: list[dict[str, str]] = []
+    sop_hints: list[dict[str, Any]] = []
+    skill_report: dict[str, Any] | None = None
 
     files = _normalized_files(candidate, files)
     main_text = files.get(rule.main_file, "")
@@ -628,6 +789,64 @@ def run_checks(
             directory_name=candidate["name"],
         )
         findings.extend({"code": f.code, "message": f.message} for f in parsed.findings)
+        if candidate["kind"] == "Skill":
+            from fde_asset.modules.asset import skill_checks, skill_deps, skill_package
+
+            findings.extend(skill_package.frontmatter_findings(main_text, name=candidate["name"]))
+            extra = manifest.spec.model_extra or {}
+            front = skill_package.parse_frontmatter(main_text) or {}
+            selftest = str(extra.get("selftest") or front.get("selftest") or "")
+            package_files = skill_checks.skill_files(files)
+            report = skill_package.scan(package_files)
+            trial = skill_checks.ensure_trial(engine, candidate_id, package_files, selftest)
+            deps = skill_deps.analyze(package_files)
+            hints = skill_package.writing_hints(main_text)
+            if deps["error"]:
+                findings.append({"code": "requirements_invalid", "message": deps["error"]})
+            if deps["undeclared_imports"]:
+                hints.append(
+                    {
+                        "level": "warning",
+                        "message": "脚本用到了 "
+                        + "、".join(deps["undeclared_imports"])
+                        + "，运行环境没有预装，也没在 requirements.txt 里声明；"
+                        "不声明的话 Agent 执行时会找不到",
+                    }
+                )
+            if deps["declared"] and candidate["scope"] == "user":
+                used = _personal_skills_with_deps(engine, candidate)
+                if len(used) >= skill_deps.PERSONAL_LIMIT:
+                    findings.append(
+                        {
+                            "code": "personal_deps_limit",
+                            "message": f"你已有 {len(used)} 个带依赖的个人技能，"
+                            f"最多 {skill_deps.PERSONAL_LIMIT} 个；请先删掉不用的再提交",
+                        }
+                    )
+            skill_report = {
+                "deps": deps,
+                "report": report,
+                "trial": trial,
+                "model": skill_checks.model_for(engine, package_files),
+                "hints": hints,
+                "default_executables": skill_package.default_executables(report, trial),
+                "tickable": skill_package.allowed_to_tick(report, trial),
+                "rejected": (candidate.get("source") or {}).get("rejected_files", []),
+            }
+        if candidate["kind"] == "Sop":
+            # 步骤格式检查：认不出步骤是硬伤（流程没法执行），其余是写作提醒，不挡提交
+            from fde_asset.modules.asset import sop as sop_module
+
+            extra = manifest.spec.model_extra or {}
+            for item in sop_module.lint(
+                main_text,
+                layer=str(extra.get("layer") or "L1"),
+                extends=str(extra.get("extends") or ""),
+            ):
+                if item["level"] == "error" and "上层流程" not in item["message"]:
+                    findings.append({"code": "sop_steps_invalid", "message": item["message"]})
+                else:
+                    sop_hints.append(item)
         taken = _name_taken(
             engine,
             owner=manifest.spec.owner,
@@ -666,6 +885,8 @@ def run_checks(
         "blocking": len(blocking(hits)) > 0 or bool(findings),
         "high_risk": len(blocking(hits)),
         "medium_risk": len([h for h in hits if h.severity == "medium"]),
+        **({"sop_hints": sop_hints} if candidate["kind"] == "Sop" else {}),
+        **({"skill": skill_report} if skill_report is not None else {}),
         "checked_at": _now().isoformat(),
     }
     with engine.begin() as conn:
@@ -675,6 +896,26 @@ def run_checks(
             .values(checks_json=json.dumps(checks, ensure_ascii=False), updated_at=_now())
         )
     return checks
+
+
+def _personal_skills_with_deps(engine: Engine, candidate: dict[str, Any]) -> set[str]:
+    """这个人已经入库的、带依赖的个人技能（按标识去重，不含这一份）。"""
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(harvest_candidates.c.name, harvest_candidates.c.checks_json).where(
+                harvest_candidates.c.kind == "Skill",
+                harvest_candidates.c.scope == "user",
+                harvest_candidates.c.created_by == candidate.get("created_by", ""),
+                harvest_candidates.c.status == "merged",
+                harvest_candidates.c.name != candidate["name"],
+            )
+        ).fetchall()
+    names = set()
+    for row in rows:
+        checks = json.loads(row.checks_json or "{}")
+        if ((checks.get("skill") or {}).get("deps") or {}).get("declared"):
+            names.add(row.name)
+    return names
 
 
 def submit(
@@ -934,6 +1175,7 @@ def _landed_manifest(
                 department_code=candidate.get("department_code") or "",
                 customer_code=candidate.get("customer_code") or "",
                 engagement_slug=candidate.get("engagement_slug") or "",
+                user=candidate.get("created_by") or "",
             )
         ]
     if attachments:

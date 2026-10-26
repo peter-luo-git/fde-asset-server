@@ -156,7 +156,7 @@ def test_recommendation_no_longer_needs_literal_hits(indexed) -> None:
         "只留过了门槛的，不拿不相关的凑数"
     )
     sops = [item for item in items if item["group"] == "sops"]
-    assert len(sops) == 1 and sops[0]["reasons"][0] == "通用流程兜底", "流程始终留一条兜底"
+    assert sops == [], "SOP 只用于任务执行，不参与推荐兜底"
     assert all(item["kind"] == "Rule" for item in items if item["group"] == "rules")
 
 

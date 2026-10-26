@@ -16,7 +16,17 @@ class GitCommandError(RuntimeError):
 def git_command(args: list[str]) -> list[str]:
     # 后台维护脱离 fetch/commit 后会由容器 PID 1 接管；前台维护可由 run 正常等待。
     # 同时约束旧版 Git 使用的 gc 配置，不禁用维护，也不改仓库的持久配置。
-    return ["git", "-c", "maintenance.autoDetach=false", "-c", "gc.autoDetach=false", *args]
+    # core.quotepath=off 保留远端的中文等非 ASCII 文件名读取行为。
+    return [
+        "git",
+        "-c",
+        "maintenance.autoDetach=false",
+        "-c",
+        "gc.autoDetach=false",
+        "-c",
+        "core.quotepath=off",
+        *args,
+    ]
 
 
 class LocalGitRepo:

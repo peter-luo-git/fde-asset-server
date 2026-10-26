@@ -124,6 +124,56 @@ def test_accept_rechecks_current_asset_visibility_and_preserves_pending_state(cl
         )
 
 
+@pytest.mark.parametrize("operation", ["link", "accept"])
+@pytest.mark.parametrize("visible", [True, False])
+def test_sop_link_prohibition_preserves_current_visibility_and_pending_state(
+    client, operation, visible
+):
+    context = client.app.state.context
+    asset_id = _asset(as_user(client, "admin"), "delivery-standard")["asset_id"]
+    target = {"target_type": "agent", "target_id": "migration-reviewer"}
+    recommendation_id = None
+    if operation == "accept":
+        sent = as_user(client, "wang").post(
+            "/api/v1/recommend/send",
+            json={**target, "items": [{"asset_id": asset_id, "score": 1}]},
+        )
+        assert sent.status_code == 200, sent.text
+        recommendation_id = client.get("/api/v1/recommend/inbox").json()["items"][0][
+            "recommendation_id"
+        ]
+    if not visible:
+        with context.engine.begin() as conn:
+            conn.execute(
+                update(assets)
+                .where(assets.c.asset_id == asset_id)
+                .values(restricted=True, owner_kind="user", owner_value="chen")
+            )
+    actor = as_user(client, "wang")
+    response = (
+        actor.post("/api/v1/recommend/link", json={**target, "asset_id": asset_id})
+        if operation == "link"
+        else actor.post(f"/api/v1/recommend/{recommendation_id}/decide", json={"accept": True})
+    )
+    assert response.status_code == (422 if visible else 404), response.text
+    if visible:
+        assert "默认流程" in response.json()["detail"]
+    with context.engine.connect() as conn:
+        assert (
+            conn.execute(select(target_assets).where(target_assets.c.asset_id == asset_id)).first()
+            is None
+        )
+        if recommendation_id:
+            assert (
+                conn.execute(
+                    select(asset_recommendations.c.status).where(
+                        asset_recommendations.c.recommendation_id == recommendation_id
+                    )
+                ).scalar_one()
+                == "sent"
+            )
+
+
 def _compute(client, user: str, target_type: str, target_id: str) -> list[dict]:
     response = as_user(client, user).post(
         "/api/v1/recommend/compute",

@@ -38,7 +38,8 @@ def test_step_summary_contains_checkpoints(indexed) -> None:
     summary = step_summary(indexed.engine, _sop_id(indexed), 3)
     assert summary["found"] and summary["total_steps"] == 5
     assert "连续三轮差异为 0" in summary["prompt_md"]
-    assert "不适用" in summary["prompt_md"]
+    # 给 Agent 的是当前这一步 + 全流程提纲，不再带适用范围
+    assert "全流程提纲" in summary["prompt_md"] and "← 当前" in summary["prompt_md"]
 
 
 def test_step_summary_missing_step(indexed) -> None:

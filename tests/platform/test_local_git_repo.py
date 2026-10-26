@@ -29,6 +29,14 @@ def test_commit_and_read(git: LocalGitRepo) -> None:
     assert git.read_file(REPO, "skills/a/SKILL.md") == b"# A\n"
 
 
+def test_non_ascii_paths_are_listed_and_read_without_git_quoting(git: LocalGitRepo) -> None:
+    path = "skills/需求调研/资料/示例.md"
+    content = "# 示例\n".encode()
+    git.commit_files(REPO, "main", {path: content}, "feat: 中文技能资源")
+    assert [entry.path for entry in git.list_tree(REPO)] == [path]
+    assert git.read_file(REPO, path) == content
+
+
 def test_missing_file_raises(git: LocalGitRepo) -> None:
     git.commit_files(REPO, "main", {"a.md": b"x"}, "init")
     with pytest.raises(FileNotFoundError):

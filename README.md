@@ -1,6 +1,6 @@
 # fde-asset-server
 
-文档版本：0.8（2026-10-19）。本轮同步 `dev1005` 源码与契约；下文历史测试、现场切换和 `tasks/ENV_BLOCKERS.md` 的上游环境记录保留原时点，不代表当前服务器已升级为 PostgreSQL、启用回调或完成模型验收。
+文档版本：0.9（2026-10-26）。本轮同步 `peter-luo-git/fde-asset-server` 的 `dev1005`（`9a812e3`）源码与契约；下文历史测试、现场切换和 `tasks/ENV_BLOCKERS.md` 的上游环境记录保留原时点，不代表当前服务器已升级为 PostgreSQL、启用回调或完成模型验收。
 
 FDE 协同平台的**资产中心服务**：索引、目录、沉淀、评审、分发与复用计量。
 
@@ -10,7 +10,7 @@ FDE 协同平台的**资产中心服务**：索引、目录、沉淀、评审、
 
 同日可见性补强：直接关联与接受推荐在写入事务内沿用 `visibility_clause` 复核当前资产，检查先于幂等返回。不存在、已删除或对当前主体不可见（含不满足restricted规则）统一404，不泄露存在性；管理员也不能绕过restricted规则。拒绝不新增关联或推进推荐状态，既有关联不因此删除。解除仍只校验当前目标管理权，允许清理自身可管理目标的旧关联，不要求资产仍可见；不修改全局资产可见性规则或资产正文。
 
-新增 `POST /api/v1/recommend/unlink`，输入严格为 `{target_type,target_id,asset_id}`，类型为 `engagement` 或 `agent`，仅目标当前负责人或管理员可解除（无权403）。按三元组删除关联，首次返回 `{unlinked:true}` 并记 `asset.unlinked`，重复返回 `{unlinked:false}` 且不重复记事件；保留资产正文、其他目标关联，可重新关联。解除后清推荐缓存，无新迁移。请求字段和路径由真实路由经 `scripts/export_openapi.py` 生成 `contracts/asset-v1.yaml`，child文审不修改生成物。本轮完整 `make check` 和三服务真实部署/E2E由 Root 收口，旧测试/部署记录不作本轮通过证据。
+新增 `POST /api/v1/recommend/unlink`，输入严格为 `{target_type,target_id,asset_id}`，类型为 `engagement` 或 `agent`，仅目标当前负责人或管理员可解除（无权403）。按三元组删除关联，首次返回 `{unlinked:true}` 并记 `asset.unlinked`，重复返回 `{unlinked:false}` 且不重复记事件；保留资产正文、其他目标关联；非 SOP 资产可重新关联。解除后清推荐缓存，无新迁移。请求字段和路径由真实路由经 `scripts/export_openapi.py` 生成 `contracts/asset-v1.yaml`，child文审不修改生成物。本轮只运行合并相关检查，不运行全量测试、全量 E2E 或部署；旧测试/部署记录不作本轮通过证据。
 
 platform身份模式通过 `X-FDE-Service-Key`读取Server内部目录，Agent与用户/项目共用默认30秒TTL；只消费 `key/title/description/role/owner/department_code` 六安全字段，不使用本地演示Agent回退或运行配置。合法空agents数组保持空；目录过期后重新请求，密钥/网络/响应或旧Server缺agents失败时安全503，不继续使用过期目录、不回显内部URL/异常正文，原未登录/失效会话401/403保持。
 
@@ -23,7 +23,7 @@ Root串行完整make check退出0，445通过/2条件跳过/3 warning，真实�
 - 7 种资产类型：`Rule` 规范 · `Sop` 标准作业程序 · `Skill` 技能 · `Solution` 方案 · `Implementation` 实施 · `Case` 问题 · `Experience` 经验
 - 作用域：公司 / 部门 / 项目（客户级 v0.2）
 - 附件：PDF / Word / Excel / PPT 存原件 + 提取文本用于检索
-- 分发：先按必选、目标关联与项目自身资产挑选；入包的规范全文注入、技能工具发现、SOP 步骤注入、知识分层按需（L0/L1/L2）
+- 分发：非 SOP 资产按必选、目标关联与项目自身资产挑选；规范全文注入、技能工具发现、知识分层按需（L0/L1/L2）。SOP 只用于任务执行，由平台注入当前步骤，不作为参考资产入包。
 
 设计与计划见 `specs/docs/architecture/资产中心实现方案与开发计划.md`。
 
@@ -42,7 +42,7 @@ make worker                 # 另一个终端：索引轮询与快照生成
 make demo                   # 12 步演示；另配独立空库的 FDE_ASSET_DATABASE_URL
 ```
 
-另一个终端也须加载同一套环境。`FDE_ASSET_DATABASE_URL` 必填，只接受 PostgreSQL；缺失时启动失败，不回退 SQLite。旧库升级涉及 `0009_asset_mandatory`、`0010_visibility_requests`、`0011_checkup_findings`，当前源码的迁移头为 `0011_checkup_findings`；检查迁移头不等于目标数据库已完成升级。
+另一个终端也须加载同一套环境。`FDE_ASSET_DATABASE_URL` 必填，只接受 PostgreSQL；缺失时启动失败，不回退 SQLite。旧库升级涉及 `0009_asset_mandatory`、`0010_visibility_requests`、`0011_checkup_findings`、`0012_sop_execution`、`0013_skill_packages`，当前源码的迁移头为 `0013_skill_packages`；检查迁移头不等于目标数据库已完成升级。
 
 数据默认落在：
 
@@ -91,7 +91,7 @@ Server `7548733`的`AssetBundleReader`消费资产服务内部`POST /internal/v1
 
 当前请求还可携带 `agent_key` 和 `known_revision`：未指定 `revision` 的最新包请求仍先核对身份和项目成员，再核对选中资产、挂载名与仓库提交组成的版本键；匹配时返回 `{revision, unchanged: true}`，省略 `files`，否则返回完整资产包。版本键缓存仅在内存，重启或未命中时重新组包；显式 `{revision}` 历史复读仍使用原服务密钥路径，不受此优化影响。
 
-本轮目标组包改为只带可见且有效的必选资产、关联给项目或 Agent 的资产和项目自身资产；没有关联也不再用整层资产兜底，规范和流程不因类型自动必带。选中流程的可见上层 `extends` 流程一并带入。必选范围为公司、部门、客户、项目、个人，由管理员或对应范围负责人设置；个人范围由本人管理，仅在可信服务端请求 `personal: true` 的私聊组包中带入。存量必选不自动迁移，演示种子显式设置公司级规范与流程；版本键格式已变化，旧内存命中重新核对。
+目标组包带入可见且有效的非 SOP 必选资产、关联给项目或 Agent 的资产和项目自身资产；没有关联时不以整层资产兜底。必选范围为公司、部门、客户、项目、个人，由管理员或对应范围负责人设置；个人范围由本人管理，仅在可信服务端请求 `personal: true` 的私聊组包中生效。私聊还自动带入该用户的可见个人 Skill；当前 SOP 步骤点名的可见 Skill 即使未关联也带入，同名优先项目、再个人技能。SOP 及其上层流程不再入包，不能直接关联项目或 Agent、不能新设必选；旧必选记录保留但 `effective=false`，请改设默认流程，旧关联可通过解除接口清理。演示种子设置公司级规范必选和公司默认流程。
 
 Root已构建`18023df`候选镜像，在现有数据副本验证迁移20个旧资产ID全部保留且仍有效；真实Server Reader读取10文件、2份规范及revision复读通过，快照含2份规范且可prepare。两份seed资产的owner为`department:data-intel`，平台当前缺少该部门，被安全校验拒绝；兼容不重写owner、不放宽门禁，不表示全部资产可用。独立定向检查14通过/1 PostgreSQL跳过，详情见[兼容QA](operations/agent-contributions/asset-latest-compat/qa_agent_environment.md)。此为候选/副本验证，不是现场部署、完整迁移验收或真实模型启动验收。
 
@@ -109,20 +109,23 @@ Gitea 推送同步需配置 `FDE_ASSET_GITEA_WEBHOOK_URL`、Gitea 地址与服�
 
 ### 任务资产关联与 SOP 调用权限
 
-任务讨论与执行日志由 Server 的任务/会话记录保存；资产中心保存可复用 SOP 及任务与资产的关联，不把讨论原消息自动转成资源资产。绑定 SOP 时，请求体为 `{asset_id, role: "sop_step", sop_step}`；步骤必须是流程里实际存在的整数。`engagement_slug` 可省略，提供时必须与任务真实所属项目一致，不能据此获得任务权限。
+任务讨论与执行日志由 Server 的任务/会话记录保存；资产中心保存可复用 SOP、冻结的任务流程版本与检查点进度，不把讨论原消息自动转成资源资产。绑定 SOP 时，请求体为 `{asset_id, role: "sop_step", sop_step}`；步骤必须是流程里实际存在的整数。绑定后冻结步骤与版本，新版通过任务的 `/sop/refresh` 显式刷新。当前检查点未完成时推进返回409，需显式 `force: true` 并留痕；只有设置自动推进且全部机器检查通过才自动进入下一步。SOP 不能以 `reference` 角色关联。`engagement_slug` 可省略，提供时必须与任务真实所属项目一致，不能据此获得任务权限。
+
+通过 `PUT /api/v1/sop-defaults` 为公司、部门、客户或项目设默认流程，最具体范围优先；只为设定后创建、且平台提供创建时间的任务在首次读取或执行时自动绑定。任务可删除 `/sop-step` 明确退出，防止默认流程再次绑定。检查点分命令、交付物、确认和判断：Agent 对机器检查的通过声明需平台 `verified` 和证据；确认与判断由人确认，Agent 声明通过只进入待确认状态。流程推进不替代任务最终验收。
 
 platform 模式下，每次任务资产的列表、绑定、更换、删除和步骤摘要请求都会使用服务密钥访问 Server 的 `GET /internal/identity/work-items/{work_item_id}/access?username=...&write=...`，核验当前调用者的任务读写权限并取得真实 `engagement_slug`。任务授权结果不缓存：读者不能执行绑定、删除或 `lock=true`；任务不可读或平台隐藏的写拒绝返回404，本地 viewer 或上游显式禁止返回403，平台连接或响应异常返回503。资产可见性仍单独核对；列表不返回不可见资产，步骤摘要不泄露其内容。旧关联的空项目字段只在任务已通过可信核验后兼容，更新时补全；非空但与真实归属冲突的关联拒绝访问。
 
 Agent 内部 `GET /internal/v1/work-items/{work_item_id}/sop-step` 保留 `X-FDE-Service-Key`，同时必须提供 `username` 与 `engagement_slug` 查询参数；服务重新核验调用者的任务权限、真实项目与资产可见性。没绑定、流程已下架或不可见、步骤不存在时返回 `{found: false, work_item_id}`，不含流程标题或提示词；项目不匹配或任务无权访问返回404，缺少调用者参数返回422。
 
-dev 模式只接受 `directory.json` 中 `work_items` 显式登记的任务，形式为 `{"任务ID": {"engagement_slug": "项目标识"}}`，并逐次检查本地用户成员关系；任意未登记任务不能绑定资产，管理员也不能绕过任务存在性。演示种子登记 `w-9`，自动化测试使用各自隔离的任务映射。
+dev 模式只接受 `directory.json` 中 `work_items` 显式登记的任务，形式为 `{"任务ID": {"engagement_slug": "项目标识", "created_at": "ISO-8601创建时间"}}`（未提供创建时间时不自动绑定默认流程），并逐次检查本地用户成员关系；任意未登记任务不能绑定资产，管理员也不能绕过任务存在性。演示种子登记 `w-9`，自动化测试使用各自隔离的任务映射。
 
-配对升级时，先使 Server 提供工作项权限桥，再更新 Asset 与传入调用者参数的 Server SOP Reader；这些变更需作为兼容版本一同验收。旧 Server 不提供权限桥时，任务资产操作会拒绝访问；旧 Reader 不传参数时会收到422。此变更不新增数据库迁移，不共享数据库，也不改变资产包版本缓存或 Skill 激活策略。
+配对升级时，先使 Server 提供工作项权限桥，再更新 Asset 与传入调用者参数的 Server SOP Reader；这些变更需作为兼容版本一同验收。旧 Server 不提供权限桥时，任务资产操作会拒绝访问；旧 Reader 不传参数时会收到422。本轮新增流程进度/默认流程及技能包检查/来源表迁移，不共享数据库。技能市场、整包导入和依赖声明沿用远端实现；依赖实际安装与 Runtime 的发现机制需要配套 Server 支持，Asset 检查通过不能单独证明依赖已安装。
 
 ## 变更记录
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-10-26 | 0.9 | 同步 dev1005 9a812e3 的任务流程、技能供应与新迁移；保留独立的关联权限复核和解除能力，仅执行相关验证。 |
 | 2026-10-19 | 0.8 | 同步 PostgreSQL 必配与测试前置、0009～0011迁移、必选组包、修订与范围视图拒绝、每日保留策略及推送回调；保留历史现场和上游环境边界。 |
 | 2026-10-16 | 0.7 | 补充任务资产真实归属与逐次读写授权、SOP调用者上下文、dev任务映射及配对升级顺序；讨论记录仍归Server管理。 |
 | 2026-10-16 | 0.6 | 补充最新资产包的 agent_key、known_revision/unchanged 响应与内存缓存边界；保留身份/项目成员逐次核对和历史版本复读路径。 |

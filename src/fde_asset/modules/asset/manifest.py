@@ -216,7 +216,9 @@ KIND_RULES: dict[str, KindRule] = {
         label="技能",
         main_file="SKILL.md",
         directory="skills",
-        required_sections=("适用场景", "步骤"),
+        # 技能的硬性要求是 SKILL.md 开头的 name、description（通用的技能格式，外部技能也这么写）；
+        # 「适用场景」「步骤」只是写作建议，不再必填（2026-10-25）
+        required_sections=(),
         nature="skill",
     ),
     "Solution": KindRule(
@@ -354,7 +356,12 @@ def owner_slug(owner_value: str) -> str:
 
 
 def visibility_entry(
-    scope: str, *, department_code: str = "", customer_code: str = "", engagement_slug: str = ""
+    scope: str,
+    *,
+    department_code: str = "",
+    customer_code: str = "",
+    engagement_slug: str = "",
+    user: str = "",
 ) -> str:
     """把「作用域 + 归属」写成可见范围的一项。"""
     if scope == "department":
@@ -363,6 +370,8 @@ def visibility_entry(
         return f"customer:{customer_code}"
     if scope == "engagement":
         return f"engagement:{engagement_slug}"
+    if scope == "user":
+        return f"user:{user}"
     return "company"
 
 

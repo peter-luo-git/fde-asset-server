@@ -50,10 +50,12 @@ def _clear(service):
         conn.execute(delete(asset_mandatory))
 
 
-def test_seed_keeps_company_rules_and_sops_mandatory_so_old_behaviour_holds(service):
+def test_seed_keeps_company_rules_mandatory_and_sops_out_of_the_bundle(service):
     payload = _bundle(service)
-    assert {"00-security-redlines", "10-engineering", "delivery-standard"} <= _names(payload)
+    assert {"00-security-redlines", "10-engineering"} <= _names(payload)
     assert "rules/00-security-redlines.md" in payload["files"]
+    # SOP 只用于执行任务（2026-10-25），不进资产包
+    assert "delivery-standard" not in _names(payload)
 
 
 def test_rules_and_sops_are_not_carried_by_kind_any_more(service):
@@ -79,13 +81,12 @@ def test_rules_and_sops_are_not_carried_by_kind_any_more(service):
     assert "00-security-redlines" not in _names(_bundle(service))
 
 
-def test_mandatory_sop_brings_the_layers_it_extends(service):
+def test_sop_cannot_be_set_mandatory_any_more(service):
     _clear(service)
     l2 = _id(service, "bank-core-migration")
-    assert (
-        service.post(f"/api/v1/assets/{l2}/mandatory", json={"entry": "company"}).status_code == 200
-    )
-    assert {"bank-core-migration", "delivery-standard"} <= _names(_bundle(service))
+    response = service.post(f"/api/v1/assets/{l2}/mandatory", json={"entry": "company"})
+    assert response.status_code == 422 and "默认流程" in response.json()["detail"]
+    assert "bank-core-migration" not in _names(_bundle(service))
 
 
 def test_only_admin_or_the_scope_owner_can_set(service):
@@ -226,10 +227,6 @@ def test_usage_report_recognises_the_reference_spellings_agents_really_write(ser
     refs = [
         "rules/10-engineering",
         "规范/00-security-redlines.md",
-        "流程/delivery-standard",
-        "knowledge/sops/delivery-standard/SOP",
-        "Sop/通用交付流程（L1）",
-        "sops/delivery-standard/SOP.md",
         "类型/名称",
         "knowledge/INDEX",
     ]

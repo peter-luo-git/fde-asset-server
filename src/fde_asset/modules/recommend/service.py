@@ -145,11 +145,6 @@ def compute(
     if semantic and mode != "reranked":
         # 重排没成功：候选是没做字面粗筛的全集，不能原样推出去，重新走一遍关键词粗排
         return compute(engine, principal, target, limit=limit, llm=llm, reranker=None)
-    if semantic and not any(item["group"] == "sops" for item in picked):
-        # 流程过不了门槛也留一条兜底，免得新项目完全没有流程可依
-        fallback = next((item for item in others if item["group"] == "sops"), None)
-        if fallback is not None:
-            picked.append({**fallback, "reasons": ["通用流程兜底", *fallback["reasons"]]})
     return (rules + picked)[:limit], mode
 
 
@@ -408,6 +403,8 @@ def decide(
             }
         if not accept and not note.strip():
             raise RecommendError("忽略要写原因，这是资产改进最直接的线索")
+        if accept and _is_sop(conn, row.asset_id):
+            raise RecommendError(SOP_NOT_LINKABLE)
 
         status = "accepted" if accept else "declined"
         conn.execute(
@@ -493,6 +490,18 @@ def mount_name_for(conn: Any, target_type: str, target_id: str, asset_id: str) -
     return candidate if candidate not in taken else f"{candidate}-{asset_id[:8]}"
 
 
+SOP_NOT_LINKABLE = (
+    "SOP 只用于按步骤执行任务，不能关联给项目或 Agent 当参考；"
+    "要让项目的任务按它执行，请在项目设置里设为默认流程"
+)
+
+
+def _is_sop(conn: Any, asset_id: str) -> bool:
+    return (
+        conn.execute(select(assets.c.kind).where(assets.c.asset_id == asset_id)).scalar() == "Sop"
+    )
+
+
 def link(
     engine: Engine,
     principal: Principal,
@@ -503,6 +512,8 @@ def link(
     """本人直接关联，不走推荐流程。"""
     with engine.begin() as conn:
         _require_visible_asset(conn, principal, asset_id)
+        if _is_sop(conn, asset_id):
+            raise RecommendError(SOP_NOT_LINKABLE)
         exists = conn.execute(
             select(target_assets.c.id).where(
                 and_(

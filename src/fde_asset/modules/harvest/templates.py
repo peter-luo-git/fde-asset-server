@@ -22,7 +22,8 @@ spec:
 {extra}"""
 
 _EXTRA = {
-    "Sop": '  layer: L2\n  extends: ""        # L2 指向 L1，L3 指向 L2\n',
+    # 新建默认是 L1（通用流程，不继承谁）；要写行业或项目流程，在草稿页选层级和上层流程
+    "Sop": "  layer: L1\n",
     "Case": "  caseType: fault      # fault|faq|pitfall|rejection|counterexample|edge\n  severity: S3\n",
     "Application": """  sourceType: fcp          # fcp（平台内开发）| external（外部自研）
   maturity: poc            # poc | pilot | production
@@ -61,27 +62,32 @@ _BODY = {
     "Sop": """# {title}
 
 ## 结论与目的
-<这条流程解决什么问题，跑完能得到什么>
+<这条流程解决什么问题，按它做完能得到什么>
 
 ## 适用范围
 <行业、客户类型、项目规模；不适用的情况写进 asset.yaml 的 applicability>
 
 ## 角色
-<谁负责哪几步>
+<谁负责哪几步，谁来确认>
 
 ## 前置条件
 <开始之前必须具备什么>
 
 ## 步骤
 1. <第一步标题>
-   <操作说明>
-   - 检查点：<可验证的判定条件>
+   <这一步做什么、怎么做；细的操作方法写成技能，这里只写阶段要求>
+   - 检查点[交付物]：`docs/<文件名>.md` 已提交，含「<必需章节>」一节
+   - 检查点[确认:客户]：<需要谁确认什么>
    - 产出：<这一步产生什么>
+   - 技能：<这一步要用的技能名，没有就删掉这一行>
 2. <第二步标题>
-   - 检查点：
+   <操作说明>
+   - 检查点[命令]：<能用命令验证的要求> `<命令，如 pytest -q>`
+   - 检查点[判断]：<需要人凭经验判断的，写清看什么>
+   - 产出：<这一步产生什么>
 
 ## 异常处理
-<哪一步失败了怎么办>
+<哪一步的检查点不通过怎么办>
 
 ## 变更记录
 - {date} 初版
@@ -224,3 +230,28 @@ def render_template(
         kind=kind, name=name, title=title, owner=owner, extra=_EXTRA.get(kind, "")
     )
     return {main_file: body, "asset.yaml": manifest}
+
+
+#: 写 L2、L3 时的步骤模板：只写要覆盖或新增的步骤，上层的不用重抄
+SOP_LAYERED_STEPS = """## 步骤
+<!-- 只写要覆盖或新增的步骤。编号和上层相同 = 整步替换上层那一步（连同它的检查点）；新编号 = 新增一步。上层其余步骤自动沿用，不用重抄。 -->
+2. <要替换上层第 2 步时，写新的标题>
+   <和上层相比多了什么要求>
+   - 检查点[交付物]：`docs/<文件名>.md` 已提交，含「<必需章节>」一节
+   - 检查点[确认:<谁>]：<需要谁确认什么>
+   - 产出：<这一步产生什么>
+5. <新增的步骤标题>
+   <操作说明>
+   - 检查点[命令]：<能用命令验证的要求> `<命令>`
+   - 产出：<这一步产生什么>
+"""
+
+
+def sop_template(layer: str, *, title: str = "", date: str = "") -> str:
+    """L1 用完整模板；L2、L3 的「步骤」换成只写覆盖和新增的写法。"""
+    body = _BODY["Sop"].format(title=title or "<流程名称>", name="", date=date or "")
+    if layer not in {"L2", "L3"}:
+        return body
+    head, _, rest = body.partition("## 步骤\n")
+    _, _, tail = rest.partition("\n## 异常处理")
+    return head + SOP_LAYERED_STEPS + "\n## 异常处理" + tail

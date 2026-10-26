@@ -99,4 +99,10 @@ def can_review(
         )
     if scope == "company":
         return principal.is_asset_reviewer
+    if scope == "user":
+        # 个人专用的技能带脚本时要人看：本部门的资产评审员或部门主管（department_code 是作者的部门）
+        same_department = bool(department_code) and principal.department_code == department_code
+        return (
+            same_department and (principal.is_asset_reviewer or principal.is_department_head)
+        ) or (principal.is_asset_reviewer and not department_code)
     return False

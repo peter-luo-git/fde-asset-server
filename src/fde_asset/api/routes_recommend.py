@@ -353,6 +353,8 @@ def link(
         )
     except service.AssetUnavailable as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
+    except service.RecommendError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     # 关联之后推荐结果就变了（已关联的不再推），清掉这个目标的缓存
     recommendation_cache.invalidate()
     return result
