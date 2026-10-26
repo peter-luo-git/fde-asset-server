@@ -1240,6 +1240,57 @@ paths:
       summary: Asset Changes
       tags:
       - notify
+  /api/v1/assets/{asset_id}/copy:
+    post:
+      description: 复制为草稿：整份目录复制成新草稿，换新标识，在上面改成自己的资产。
+      operationId: copy_asset_api_v1_assets__asset_id__copy_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              default: {}
+              title: Payload
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Copy Asset Api V1 Assets  Asset Id  Copy Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Copy Asset
+      tags:
+      - showcase
   /api/v1/assets/{asset_id}/edit:
     post:
       description: '在网页上修改一份已入库资产：起一份带着现在全部内容的修订稿，改完提交评审，
@@ -2003,6 +2054,50 @@ paths:
       summary: Dev Identities
       tags:
       - assets
+  /api/v1/engagements/{engagement_slug}/sop-board:
+    get:
+      description: 项目看板：每个按流程执行的任务做到第几步（卡片上的流程进度标记）。
+      operationId: engagement_sop_board_api_v1_engagements__engagement_slug__sop_board_get
+      parameters:
+      - in: path
+        name: engagement_slug
+        required: true
+        schema:
+          title: Engagement Slug
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Engagement Sop Board Api V1 Engagements  Engagement Slug  Sop Board Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Engagement Sop Board
+      tags:
+      - work-items
   /api/v1/engagements/{engagement_slug}/sop-default:
     get:
       description: 项目设置页：这个项目现在用哪条默认流程（可能继承自客户、部门、全公司），我能不能改。
@@ -3572,6 +3667,82 @@ paths:
       summary: Write Settings
       tags:
       - assets
+  /api/v1/showcase:
+    get:
+      description: 示范资产清单：每份是什么、怎么试、装了没有（装了给出资产编号）。
+      operationId: showcase_listing_api_v1_showcase_get
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Showcase Listing Api V1 Showcase Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Showcase Listing
+      tags:
+      - showcase
+  /api/v1/showcase/install:
+    post:
+      description: 管理员安装示范资产（全公司可见）：没装的新装，平台更新过内容的升级版本，其余跳过。
+      operationId: showcase_install_api_v1_showcase_install_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Showcase Install Api V1 Showcase Install Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Showcase Install
+      tags:
+      - showcase
   /api/v1/skill-market/assets/{asset_id}/update:
     get:
       description: 从技能库装的技能：来源里有没有新版本（按目录内容比，以最近一次刷新为准）。

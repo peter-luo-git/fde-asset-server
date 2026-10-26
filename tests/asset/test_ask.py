@@ -153,8 +153,8 @@ def test_recommendation_no_longer_needs_literal_hits(indexed) -> None:
     assert [item["name"] for item in picked] == ["oracle-to-pg-sequence-gap"], (
         "只留过了门槛的，不拿不相关的凑数"
     )
-    sops = [item for item in items if item["group"] == "sops"]
-    assert len(sops) == 1 and sops[0]["reasons"][0] == "通用流程兜底", "流程始终留一条兜底"
+    # 2026-10-25 起 SOP 只用于执行任务，不参与推荐，也不再留「通用流程兜底」
+    assert not [item for item in items if item["kind"] == "Sop"]
     assert all(item["kind"] == "Rule" for item in items if item["group"] == "rules")
 
 
