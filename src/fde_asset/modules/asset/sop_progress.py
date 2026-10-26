@@ -661,3 +661,44 @@ def agent_step(engine: Engine, row: Any, title: str, *, budget: int = 8192) -> d
         "skills": step.get("skills", []),
         "prompt_md": text,
     }
+
+
+def board_summaries(engine: Engine, engagement_slug: str) -> dict[str, dict[str, Any]]:
+    """看板卡片用：这个项目里每个按流程执行的任务做到第几步（2026-10-26）。
+
+    只读一张表、不逐个查流程内容（步骤用绑定时冻结的；老绑定没冻结的只给步号）。
+    当前步的检查点：几个已通过、几个等人确认（pending）、几个没通过（failed）。
+    """
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(work_item_assets).where(
+                and_(
+                    work_item_assets.c.engagement_slug == engagement_slug,
+                    work_item_assets.c.role == "sop_step",
+                )
+            )
+        ).all()
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        progress = load_progress(row)
+        steps = progress.get("steps_snapshot")
+        steps = steps if isinstance(steps, list) else []
+        current = row.sop_step or 1
+        step = next((s for s in steps if s.get("number") == current), None)
+        states = (progress.get("steps") or {}).get(str(current), {}).get("checks", {})
+        checks = (step or {}).get("checks", [])
+        statuses = [(states.get(str(c.get("index"))) or {}).get("status", "") for c in checks]
+        result[row.work_item_id] = {
+            "step": current,
+            "total": len(steps) or None,
+            "step_title": (step or {}).get("title", ""),
+            "checks": len(checks),
+            "passed": statuses.count("passed"),
+            "waiting_human": statuses.count("pending"),
+            "failed": statuses.count("failed"),
+            "finished": bool(steps)
+            and current == len(steps)
+            and bool(checks)
+            and statuses.count("passed") == len(checks),
+        }
+    return result
