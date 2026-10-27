@@ -2079,6 +2079,50 @@ paths:
       summary: Dev Identities
       tags:
       - assets
+  /api/v1/engagements/{engagement_slug}/sop-board:
+    get:
+      description: 项目看板：每个按流程执行的任务做到第几步（卡片上的流程进度标记）。
+      operationId: engagement_sop_board_api_v1_engagements__engagement_slug__sop_board_get
+      parameters:
+      - in: path
+        name: engagement_slug
+        required: true
+        schema:
+          title: Engagement Slug
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Engagement Sop Board Api V1 Engagements  Engagement Slug  Sop Board Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Engagement Sop Board
+      tags:
+      - work-items
   /api/v1/engagements/{engagement_slug}/sop-default:
     get:
       description: 项目设置页：这个项目现在用哪条默认流程（可能继承自客户、部门、全公司），我能不能改。

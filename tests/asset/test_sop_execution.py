@@ -220,6 +220,41 @@ def test_advance_needs_force_when_unfinished_and_human_can_confirm(service) -> N
     assert _bind(service, step=2).status_code == 200
 
 
+def test_board_summary_shows_step_and_check_counts(service) -> None:
+    """看板卡片：第几步/共几步、当前步标题、检查点通过和待确认数；别的项目看不到。"""
+    assert service.get("/api/v1/engagements/policy-import/sop-board").json() == {"items": {}}
+    _bind(service)
+    service.post(
+        "/api/v1/work-items/w-1/sop/checks",
+        json={"step": 1, "index": 0, "decision": "confirm"},
+    )
+    item = service.get("/api/v1/engagements/policy-import/sop-board").json()["items"]["w-1"]
+    state = _state(service)
+    assert item["step"] == 1 and item["total"] == len(state["steps"])
+    assert item["step_title"] == state["steps"][0]["title"]
+    assert item["checks"] == len(state["steps"][0]["checks"]) and item["passed"] == 1
+    assert item["finished"] is False
+    assert service.get("/api/v1/engagements/other-project/sop-board").status_code == 404
+
+
+@pytest.mark.parametrize("decision, expected", [("confirm", "passed"), ("reject", "failed")])
+def test_human_decision_preserves_agent_report_turn(service, decision, expected) -> None:
+    assert _bind(service).status_code == 200
+    assert (
+        _report(service, [{"index": 1, "status": "passed", "evidence": "邮件截图"}]).status_code
+        == 200
+    )
+    response = service.post(
+        "/api/v1/work-items/w-1/sop/checks",
+        json={"step": 1, "index": 1, "decision": decision},
+    )
+    assert response.status_code == 200, response.text
+    check = _state(service)["steps"][0]["checks"][1]
+    assert check["status"] == expected
+    assert check["turn_id"] == "t-1" and check["evidence"] == "邮件截图"
+    assert check["by"] == "user:chen"
+
+
 def test_agent_cannot_override_human_confirmation(service) -> None:
     _bind(service)
     service.post(

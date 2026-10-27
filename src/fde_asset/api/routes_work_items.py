@@ -172,6 +172,18 @@ def list_links(
     return {"items": items}
 
 
+@router.get("/engagements/{engagement_slug}/sop-board")
+def engagement_sop_board(
+    engagement_slug: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """项目看板：每个按流程执行的任务做到第几步（卡片上的流程进度标记）。"""
+    if not principal.is_admin and engagement_slug not in principal.engagement_slugs:
+        raise HTTPException(status_code=404, detail="项目不存在或无权访问")
+    return {"items": sop_progress.board_summaries(context.engine, engagement_slug)}
+
+
 @router.get("/work-items/{work_item_id}/sop")
 def work_item_sop(
     work_item_id: str,

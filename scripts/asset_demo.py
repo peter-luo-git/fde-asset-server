@@ -346,8 +346,10 @@ def run_demo(data_dir: Path, *, verbose: bool = True, database_url: str = "") ->
             ).json()
             _check(again["reused"], "同一组合应复用快照目录")
             path = Path(first["path"])
-            for sub in ("rules", "skills", "sops", "knowledge"):
+            for sub in ("rules", "skills", "knowledge"):
                 _check((path / sub).exists(), f"快照缺少 {sub}/")
+            # 2026-10-25 起 SOP 只用于执行任务，不进资产包
+            _check(not (path / "sops").exists(), "SOP 不应进快照")
             index_text = (path / "knowledge" / "INDEX.md").read_text(encoding="utf-8")
             _check(
                 "[[case/oracle-to-pg-sequence-gap]]" in index_text, "知识索引应包含公司级问题资产"
@@ -358,7 +360,7 @@ def run_demo(data_dir: Path, *, verbose: bool = True, database_url: str = "") ->
             )
             state["snapshot_sha"] = first["sha"]
             return [
-                f"快照 {first['sha']}，四个目录齐全，第二次调用复用（reused={again['reused']}）",
+                f"快照 {first['sha']}，三个目录齐全（SOP 不进快照），第二次调用复用（reused={again['reused']}）",
                 f"三层合并后的技能：{skills}",
                 f"knowledge/INDEX.md {first['index_bytes']} 字节，裁剪={first['index_truncated']}",
             ]

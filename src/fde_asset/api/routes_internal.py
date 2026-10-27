@@ -473,6 +473,27 @@ def work_item_sop_report(
     return outcome
 
 
+@router.get("/skill-deps/wanted", dependencies=[Depends(require_service_key)])
+def skill_deps_wanted(context: ServiceContext = Depends(get_context)) -> dict[str, Any]:
+    """已入库技能声明的依赖清单（去重）：worker 评审通过后就预装。"""
+    from fde_asset.modules.asset import skill_deps
+
+    return {"items": skill_deps.wanted(context.engine)}
+
+
+@router.post("/skill-deps/status", dependencies=[Depends(require_service_key)])
+def skill_deps_report(
+    payload: dict[str, Any] = Body(...), context: ServiceContext = Depends(get_context)
+) -> dict[str, Any]:
+    """worker 回报依赖安装状态（就绪、失败原因、大小）。"""
+    from fde_asset.modules.asset import skill_deps
+
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise HTTPException(status_code=422, detail="items 要是列表")
+    return {"saved": skill_deps.record_status(context.engine, items)}
+
+
 @router.post("/skill-trials/claim", dependencies=[Depends(require_service_key)])
 def claim_skill_trial(context: ServiceContext = Depends(get_context)) -> dict[str, Any]:
     """fde-server worker 领一个待试跑的技能：技能目录（base64）和要跑的命令。没有就是 {}。"""

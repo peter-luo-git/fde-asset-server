@@ -38,3 +38,7 @@
 2026-10-22 | obsolete-code-20261022 | Root删除已替代且无调用的10声明/9文件，researcher_runtime_asset只读取证；隔离PG定向152通过/1项Docker未选择，Ruff通过；清单/初次环境失败及复验证据见operations/agent-contributions/obsolete-code-20261022/audit.json；无全量/E2E/推送/部署。
 
 2026-10-23 | asset-git-reaping-20261023 | Root实施；reviewer_docs_reaping只读审查 | Git调用统一前台自动维护，覆盖本地与Gitea路径；Linux子reaper回归主动收集失败场景的后台进程；Git2.47.3真实隔离回归改前2失败/改后2通过，相关pytest10通过，Ruff/格式检查通过；官方Git机制与版本见README，配套fde-deploy资产服务init配置；无全量/E2E/真实模型/推送/部署，任务证据在工作区.run/asset-git-reaping-20261023。
+
+- 2026-10-27 dev1005 e4d2bdb 合并相关评审：通过；124项相关pytest、隔离PG0014升级/降级再升级及契约生成核验通过；仅相关验证，未做全量/E2E/真实模型/部署。
+
+- 2026-10-27 reviewer_docs 文档复核：通过；核对0014、依赖状态/容量、SOP看板与turn_id保留及三类示范技能许可；README已覆盖，Specs镜像104路径字节一致；测试与PG结果采用实施记录，未重跑测试或访问线上；贡献见operations/agent-contributions/dev1005-update-20261027/reviewer_docs.md。

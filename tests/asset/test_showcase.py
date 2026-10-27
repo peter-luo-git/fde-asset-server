@@ -72,3 +72,58 @@ def test_old_default_skill_source_is_replaced(client) -> None:
     assert urls == ["https://github.com/deepseek-ai/deepseek-harness"]
     with ctx.engine.connect() as conn:
         assert len(conn.execute(select(skill_sources)).fetchall()) == 1
+
+
+def test_solar_term_poems_script_reports_term_festival_and_source_poems(tmp_path) -> None:
+    """节气诗笺：脚本只用标准库；日期落在节气、节日上要对，古诗原文来自数据文件、不编造。"""
+    import json
+    import subprocess
+    import sys
+
+    from fde_asset.modules.asset import showcase_content
+
+    files = showcase_content._folder("fcp-solar-term-poems")
+    for relative, text in files.items():
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+
+    def today(day: str) -> dict:
+        output = subprocess.run(
+            [sys.executable, "-I", str(tmp_path / "scripts/today.py"), day],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        return json.loads(output)
+
+    frost = today("2026-10-26")
+    assert (frost["solar_term"], frost["is_term_day"], frost["days_into_term"]) == (
+        "霜降",
+        False,
+        3,
+    )
+    assert (frost["next_term"], frost["days_to_next_term"], frost["season"]) == ("立冬", 12, "秋")
+    assert any(p["title"] == "山行" and p["author"] == "杜牧" for p in frost["poems"])
+    mid_autumn = today("2026-09-25")
+    assert mid_autumn["festival"] == "中秋" and mid_autumn["poems"][0]["title"].startswith(
+        "十五夜望月"
+    )
+    assert today("2025-12-21")["is_term_day"] is True
+    assert "error" in today("2040-01-01")
+    library = json.loads(files["references/poems.json"])["poems"]
+    # 二十四节气每个至少一首，全部写明作者和朝代
+    assert (
+        len(
+            [
+                k
+                for k in library
+                if len(k) == 2
+                and k not in {"春节", "元宵", "端午", "七夕", "中秋", "重阳", "除夕", "腊八"}
+            ]
+        )
+        == 24
+    )
+    assert all(
+        p["author"] and p["dynasty"] and p["lines"] for poems in library.values() for p in poems
+    )

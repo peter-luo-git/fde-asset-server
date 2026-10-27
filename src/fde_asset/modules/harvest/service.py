@@ -813,8 +813,21 @@ def run_checks(
                         "不声明的话 Agent 执行时会找不到",
                     }
                 )
+            if deps["key"]:
+                # worker 回报的安装状态：评审页显示"已就绪 / 安装失败（原因）"
+                deps["install"] = skill_deps.status_of(engine, deps["key"])
             if deps["declared"] and candidate["scope"] == "user":
                 used = _personal_skills_with_deps(engine, candidate)
+                total = skill_deps.personal_bytes(engine, set(used.values()) | {deps["key"]})
+                if total > skill_deps.PERSONAL_BYTES_LIMIT:
+                    findings.append(
+                        {
+                            "code": "personal_deps_bytes_limit",
+                            "message": f"你的个人技能依赖合计已有 {total // (1024 * 1024)} MB，"
+                            f"超过上限 {skill_deps.PERSONAL_BYTES_LIMIT // (1024 * 1024)} MB；"
+                            "请先删掉不用的个人技能再提交",
+                        }
+                    )
                 if len(used) >= skill_deps.PERSONAL_LIMIT:
                     findings.append(
                         {
@@ -898,8 +911,8 @@ def run_checks(
     return checks
 
 
-def _personal_skills_with_deps(engine: Engine, candidate: dict[str, Any]) -> set[str]:
-    """这个人已经入库的、带依赖的个人技能（按标识去重，不含这一份）。"""
+def _personal_skills_with_deps(engine: Engine, candidate: dict[str, Any]) -> dict[str, str]:
+    """这个人已经入库的、带依赖的个人技能：{标识: 依赖键}（不含这一份）。"""
     with engine.connect() as conn:
         rows = conn.execute(
             select(harvest_candidates.c.name, harvest_candidates.c.checks_json).where(
@@ -910,11 +923,14 @@ def _personal_skills_with_deps(engine: Engine, candidate: dict[str, Any]) -> set
                 harvest_candidates.c.name != candidate["name"],
             )
         ).fetchall()
-    names = set()
+    from fde_asset.modules.asset import skill_deps
+
+    names: dict[str, str] = {}
     for row in rows:
         checks = json.loads(row.checks_json or "{}")
-        if ((checks.get("skill") or {}).get("deps") or {}).get("declared"):
-            names.add(row.name)
+        declared = ((checks.get("skill") or {}).get("deps") or {}).get("declared")
+        if declared:
+            names[row.name] = skill_deps.deps_key(declared)
     return names
 
 

@@ -1,6 +1,6 @@
 # fde-asset-server
 
-文档版本：0.9（2026-10-26）。本轮同步 `peter-luo-git/fde-asset-server` 的 `dev1005`（`9a812e3`）源码与契约；下文历史测试、现场切换和 `tasks/ENV_BLOCKERS.md` 的上游环境记录保留原时点，不代表当前服务器已升级为 PostgreSQL、启用回调或完成模型验收。
+文档版本：1.0（2026-10-27）。本轮同步 `peter-luo-git/fde-asset-server` 的 `dev1005`（`e4d2bdb`）源码与契约；下文历史测试、现场切换和 `tasks/ENV_BLOCKERS.md` 的上游环境记录保留原时点，不代表当前服务器已升级为 PostgreSQL、启用回调或完成模型验收。
 
 FDE 协同平台的**资产中心服务**：索引、目录、沉淀、评审、分发与复用计量。
 
@@ -42,7 +42,7 @@ make worker                 # 另一个终端：索引轮询与快照生成
 make demo                   # 12 步演示；另配独立空库的 FDE_ASSET_DATABASE_URL
 ```
 
-另一个终端也须加载同一套环境。`FDE_ASSET_DATABASE_URL` 必填，只接受 PostgreSQL；缺失时启动失败，不回退 SQLite。旧库升级涉及 `0009_asset_mandatory`、`0010_visibility_requests`、`0011_checkup_findings`、`0012_sop_execution`、`0013_skill_packages`，当前源码的迁移头为 `0013_skill_packages`；检查迁移头不等于目标数据库已完成升级。
+另一个终端也须加载同一套环境。`FDE_ASSET_DATABASE_URL` 必填，只接受 PostgreSQL；缺失时启动失败，不回退 SQLite。旧库升级涉及 `0009_asset_mandatory`、`0010_visibility_requests`、`0011_checkup_findings`、`0012_sop_execution`、`0013_skill_packages`、`0014_skill_deps_status`，当前源码的迁移头为 `0014_skill_deps_status`；检查迁移头不等于目标数据库已完成升级。
 
 数据默认落在：
 
@@ -57,7 +57,7 @@ Git 子进程回收（2026-10-23 源码修复）：本地仓库与 Gitea 缓存�
 
 ## 本地验证
 
-`make check` 顺序执行 Ruff、格式检查、编译、完整 pytest 与 Alembic heads；检测到 `uv` 时最后还执行 `uv lock --check`。测试只用 PostgreSQL：每个用例在测试库服务器上建临时库、跑完删掉，测试账号须有建库权限；服务器默认是 `make test-db` 起的本机容器（127.0.0.1:55432），别处用 `FDE_ASSET_TEST_DATABASE_URL` 指定。契约测试也使用本例独占库；独立契约生成命令仍需提供 `FDE_ASSET_DATABASE_URL`。
+`make check` 顺序执行 Ruff、格式检查、编译、完整 pytest 与 Alembic heads；检测到 `uv` 时最后还执行 `uv lock --check`。测试只用 PostgreSQL：每个用例在测试库服务器上建临时库、跑完删掉，测试账号须有建库权限；服务器默认是 `make test-db` 起的本机容器（127.0.0.1:55432），别处用 `FDE_ASSET_TEST_DATABASE_URL` 指定。契约测试只使用真实路由声明生成 OpenAPI，跳过数据库上下文初始化；独立契约生成命令仍需提供指向隔离测试库的 `FDE_ASSET_DATABASE_URL`。
 
 默认测试不读取 `.env.local`，并移除继承的模型配置。真实模型专项需本轮授权后显式运行 `pytest --live-model tests/asset/test_rerank.py::test_real_model_reranks_and_explains`，只从明确传入的进程环境取配置；已启用却缺配置、服务失败或退回关键词排序均失败。真实容器专项需 `--docker-integration -m docker`；未启用记为跳过，启用后的构建/运行失败不能转成skip。静态容器权限检查始终执行。
 
@@ -107,11 +107,19 @@ Root已构建`18023df`候选镜像，在现有数据副本验证迁移20个旧�
 
 Gitea 推送同步需配置 `FDE_ASSET_GITEA_WEBHOOK_URL`、Gitea 地址与服务密钥，服务启动时尝试注册 `/internal/v1/gitea-push`，以派生密钥核验 `X-Gitea-Signature`。注册失败或未配置时沿用轮询，`FDE_ASSET_GITEA_SYNC_SECONDS` 默认改为300秒；本轮没有修改运行环境的 Gitea 白名单或回调。对外契约由 `scripts/export_openapi.py` 生成到 `contracts/asset-v1.yaml`，同步至 Specs 的 `contracts/openapi/asset-v1.yaml`，不要手改生成输出。
 
+### 技能依赖状态与人文示范技能
+
+已入库 Skill 声明的依赖通过服务密钥保护的 `GET /internal/v1/skill-deps/wanted` 去重提供给 Server worker；worker 用 `POST /internal/v1/skill-deps/status` 回报 `ready`、`failed`、`installing` 或 `missing`、安装字节数和原因。依赖键沿用 `fde-skill-deps/v1` 与 `cp311-debian12` 算法；状态保存在 `0014_skill_deps_status` 新表，评审检查结果可展示安装状态。个人带依赖技能仍最多10个，新增安装大小合计1 GiB上限，同一依赖键只计算一次；该大小按 worker 已回报记录计算，未知大小不代表安装完成。真实在线依赖安装到 Agent 执行的端到端链路尚需独立验收。
+
+示范库新增节气诗笺、苏东坡视角和成语锦囊。管理员安装仍走现有草稿、检查和入库流程；源文件中的 MIT 许可及诗文/历法来源声明随完整技能目录保留。节气诗笺脚本使用预生成日历和古诗数据，不在运行时安装历法库；离线脚本测试不等同模型实际使用验收。
+
 ### 任务资产关联与 SOP 调用权限
 
 任务讨论与执行日志由 Server 的任务/会话记录保存；资产中心保存可复用 SOP、冻结的任务流程版本与检查点进度，不把讨论原消息自动转成资源资产。绑定 SOP 时，请求体为 `{asset_id, role: "sop_step", sop_step}`；步骤必须是流程里实际存在的整数。绑定后冻结步骤与版本，新版通过任务的 `/sop/refresh` 显式刷新。当前检查点未完成时推进返回409，需显式 `force: true` 并留痕；只有设置自动推进且全部机器检查通过才自动进入下一步。SOP 不能以 `reference` 角色关联。`engagement_slug` 可省略，提供时必须与任务真实所属项目一致，不能据此获得任务权限。
 
 通过 `PUT /api/v1/sop-defaults` 为公司、部门、客户或项目设默认流程，最具体范围优先；只为设定后创建、且平台提供创建时间的任务在首次读取或执行时自动绑定。任务可删除 `/sop-step` 明确退出，防止默认流程再次绑定。检查点分命令、交付物、确认和判断：Agent 对机器检查的通过声明需平台 `verified` 和证据；确认与判断由人确认，Agent 声明通过只进入待确认状态。流程推进不替代任务最终验收。
+
+项目看板可读取 `GET /api/v1/engagements/{engagement_slug}/sop-board` 批量获取已绑定任务的冻结步骤摘要、当前检查点通过/待确认/失败计数；接口要求项目成员或管理员，未绑定任务不出现在结果中。人工确认或退回检查点时保留原 Agent 回报的 `turn_id`，便于定位该轮回复。
 
 platform 模式下，每次任务资产的列表、绑定、更换、删除和步骤摘要请求都会使用服务密钥访问 Server 的 `GET /internal/identity/work-items/{work_item_id}/access?username=...&write=...`，核验当前调用者的任务读写权限并取得真实 `engagement_slug`。任务授权结果不缓存：读者不能执行绑定、删除或 `lock=true`；任务不可读或平台隐藏的写拒绝返回404，本地 viewer 或上游显式禁止返回403，平台连接或响应异常返回503。资产可见性仍单独核对；列表不返回不可见资产，步骤摘要不泄露其内容。旧关联的空项目字段只在任务已通过可信核验后兼容，更新时补全；非空但与真实归属冲突的关联拒绝访问。
 
@@ -125,6 +133,7 @@ dev 模式只接受 `directory.json` 中 `work_items` 显式登记的任务，�
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-10-27 | 1.0 | 同步 dev1005 e4d2bdb：依赖安装状态/个人容量、SOP看板与轮次保留、人文示范技能；核对0014迁移和相关契约。 |
 | 2026-10-26 | 0.9 | 同步 dev1005 9a812e3 的任务流程、技能供应与新迁移；保留独立的关联权限复核和解除能力，仅执行相关验证。 |
 | 2026-10-19 | 0.8 | 同步 PostgreSQL 必配与测试前置、0009～0011迁移、必选组包、修订与范围视图拒绝、每日保留策略及推送回调；保留历史现场和上游环境边界。 |
 | 2026-10-16 | 0.7 | 补充任务资产真实归属与逐次读写授权、SOP调用者上下文、dev任务映射及配对升级顺序；讨论记录仍归Server管理。 |

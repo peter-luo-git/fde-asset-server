@@ -6,6 +6,7 @@ SOP 的步骤用「技能：」点名配套的技能——任务按流程执行�
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 SHOWCASE_TAG = "示范资产"
@@ -805,6 +806,19 @@ ENGLISH_REFERENCE = """# 常见错误类别
 """
 
 
+FILES_DIR = Path(__file__).with_name("showcase_files")
+
+
+def _folder(name: str) -> dict[str, str]:
+    """示范技能文件多（引入的现成技能、数据表）时放在 showcase_files/<名字>/ 下，按相对路径读进来。"""
+    root = FILES_DIR / name
+    return {
+        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and "__pycache__" not in path.parts
+    }
+
+
 def _skill(
     name: str, title: str, summary: str, suitable: str, not_suitable: str, files: dict[str, str]
 ) -> dict[str, Any]:
@@ -915,6 +929,31 @@ SHOWCASE: list[dict[str, Any]] = [
         "整篇文档的专业翻译",
         {"SKILL.md": ENGLISH_SKILL, "references/常见错误.md": ENGLISH_REFERENCE},
     ),
+    # 人文类（2026-10-26）：现成技能和开源数据拼装，来源与许可写在各自的 LICENSE 文件里
+    _skill(
+        "fcp-solar-term-poems",
+        "节气诗笺（示范）",
+        "给个日期，说出节气和节日、配上古诗原文，再按格律写一首应景的新诗，可排成诗笺网页",
+        "周会开场、节日问候、项目里程碑、团队氛围",
+        "需要严格学术考证的诗词研究",
+        _folder("fcp-solar-term-poems"),
+    ),
+    _skill(
+        "fcp-sudongpo-perspective",
+        "苏东坡视角（示范）",
+        "用苏轼的旷达心态和生活美学陪你聊挫折、迷茫和生活趣味，回答里自然引用东坡诗词",
+        "工作之余的人生困惑、想换个心态看问题",
+        "技术问题、严谨的学术论证、需要专业帮助的心理问题",
+        _folder("fcp-sudongpo-perspective"),
+    ),
+    _skill(
+        "fcp-chengyu-jinnang",
+        "成语锦囊（示范）",
+        "用一个成语点出眼下的状况和该怎么做（釜底抽薪、抛砖引玉……），需要时再讲典故",
+        "排查问题、做计划、会后复盘时给团队一个好记的说法",
+        "正式文档里的措辞润色",
+        _folder("fcp-chengyu-jinnang"),
+    ),
 ]
 
 TRY_SKILL = {
@@ -923,6 +962,12 @@ TRY_SKILL = {
     "fcp-markdown-slides": "在私聊里说「帮我做一份运维看板项目周报的 PPT 提纲」，看 Agent 是否先问受众、再按每页一个结论写",
     "fcp-pptx-builder": "在私聊里说「把运维看板项目周报做成 PPT 文件」，看 Agent 是否先写页面稿、再转成 .pptx 并核对页数；"
     "生成的文件在工作目录的 slides/ 下",
+    "fcp-solar-term-poems": "在私聊里说「今天是什么节气？给团队写首诗做周会开场，排成诗笺」，"
+    "看 Agent 是否先跑脚本拿节气和古诗原文、照抄原文，再写一首标「新作」的七绝，诗笺在工作目录的 poems/ 下",
+    "fcp-sudongpo-perspective": "在私聊里说「用苏东坡的视角聊聊：项目延期被批评了，心里有点堵」，"
+    "看回答是否先共情、自嘲破冰，再给具体可做的建议，并自然引用东坡诗词",
+    "fcp-chengyu-jinnang": "在私聊里说「给我个锦囊：线上偶发报错，我已经加了三次重试还是不行」，"
+    "看 Agent 是否只点一个成语（如釜底抽薪）就停下；再问「什么意思」，看是否四句话讲完典故",
     "fcp-english-sentence-coach": "在私聊里说「我想练英语：把『这个问题我们下周再讨论』翻成英文」，看 Agent 是否先让你自己写",
 }
 for _item in SHOWCASE:

@@ -7,8 +7,9 @@ import yaml
 from scripts.export_openapi import CONTRACT, build_spec, render
 
 
-def test_contract_file_matches_the_code(settings, monkeypatch) -> None:
-    monkeypatch.setenv("FDE_ASSET_DATABASE_URL", settings.database_target())
+def test_contract_file_matches_the_code(monkeypatch) -> None:
+    # OpenAPI 取自真实路由声明；契约测试不启动服务或接触继承的业务数据库配置。
+    monkeypatch.setattr("fde_asset.api.app.build_context", lambda _settings: None)
     assert CONTRACT.exists(), "先运行 python scripts/export_openapi.py 生成契约"
     assert CONTRACT.read_text(encoding="utf-8") == render(build_spec()), (
         "接口变了但契约没更新：运行 python scripts/export_openapi.py 后一起提交"

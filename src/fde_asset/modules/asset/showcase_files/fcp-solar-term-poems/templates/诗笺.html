@@ -1,0 +1,59 @@
+<!doctype html>
+<!--
+  诗笺模板：把 {{…}} 换成内容后另存为 poems/<日期>-<节气>.html，浏览器打开即可截图。
+  不引用任何外部资源（字体、图片、脚本），离线可用。
+  古诗原文按 today.py 的输出照抄；新作标「新作」。每句一个 <p>。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{节气或节日}} · 诗笺</title>
+<style>
+  :root { --paper:#f6f1e4; --ink:#2b2622; --muted:#7a6f63; --seal:#b23a2e; --line:#d9cdb5; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#e9e2d2; font-family:"Songti SC","STSong","Noto Serif CJK SC","Source Han Serif SC","SimSun",serif; color:var(--ink); }
+  .card { width:min(720px, 100vw - 32px); background:var(--paper); padding:40px 44px 36px; position:relative;
+          box-shadow:0 12px 36px rgba(60,40,20,.18); border:1px solid var(--line); }
+  .card::before { content:""; position:absolute; inset:12px; border:1px solid var(--line); pointer-events:none; }
+  header { display:flex; justify-content:space-between; align-items:baseline; border-bottom:1px solid var(--line); padding-bottom:12px; }
+  .term { font-size:40px; letter-spacing:.3em; }
+  .date { color:var(--muted); font-size:14px; letter-spacing:.1em; text-align:right; line-height:1.7; }
+  .season { margin:18px 0 6px; color:var(--muted); font-size:15px; line-height:1.9; }
+  .poems { display:flex; flex-direction:row-reverse; gap:36px; justify-content:center; margin:26px 0 10px; }
+  .poem { writing-mode:vertical-rl; text-orientation:upright; font-size:21px; line-height:2.1; letter-spacing:.18em; }
+  .poem h2 { font-size:17px; margin:0 0 0 14px; color:var(--muted); font-weight:normal; letter-spacing:.2em; }
+  .poem p { margin:0 0 0 4px; }
+  .poem.new p { color:#1f3a5f; }
+  .seal { position:absolute; right:40px; bottom:34px; width:56px; height:56px; border:2px solid var(--seal); color:var(--seal);
+          font-size:15px; display:grid; place-items:center; text-align:center; line-height:1.15; transform:rotate(-4deg); }
+  footer { margin-top:20px; color:var(--muted); font-size:12px; letter-spacing:.05em; }
+  @media (max-width:560px) { .poems { flex-direction:column; align-items:center; } .poem { writing-mode:horizontal-tb; text-orientation:mixed; }
+                              .poem h2 { margin:0 0 6px; } .term { font-size:30px; } }
+</style>
+</head>
+<body>
+  <article class="card">
+    <header>
+      <div class="term">{{霜降}}</div>
+      <div class="date">{{2026年10月26日 星期一}}<br>{{霜降第三日 · 十二日后立冬}}</div>
+    </header>
+    <p class="season">{{两三句物候和风俗}}</p>
+    <section class="poems">
+      <div class="poem">
+        <h2>{{杜牧〈山行〉}}</h2>
+        <p>{{远上寒山石径斜}}</p>
+        <p>{{白云生处有人家}}</p>
+      </div>
+      <div class="poem new">
+        <h2>新作 · {{题目}}</h2>
+        <p>{{第一句}}</p>
+        <p>{{第二句}}</p>
+      </div>
+    </section>
+    <div class="seal">{{节气<br>诗笺}}</div>
+    <footer>古诗原文：chinese-poetry 数据集 · 新作：{{团队或作者署名}}</footer>
+  </article>
+</body>
+</html>
