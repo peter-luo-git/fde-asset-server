@@ -197,7 +197,8 @@ def _checked_upload(
     if candidate["kind"] == "Skill" and any(
         skill_package.is_script(path, text) for path, text in files.items()
     ):
-        background.add_task(_model_review_in_background, context.engine, candidate_id, files)
+        if skill_checks.MODEL_REVIEW_ENABLED:
+            background.add_task(_model_review_in_background, context.engine, candidate_id, files)
     return candidate
 
 
@@ -286,7 +287,8 @@ def put_skill_file(
     service.run_checks(context.engine, candidate_id, _scan_context(context))
     changed_script = skill_package.is_script(path, content or candidate["files"].get(path, ""))
     if changed_script and any(skill_package.is_script(p, t) for p, t in package.items()):
-        background.add_task(_model_review_in_background, context.engine, candidate_id, package)
+        if skill_checks.MODEL_REVIEW_ENABLED:
+            background.add_task(_model_review_in_background, context.engine, candidate_id, package)
     return service.get_candidate(context.engine, candidate_id)
 
 
@@ -302,6 +304,8 @@ def skill_model_review(
     candidate = get_candidate(candidate_id, context, principal)
     if candidate["kind"] != "Skill":
         raise HTTPException(status_code=422, detail="只有技能有模型通读")
+    if not skill_checks.MODEL_REVIEW_ENABLED:
+        raise HTTPException(status_code=409, detail="模型通读已关闭")
     return skill_checks.model_review(
         context.engine, candidate_id, candidate["files"], _model_llm(context.engine)
     )

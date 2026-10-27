@@ -621,7 +621,11 @@ def _refresh_skill_checks(engine: Engine, data: dict[str, Any]) -> None:
             if isinstance(report, dict):
                 skill["default_executables"] = skill_package.default_executables(report, live)
                 skill["tickable"] = skill_package.allowed_to_tick(report, live)
-    skill["model"] = skill_checks.model_for(engine, data.get("files") or {})
+    skill["model"] = (
+        skill_checks.model_for(engine, data.get("files") or {})
+        if skill_checks.MODEL_REVIEW_ENABLED
+        else None
+    )
 
 
 def merge_files(engine: Engine, candidate_id: str, files: dict[str, str]) -> dict[str, Any]:
@@ -891,7 +895,9 @@ def run_checks(
                 "deps": deps,
                 "report": report,
                 "trial": trial,
-                "model": skill_checks.model_for(engine, package_files),
+                "model": skill_checks.model_for(engine, package_files)
+                if skill_checks.MODEL_REVIEW_ENABLED
+                else None,
                 "hints": hints,
                 "default_executables": skill_package.default_executables(report, trial),
                 "tickable": skill_package.allowed_to_tick(report, trial),

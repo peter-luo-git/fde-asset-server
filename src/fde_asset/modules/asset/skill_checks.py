@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import Any
@@ -269,6 +270,9 @@ def trial_for(engine: Engine, files: dict[str, str], selftest: str = "") -> dict
         return view(_row(conn, digest({**files, "\0selftest": selftest}), "trial"))
 
 
+#: 技能的模型通读（2026-10-27 默认关闭）：当前配的模型 2 分钟内读不完，页面只会显示失败。把关靠规则扫描、
+#: 断网试跑和评审人勾选可执行脚本。换了够快的模型后设 FDE_ASSET_SKILL_MODEL_REVIEW=1 重新打开。
+MODEL_REVIEW_ENABLED = os.environ.get("FDE_ASSET_SKILL_MODEL_REVIEW") == "1"
 MODEL_REVIEW_VERSION = "2"
 MODEL_SYSTEM = (
     "你是安全评审助手。下面是一个要放进 AI Agent 环境的技能（Skill）目录：先是说明文字，后面是脚本源码。"
