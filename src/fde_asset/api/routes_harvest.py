@@ -220,6 +220,64 @@ def _model_review_in_background(engine, candidate_id: str, files: dict[str, str]
         logger.exception("skill model review failed for %s", candidate_id)
 
 
+@router.put("/harvest-candidates/{candidate_id}/skill-files")
+def put_skill_file(
+    candidate_id: str,
+    background: BackgroundTasks,
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """在网页上改技能草稿里的任意文件：`path` + `content`（新建或覆盖）；`content` 为 null 表示删除。
+
+    asset.yaml、附件走各自的入口；主文件 SKILL.md 不能删。改完重跑扫描和依赖检查，改了脚本再在后台让模型通读。
+    """
+    from fde_asset.modules.asset import skill_checks, skill_package
+
+    candidate = get_candidate(candidate_id, context, principal)
+    if candidate["kind"] != "Skill":
+        raise HTTPException(status_code=422, detail="只有技能草稿能这样改文件")
+    if candidate["status"] != "draft":
+        raise HTTPException(status_code=409, detail="只有草稿可以修改")
+    if candidate["created_by"] != principal.user_id:
+        raise HTTPException(status_code=403, detail="只有草稿作者能改文件")
+    path = skill_package._clean_path(str(payload.get("path") or ""))
+    if path is None or path == "asset.yaml" or path.startswith("attachments/"):
+        raise HTTPException(
+            status_code=422,
+            detail="文件路径不对：要用技能目录里的相对路径，不能改 asset.yaml 和附件",
+        )
+    content = payload.get("content")
+    files = dict(candidate["files"])
+    main = KIND_RULES["Skill"].main_file
+    if content is None:
+        if path == main:
+            raise HTTPException(status_code=422, detail=f"{main} 是技能的主文件，不能删")
+        if path not in files:
+            raise HTTPException(status_code=404, detail="没有这个文件")
+        files.pop(path)
+    else:
+        if not isinstance(content, str):
+            raise HTTPException(status_code=422, detail="content 要是文字")
+        if len(content.encode("utf-8")) > skill_package.MAX_FILE_BYTES:
+            raise HTTPException(status_code=413, detail="单个文件最大 1MB")
+        files[path] = content
+    package = skill_checks.skill_files(files)
+    if len(package) > skill_package.MAX_FILES:
+        raise HTTPException(status_code=413, detail=f"技能最多 {skill_package.MAX_FILES} 个文件")
+    if sum(len(text.encode("utf-8")) for text in package.values()) > skill_package.MAX_TOTAL_BYTES:
+        raise HTTPException(status_code=413, detail="技能文件合计最大 5MB")
+    try:
+        service.update_candidate(context.engine, candidate_id, files)
+    except service.HarvestError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    service.run_checks(context.engine, candidate_id, _scan_context(context))
+    changed_script = skill_package.is_script(path, content or candidate["files"].get(path, ""))
+    if changed_script and any(skill_package.is_script(p, t) for p, t in package.items()):
+        background.add_task(_model_review_in_background, context.engine, candidate_id, package)
+    return service.get_candidate(context.engine, candidate_id)
+
+
 @router.post("/harvest-candidates/{candidate_id}/skill-model-review")
 def skill_model_review(
     candidate_id: str,
