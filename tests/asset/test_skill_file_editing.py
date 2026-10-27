@@ -7,7 +7,14 @@ import pytest
 
 from fde_asset.api import routes_harvest
 from fde_asset.modules.asset import skill_checks, skill_package
-from tests.asset.test_skill_packages import SKILL_MD, _as, _upload, service  # noqa: F401
+from tests.asset.test_skill_packages import (
+    SKILL_MD,
+    HEADERS,
+    _as,
+    _upload,
+    _fill_and_submit,
+    service,  # noqa: F401
+)
 
 
 @pytest.fixture(autouse=True)
@@ -37,22 +44,60 @@ def endpoint(candidate):
     return f"/api/v1/harvest-candidates/{candidate['candidate_id']}/skill-files"
 
 
-def test_upload_and_script_edit_refresh_model_checks_for_current_files(service, fake_model):
+def test_model_review_runs_on_submit_only_and_progress_is_live(service, fake_model, monkeypatch):
+    monkeypatch.setattr(skill_checks, "MODEL_REVIEW_ENABLED", True)
     candidate = draft(service, script=True)
+    path = endpoint(candidate).removesuffix("/skill-files")
     assert candidate["checks"]["skill"]["trial"]["status"] == "pending"
-    assert len(fake_model) == 1 and "print('old')" in fake_model[0]
-    current = service.get(endpoint(candidate).removesuffix("/skill-files")).json()
-    assert current["checks"]["skill"]["model"]["status"] == "done"
+    assert fake_model == []
     changed = service.put(
         endpoint(candidate), json={"path": "scripts/run.py", "content": "print('new')\n"}
     )
     assert changed.status_code == 200, changed.text
-    refreshed = service.get(endpoint(candidate).removesuffix("/skill-files")).json()
-    assert refreshed["checks"]["skill"]["model"]["status"] == "done"
-    assert len(fake_model) == 2 and "print('new')" in fake_model[-1]
-    assert (
-        refreshed["checks"]["skill"]["trial"]["id"] != candidate["checks"]["skill"]["trial"]["id"]
+    assert fake_model == []
+    progress = service.get(path + "/skill-progress").json()
+    assert progress["trial"]["status"] == "pending"
+    assert progress["trial"]["queue_ahead"] == 1
+    assert progress["trial"]["plan"][0]["label"] == "语法检查 scripts/run.py"
+    assert progress["model"] is None
+    # Drain the old digest's job, then complete the current digest's trial.
+    for _ in range(2):
+        job = service.post("/internal/v1/skill-trials/claim", headers=HEADERS).json()
+        service.post(
+            f"/internal/v1/skill-trials/{job['id']}/result",
+            json={
+                "steps": [{"id": step["id"], "ok": True, "exit_code": 0} for step in job["plan"]]
+            },
+            headers=HEADERS,
+        ).raise_for_status()
+    progress = service.get(path + "/skill-progress").json()
+    assert progress["trial"]["status"] == "passed"
+    assert progress["trial"]["claimed_at"]
+    current = service.get(path).json()
+    assert current["checks"]["skill"]["tickable"] == ["scripts/run.py"]
+    submitted = _fill_and_submit(service, candidate)
+    assert submitted.status_code == 200, submitted.text
+    assert len(fake_model) == 1 and "print('new')" in fake_model[0]
+    assert service.get(path + "/skill-progress").json()["model"]["status"] == "done"
+
+
+def test_disabled_model_review_hides_cached_result_and_rejects_manual_run(
+    service, fake_model, monkeypatch
+):
+    candidate = draft(service, script=True)
+    path = endpoint(candidate).removesuffix("/skill-files")
+    skill_checks.model_review(
+        service.app.state.context.engine,
+        candidate["candidate_id"],
+        candidate["files"],
+        routes_harvest._model_llm(None),
     )
+    monkeypatch.setattr(skill_checks, "MODEL_REVIEW_ENABLED", False)
+    assert service.get(path).json()["checks"]["skill"]["model"] is None
+    assert service.get(path + "/skill-progress").json()["model"] is None
+    assert service.post(path + "/skill-model-review").status_code == 409
+    _as(service, "zhao")
+    assert service.get(path + "/skill-progress").status_code == 403
 
 
 def test_author_edit_text_and_delete_refreshes_checks_without_model(service, fake_model):

@@ -67,6 +67,10 @@ class CandidateInput:
     visibility: list[str] = field(default_factory=list)
 
 
+#: 规范正文上限：平台把规范整篇写进 Agent 的系统提示词，单份超过就跳过、合计超过 60KB 整个快照失败
+RULE_MAX_BYTES = 20_000
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -598,9 +602,35 @@ def get_candidate(engine: Engine, candidate_id: str) -> dict[str, Any]:
     data["checks"] = json.loads(data.pop("checks_json") or "{}")
     data["visibility"] = json.loads(data.pop("visibility_json", None) or "[]")
     data["revises_asset_id"] = data.get("revises_asset_id") or ""
+    data["attachment_summaries"] = attachment_summaries(data["files"])
     for key in ("created_at", "updated_at"):
         data[key] = data[key].isoformat()
+    _refresh_skill_checks(engine, data)
     return data
+
+
+def _refresh_skill_checks(engine: Engine, data: dict[str, Any]) -> None:
+    """检查结果是跑检查那一刻存下的；试跑和模型通读在后台进行，读草稿时换成它们现在的状态，
+    否则页面一直停在「排队等试跑」，评审人也勾不了试跑已通过的脚本。"""
+    skill = (data.get("checks") or {}).get("skill")
+    if data.get("kind") != "Skill" or not isinstance(skill, dict):
+        return
+    from fde_asset.modules.asset import skill_checks, skill_package
+
+    trial = skill.get("trial")
+    if isinstance(trial, dict) and trial.get("id"):
+        live = skill_checks.trial_progress(engine, int(trial["id"]))
+        if live is not None:
+            skill["trial"] = live
+            report = skill.get("report")
+            if isinstance(report, dict):
+                skill["default_executables"] = skill_package.default_executables(report, live)
+                skill["tickable"] = skill_package.allowed_to_tick(report, live)
+    skill["model"] = (
+        skill_checks.model_for(engine, data.get("files") or {})
+        if skill_checks.MODEL_REVIEW_ENABLED
+        else None
+    )
 
 
 def merge_files(engine: Engine, candidate_id: str, files: dict[str, str]) -> dict[str, Any]:
@@ -659,11 +689,101 @@ def detach_file(
         if path != f"{ATTACHMENT_PREFIX}{name}"
     }
     store.delete(candidate_id, name)
+    files = _with_summary(files, name, None)
     return update_candidate(engine, candidate_id, files)
 
 
 def read_attachment(candidate_id: str, filename: str, store: BlobStore) -> bytes | None:
     return store.get(candidate_id, filename)
+
+
+#: 草稿里附件摘要暂存在 asset.yaml 的 spec 下（{文件名: 摘要}），入库时写进 spec.attachments 的每一项
+SUMMARY_KEY = "attachmentSummaries"
+SUMMARY_MAX_CHARS = 300
+
+
+def attachment_summaries(files: dict[str, Any]) -> dict[str, str]:
+    import yaml
+
+    try:
+        document = yaml.safe_load(files.get("asset.yaml") or "") or {}
+    except yaml.YAMLError:
+        return {}
+    spec = document.get("spec") if isinstance(document, dict) else None
+    value = (spec or {}).get(SUMMARY_KEY) if isinstance(spec, dict) else None
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): str(v) for k, v in value.items() if v}
+
+
+def _with_summary(files: dict[str, Any], name: str, summary: str | None) -> dict[str, Any]:
+    import yaml
+
+    raw = files.get("asset.yaml") or ""
+    try:
+        document = yaml.safe_load(raw) or {}
+    except yaml.YAMLError:
+        return files
+    if not isinstance(document, dict):
+        return files
+    spec = document.setdefault("spec", {})
+    if not isinstance(spec, dict):
+        return files
+    current = spec.get(SUMMARY_KEY) if isinstance(spec.get(SUMMARY_KEY), dict) else {}
+    current = {str(k): str(v) for k, v in current.items()}
+    if summary:
+        current[name] = summary
+    else:
+        current.pop(name, None)
+    if current:
+        spec[SUMMARY_KEY] = current
+    else:
+        spec.pop(SUMMARY_KEY, None)
+    return {**files, "asset.yaml": yaml.safe_dump(document, allow_unicode=True, sort_keys=False)}
+
+
+def set_attachment_summary(
+    engine: Engine, candidate_id: str, filename: str, summary: str
+) -> dict[str, Any]:
+    """改附件摘要（只有草稿能改）；空字符串表示删掉摘要。"""
+    candidate = get_candidate(engine, candidate_id)
+    if candidate["status"] != "draft":
+        raise HarvestError("只有草稿可以改附件摘要")
+    name = safe_name(filename)
+    if f"{ATTACHMENT_PREFIX}{name}" not in candidate["files"]:
+        raise HarvestError(f"没有这个附件：{name}")
+    summary = " ".join(summary.split())[:SUMMARY_MAX_CHARS]
+    return update_candidate(engine, candidate_id, _with_summary(candidate["files"], name, summary))
+
+
+SUMMARY_SYSTEM = (
+    "你在给一份资料写摘要，摘要会放进 AI 助手的资料目录里，助手靠它判断这份资料什么时候值得打开。"
+    "用中文写 1～3 句、不超过 120 字：这是什么资料（类型、对象、时间或版本），里面有哪些关键内容，"
+    "写什么材料或解决什么问题时用得上。只写资料里有的，不编造；不要客套话。"
+    '只输出 JSON：{"summary": "…"}'
+)
+
+
+def generate_attachment_summary(
+    candidate_id: str, filename: str, store: BlobStore, llm: Any
+) -> str:
+    """让模型读附件提取出的文字（最多前 3 万字）写摘要；只返回，不保存，用户改完再保存。"""
+    name = safe_name(filename)
+    content = store.get(candidate_id, name)
+    if content is None:
+        raise HarvestError(f"没有这个附件：{name}")
+    extraction = extract_text(name, content)
+    if extraction.status != "ok" or not extraction.text.strip():
+        raise HarvestError(
+            f"这个附件提取不出文字（{extraction.detail or extraction.status}），请手写摘要"
+        )
+    if not getattr(llm, "usable", False):
+        raise HarvestError("没有配置模型，请手写摘要")
+    answer = llm.complete_json(SUMMARY_SYSTEM, f"文件名：{name}\n\n{extraction.text[:30000]}")
+    summary = " ".join(str(answer.get("summary") or "").split())
+    if not summary:
+        raise HarvestError("模型没有给出摘要，请重试或手写")
+    return summary[:SUMMARY_MAX_CHARS]
 
 
 def add_dependencies(
@@ -819,6 +939,17 @@ def run_checks(
             directory_name=candidate["name"],
         )
         findings.extend({"code": f.code, "message": f.message} for f in parsed.findings)
+        if candidate["kind"] == "Rule":
+            size = len(main_text.encode("utf-8"))
+            if size > RULE_MAX_BYTES:
+                # 平台装规范时单份超过 20KB 直接跳过（fde-server company_snapshot），这里提前拦住
+                findings.append(
+                    {
+                        "code": "rule_too_large",
+                        "message": f"规范正文 {size // 1024}KB，超过 {RULE_MAX_BYTES // 1000}KB 上限，"
+                        "Agent 收不到；精简正文，或拆成几份规范",
+                    }
+                )
         if candidate["kind"] == "Skill":
             from fde_asset.modules.asset import skill_checks, skill_deps, skill_package
 
@@ -870,7 +1001,9 @@ def run_checks(
                 "deps": deps,
                 "report": report,
                 "trial": trial,
-                "model": skill_checks.model_for(engine, package_files),
+                "model": skill_checks.model_for(engine, package_files)
+                if skill_checks.MODEL_REVIEW_ENABLED
+                else None,
                 "hints": hints,
                 "default_executables": skill_package.default_executables(report, trial),
                 "tickable": skill_package.allowed_to_tick(report, trial),
@@ -1001,6 +1134,7 @@ def submit(
         prefix = revised.path
     files: dict[str, bytes] = {}
     attachments: list[dict[str, Any]] = []
+    summaries = attachment_summaries(candidate["files"])
     for path, content in _normalized_files(candidate, candidate["files"]).items():
         if not isinstance(content, str) or path == "asset.yaml":
             continue
@@ -1013,7 +1147,10 @@ def submit(
             sha256 = blob_store.sha256(candidate_id, name) if blob_store is not None else None
             if sha256 is None or not file_store.exists(sha256):
                 sha256 = file_store.put(original)
-            attachments.append({"name": name, "sha256": sha256, "bytes": len(original)})
+            entry = {"name": name, "sha256": sha256, "bytes": len(original)}
+            if summaries.get(name):
+                entry["summary"] = summaries[name]
+            attachments.append(entry)
             continue
         files[f"{prefix}/{path}"] = content.encode("utf-8")
     files[f"{prefix}/asset.yaml"] = _landed_manifest(
@@ -1224,6 +1361,7 @@ def _landed_manifest(
                 user=candidate.get("created_by") or "",
             )
         ]
+    spec.pop(SUMMARY_KEY, None)  # 草稿里暂存的附件摘要，入库时已写进 attachments 的每一项
     if attachments:
         spec["attachments"] = attachments
     else:
@@ -1311,6 +1449,13 @@ def draft_revision(
     if isinstance(spec, dict):
         # 附件清单和可见范围入库时由服务端算，草稿里不留，免得被手改
         spec.pop("attachments", None)
+        carried = {
+            safe_name(str(item.get("name") or "")): str(item.get("summary") or "")
+            for item in attachments
+            if isinstance(item, dict) and item.get("name") and item.get("summary")
+        }
+        if carried:
+            spec[SUMMARY_KEY] = carried
         files["asset.yaml"] = yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False)
     for attachment in attachments:
         name = str(attachment.get("name") or "")

@@ -2769,6 +2769,115 @@ paths:
       summary: Download Attachment
       tags:
       - harvest
+  /api/v1/harvest-candidates/{candidate_id}/attachments/{filename}/summary:
+    put:
+      description: 保存附件摘要（草稿才能改）；Agent 读资产正文时会看到附件清单和这句摘要，靠它决定要不要打开附件。
+      operationId: put_attachment_summary_api_v1_harvest_candidates__candidate_id__attachments__filename__summary_put
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: path
+        name: filename
+        required: true
+        schema:
+          title: Filename
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Put Attachment Summary Api V1 Harvest Candidates  Candidate Id  Attachments  Filename  Summary
+                  Put
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Put Attachment Summary
+      tags:
+      - harvest
+  /api/v1/harvest-candidates/{candidate_id}/attachments/{filename}/summary/generate:
+    post:
+      description: 让模型读附件写一段摘要，只返回不保存：页面填进输入框，用户改好再保存。用和 Agent 同一套模型。
+      operationId: generate_attachment_summary_api_v1_harvest_candidates__candidate_id__attachments__filename__summary_generate_post
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: path
+        name: filename
+        required: true
+        schema:
+          title: Filename
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Generate Attachment Summary Api V1 Harvest Candidates  Candidate Id  Attachments  Filename  Summary
+                  Generate Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Generate Attachment Summary
+      tags:
+      - harvest
   /api/v1/harvest-candidates/{candidate_id}/checks:
     post:
       operationId: post_checks_api_v1_harvest_candidates__candidate_id__checks_post
@@ -3008,6 +3117,51 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
           description: Validation Error
       summary: Skill Model Review
+      tags:
+      - harvest
+  /api/v1/harvest-candidates/{candidate_id}/skill-progress:
+    get:
+      description: 试跑和模型通读的实时进度，草稿页在它们没跑完时轮询，不用整页刷新。
+      operationId: get_skill_progress_api_v1_harvest_candidates__candidate_id__skill_progress_get
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Get Skill Progress Api V1 Harvest Candidates  Candidate Id  Skill Progress
+                  Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Get Skill Progress
       tags:
       - harvest
   /api/v1/harvest-candidates/{candidate_id}/submit:
@@ -3430,6 +3584,9 @@ paths:
       - recommend
   /api/v1/recommend/linked:
     get:
+      description: '关联给目标的资产。`include_own=true` 且目标是项目时，再带上项目自己的资产（source=project），
+
+        它们不用关联也会给项目的 Agent。'
       operationId: linked_api_v1_recommend_linked_get
       parameters:
       - in: query
@@ -3444,6 +3601,13 @@ paths:
         schema:
           title: Target Id
           type: string
+      - in: query
+        name: include_own
+        required: false
+        schema:
+          default: false
+          title: Include Own
+          type: boolean
       - in: header
         name: X-FDE-User
         required: false

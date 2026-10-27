@@ -430,3 +430,36 @@ def test_department_head_pushes_to_a_colleague_but_links_own_directly(client) ->
         "/api/v1/recommend/link", json={**own, "asset_id": mine["asset_id"]}
     )
     assert linked.status_code == 200, linked.text
+
+
+def test_include_own_project_assets_is_opt_in_filtered_and_deduplicated(client):
+    context = client.app.state.context
+    asset = _asset(as_user(client, "admin"), "insurance-policy-import")
+    # The seeded skill is not project scoped; make this fixture project owned.
+    with context.engine.begin() as conn:
+        conn.execute(
+            update(assets)
+            .where(assets.c.asset_id == asset["asset_id"])
+            .values(scope="engagement", engagement_slug="policy-import")
+        )
+    params = {"target_type": "engagement", "target_id": "policy-import"}
+    endpoint = "/api/v1/recommend/linked"
+    assert client.get(endpoint, params=params).json()["items"] == []
+    included = client.get(endpoint, params={**params, "include_own": True}).json()["items"]
+    own = next(item for item in included if item["asset_id"] == asset["asset_id"])
+    assert own["source"] == "project"
+    linked = client.post("/api/v1/recommend/link", json={**params, "asset_id": asset["asset_id"]})
+    assert linked.status_code == 200, linked.text
+    included = client.get(endpoint, params={**params, "include_own": True}).json()["items"]
+    assert sum(item["asset_id"] == asset["asset_id"] for item in included) == 1
+    assert client.post(
+        "/api/v1/recommend/unlink", json={**params, "asset_id": asset["asset_id"]}
+    ).json()["unlinked"]
+    with context.engine.begin() as conn:
+        conn.execute(
+            update(assets)
+            .where(assets.c.asset_id == asset["asset_id"])
+            .values(lifecycle="archived")
+        )
+    included = client.get(endpoint, params={**params, "include_own": True}).json()["items"]
+    assert all(item["asset_id"] != asset["asset_id"] for item in included)

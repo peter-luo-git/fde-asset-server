@@ -15,11 +15,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import Any
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, or_, select, update, func
 from sqlalchemy.engine import Engine
 
 from fde_asset.core.db import skill_checks
@@ -107,7 +108,47 @@ def view(row: Any) -> dict[str, Any] | None:
         "status": row.status,
         "result": json.loads(row.result_json or "{}"),
         "updated_at": (row.updated_at or row.created_at).isoformat(),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "claimed_at": row.claimed_at.isoformat() if row.claimed_at else None,
     }
+
+
+def _step_label(step_id: str) -> str:
+    if step_id.startswith("syntax:"):
+        return "语法检查 " + step_id.removeprefix("syntax:")
+    return "技能自检命令" if step_id == "selftest" else step_id
+
+
+def trial_progress(engine: Engine, trial_id: int) -> dict[str, Any] | None:
+    """试跑的实时进度：状态、计划要跑的步骤、排队时前面还有几个、开始和结束时间。"""
+    with engine.connect() as conn:
+        row = conn.execute(select(skill_checks).where(skill_checks.c.id == trial_id)).first()
+        if row is None or row.kind != "trial":
+            return None
+        ahead = 0
+        if row.status == "pending":
+            ahead = conn.execute(
+                select(func.count())
+                .select_from(skill_checks)
+                .where(
+                    skill_checks.c.kind == "trial",
+                    skill_checks.c.status.in_(["pending", "running"]),
+                    skill_checks.c.id < row.id,
+                )
+            ).scalar_one()
+    data = view(row) or {}
+    plan = json.loads(row.payload_json or "{}").get("plan", [])
+    data["plan"] = [
+        {
+            "id": step.get("id"),
+            "label": _step_label(str(step.get("id"))),
+            "skip": step.get("skip", ""),
+        }
+        for step in plan
+    ]
+    data["queue_ahead"] = ahead
+    data["timeout_seconds"] = TRIAL_SECONDS
+    return data
 
 
 def ensure_trial(
@@ -229,6 +270,12 @@ def trial_for(engine: Engine, files: dict[str, str], selftest: str = "") -> dict
         return view(_row(conn, digest({**files, "\0selftest": selftest}), "trial"))
 
 
+#: 技能的模型通读放在评审环节（2026-10-27）：提交评审时后台读一遍，评审人也可以重新读；
+#: 用和 Agent 同一套模型（FDE_MODEL_*，关掉思考几秒就出结果）。没配这套模型就不通读。
+#: 原来用资产中心自己的生成模型，带思考，2 分钟读不完。
+MODEL_REVIEW_ENABLED = bool(
+    os.environ.get("FDE_MODEL_BASE_URL") and os.environ.get("FDE_MODEL_API_KEY")
+)
 MODEL_REVIEW_VERSION = "2"
 MODEL_SYSTEM = (
     "你是安全评审助手。下面是一个要放进 AI Agent 环境的技能（Skill）目录：先是说明文字，后面是脚本源码。"

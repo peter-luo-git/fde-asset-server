@@ -46,3 +46,6 @@
 - 2026-10-27 reviewer_latest_docs 最新dev1005文审：通过；README 1.1补两条依赖POST、草稿/评审边界与SVG转PNG配套，无新迁移；106路径及两仓契约字节/摘要一致；最终相关17项通过日志已核对，未重跑全量/E2E/模型/安装/部署；按AGENTS不新增评审Markdown。
 
 - 2026-10-27 dev1005-latest-20261027 Asset增量016d0ba→27a87e8审查：通过；implementer_server_latest（任务路径/root/implementer_server_latest，原Server责任完成后由Root追加Asset范围）只审查3个上游变更文件，实际修复routes_harvest.py的PUT空路径/附件目录/任意.git段保护及GET按当前文件摘要读取后台模型结果，避免旧检查状态与慢旧任务污染；新增tests/asset/test_skill_file_editing.py覆盖作者权限、路径、UTF-8字节大小/总量/数量、增改删、自动检查/脚本编辑与版本缓存，全程模型替身。独占PG红灯3失败/10通过（11.14秒），修复后相关3文件43通过（32.23秒），两次临时PG均按归属finally清理；证据为工作区.run/dev1005-latest-20261027/asset-edit-review-{red,green}.log/xml及对应-result.json，原失败不覆盖。Ruff、4文件format和compileall/diff检查通过；Asset smoke venv缺ruff入口，改用既有Server venv同版0.9.2，不安装依赖。2026-10-27核对FastAPI官方BackgroundTasks（https://fastapi.tiangolo.com/tutorial/background-tasks/，在线滚动文档，本地0.115.6），复用响应后任务机制、不复制源码或新增状态；后台任务非持久队列，模型输入仍有文档/脚本数量及长度上限，不承诺全目录完整通读。未改文档/生成契约、未Git写/全量/E2E/真实模型/部署；Root负责最终固定Asset冒烟、契约文审和提交部署，外部AGENT由Root代存。
+
+- 2026-10-28：Root合并 dev1005 71b6376（4提交），采用实时试跑进度、评审阶段Agent模型通读、项目自有资产与规范20000字节校验；解决recommend/linked与本地unlink相邻冲突、删除重复model结果覆盖；机械导出契约并同步Specs。第1轮相关81通过/1新增夹具作用域错误，第2轮82通过，临时PostgreSQL已清理；未运行全量/E2E/真实模型，未推送部署。证据：工作区.run/dev1005-merge-20261028/asset-targeted-final.log。
+- 2026-10-28增量：继续合入46a7706附件摘要与layout=2快照，模型生成只返回不保存；附件/快照/契约27通过，契约同步至110路径。本轮未运行真实模型或部署。

@@ -71,6 +71,37 @@ def test_detach_removes_file_and_blob(context, store) -> None:
     assert service.read_attachment(cid, "a.md", store) is None
 
 
+def test_generate_summary_reads_extracted_text(context, store) -> None:
+    candidate = _draft(context)
+    cid = candidate["candidate_id"]
+    service.attach_file(
+        context.engine, cid, filename="资质.md", content="# 公司资质\nISO27001 证书，2026 年到期".encode(), store=store
+    )
+
+    class FakeLlm:
+        usable = True
+        seen = ""
+
+        def complete_json(self, system, user):
+            FakeLlm.seen = user
+            return {"summary": "公司资质证书清单，写投标书资质部分时用"}
+
+    summary = service.generate_attachment_summary(cid, "资质.md", store, FakeLlm())
+    assert summary == "公司资质证书清单，写投标书资质部分时用"
+    assert "ISO27001" in FakeLlm.seen
+    # 只生成不保存：用户改完再保存
+    assert service.get_candidate(context.engine, cid)["attachment_summaries"] == {}
+
+
+def test_detach_drops_summary(context, store) -> None:
+    candidate = _draft(context)
+    cid = candidate["candidate_id"]
+    service.attach_file(context.engine, cid, filename="a.md", content=b"# a", store=store)
+    service.set_attachment_summary(context.engine, cid, "a.md", "说明")
+    service.detach_file(context.engine, cid, filename="a.md", store=store)
+    assert service.get_candidate(context.engine, cid)["attachment_summaries"] == {}
+
+
 def test_path_traversal_is_rejected(store) -> None:
     with pytest.raises(BlobError):
         store.put("c1", "..", b"x")
@@ -109,6 +140,10 @@ def test_submit_writes_real_bytes_not_placeholder(context, store) -> None:
         ]
     )
     service.update_candidate(context.engine, cid, files)
+    service.set_attachment_summary(context.engine, cid, "原件.md", "  演示客户的批量导入方案原稿，\n写迁移材料时参考 ")
+    assert service.get_candidate(context.engine, cid)["attachment_summaries"] == {
+        "原件.md": "演示客户的批量导入方案原稿， 写迁移材料时参考"
+    }
 
     target = context.repo_for("department", department_code="data-intel")
     try:
@@ -137,6 +172,9 @@ def test_submit_writes_real_bytes_not_placeholder(context, store) -> None:
     assert document["spec"]["visibility"] == ["department:data-intel"]
     (attachment,) = document["spec"]["attachments"]
     assert attachment["name"] == "原件.md"
+    # 草稿里暂存的摘要入库时写进附件这一项，spec 下不再留暂存字段
+    assert attachment["summary"] == "演示客户的批量导入方案原稿， 写迁移材料时参考"
+    assert "attachmentSummaries" not in document["spec"]
     assert context.file_store.get(attachment["sha256"]) == original
     with pytest.raises(FileNotFoundError):
         context.repo_port.read_file(target, f"{prefix}/attachments/原件.md", ref=result["branch"])

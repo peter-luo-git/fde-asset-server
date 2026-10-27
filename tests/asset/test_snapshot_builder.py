@@ -58,6 +58,9 @@ def test_attachment_text_written_for_agent(indexed) -> None:
     result = _build(indexed)
     extracted = result.path / "knowledge" / "impl" / "oracle-to-pg-cutover" / "attachments-text"
     assert (extracted / "baseline.xlsx.txt").exists()
+    # Agent 不列目录：正文末尾列出附件文字版的路径，它读正文就知道有哪些
+    readme = (extracted.parent / "README.md").read_text(encoding="utf-8")
+    assert "## 附件" in readme and "`attachments-text/baseline.xlsx.txt`" in readme
     assert not list(result.path.rglob("*.xlsx"))  # 二进制不进快照
 
 

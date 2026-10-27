@@ -35,6 +35,8 @@ class LlmConfig:
     api_key: str = ""
     model: str = ""
     timeout: float = DEFAULT_TIMEOUT
+    #: 额外请求参数，例如关掉思考 {"enable_thinking": false}
+    extra_body: dict[str, Any] | None = None
 
     @property
     def usable(self) -> bool:
@@ -120,6 +122,7 @@ class OpenAICompatibleClient:
                 ],
                 "temperature": 0,
                 "response_format": {"type": "json_object"},
+                **(self.config.extra_body or {}),
             },
             timeout=self.config.timeout,
         )
@@ -127,6 +130,47 @@ class OpenAICompatibleClient:
         payload = response.json()
         text = payload["choices"][0]["message"]["content"]
         return _loads(text)
+
+
+class FallbackLlmClient:
+    """按顺序试几条线路，前一条出错（超时、5xx、返回不是 JSON）就换下一条。"""
+
+    def __init__(self, clients: list[OpenAICompatibleClient]) -> None:
+        self.clients = [client for client in clients if client.usable]
+
+    @property
+    def usable(self) -> bool:
+        return bool(self.clients)
+
+    def complete_json(self, system: str, user: str) -> dict[str, Any]:
+        error: Exception | None = None
+        for client in self.clients:
+            try:
+                return client.complete_json(system, user)
+            except Exception as exc:  # noqa: BLE001 - 换下一条线路
+                error = exc
+        raise error or RuntimeError("没有配置模型网关")
+
+
+def agent_model_client(timeout: float = 120.0) -> FallbackLlmClient:
+    """和 Agent 用同一套模型（部署时把 agent-model.env 也给资产中心）：
+    FDE_MODEL_* 是主线路，FDE_MODEL_FALLBACK_* 是备用线路，模型用快的那个（*_FAST）。"""
+    configs = []
+    for prefix in ("FDE_MODEL", "FDE_MODEL_FALLBACK"):
+        try:
+            extra = json.loads(os.environ.get(f"{prefix}_EXTRA_BODY") or "{}")
+        except ValueError:
+            extra = {}
+        configs.append(
+            LlmConfig(
+                base_url=os.environ.get(f"{prefix}_BASE_URL", "").rstrip("/"),
+                api_key=os.environ.get(f"{prefix}_API_KEY", ""),
+                model=os.environ.get(f"{prefix}_FAST") or os.environ.get(f"{prefix}_CODER", ""),
+                timeout=timeout,
+                extra_body=extra if isinstance(extra, dict) else {},
+            )
+        )
+    return FallbackLlmClient([OpenAICompatibleClient(config) for config in configs])
 
 
 def _loads(text: str) -> dict[str, Any]:
