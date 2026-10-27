@@ -67,6 +67,10 @@ class CandidateInput:
     visibility: list[str] = field(default_factory=list)
 
 
+#: 规范正文上限：平台把规范整篇写进 Agent 的系统提示词，单份超过就跳过、合计超过 60KB 整个快照失败
+RULE_MAX_BYTES = 20_000
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -844,6 +848,17 @@ def run_checks(
             directory_name=candidate["name"],
         )
         findings.extend({"code": f.code, "message": f.message} for f in parsed.findings)
+        if candidate["kind"] == "Rule":
+            size = len(main_text.encode("utf-8"))
+            if size > RULE_MAX_BYTES:
+                # 平台装规范时单份超过 20KB 直接跳过（fde-server company_snapshot），这里提前拦住
+                findings.append(
+                    {
+                        "code": "rule_too_large",
+                        "message": f"规范正文 {size // 1024}KB，超过 {RULE_MAX_BYTES // 1000}KB 上限，"
+                        "Agent 收不到；精简正文，或拆成几份规范",
+                    }
+                )
         if candidate["kind"] == "Skill":
             from fde_asset.modules.asset import skill_checks, skill_deps, skill_package
 
