@@ -42,3 +42,5 @@
 - 2026-10-27 dev1005 e4d2bdb 合并相关评审：通过；124项相关pytest、隔离PG0014升级/降级再升级及契约生成核验通过；仅相关验证，未做全量/E2E/真实模型/部署。
 
 - 2026-10-27 reviewer_docs 文档复核：通过；核对0014、依赖状态/容量、SOP看板与turn_id保留及三类示范技能许可；README已覆盖，Specs镜像104路径字节一致；测试与PG结果采用实施记录，未重跑测试或访问线上；贡献见operations/agent-contributions/dev1005-update-20261027/reviewer_docs.md。
+
+- 2026-10-27 reviewer_latest_docs 最新dev1005文审：通过；README 1.1补两条依赖POST、草稿/评审边界与SVG转PNG配套，无新迁移；106路径及两仓契约字节/摘要一致；最终相关17项通过日志已核对，未重跑全量/E2E/模型/安装/部署；按AGENTS不新增评审Markdown。

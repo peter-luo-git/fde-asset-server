@@ -122,6 +122,64 @@ def test_key_matches_server_and_runtime_vector() -> None:
     )
 
 
+def test_add_requirements_preserves_comments_and_skips_existing_or_preinstalled() -> None:
+    source = "# approved dependency\ntabulate==0.9.0\n"
+    text, added = skill_deps.with_requirements(
+        source, ["tabulate>=0.8", "python-pptx", "resvg-py", "resvg_py"]
+    )
+    assert added == ["resvg-py"]
+    assert text == source + "resvg-py\n"
+    assert skill_deps.with_requirements(text, added) == (text, [])
+
+
+def test_candidate_dependency_inference_and_invalid_input_preserve_draft(service) -> None:  # noqa: F811
+    draft = _upload(
+        service,
+        {
+            "SKILL.md": SKILL_MD.format(name="infer-deps"),
+            "scripts/run.py": "import cv2\nimport tabulate\n",
+        },
+    )
+    url = f"/api/v1/harvest-candidates/{draft['candidate_id']}"
+    response = service.post(url + "/dependencies", json={})
+    assert response.status_code == 200, response.text
+    assert set(response.json()["added"]) == {"opencv-python-headless", "tabulate"}
+    files = response.json()["candidate"]["files"]
+    assert service.post(url + "/dependencies", json={}).json()["added"] == []
+    denied = service.post(
+        url + "/dependencies", json={"packages": ["pkg @ https://example.invalid/x.whl"]}
+    )
+    assert denied.status_code == 409
+    assert service.get(url).json()["files"] == files
+    assert service.post(url + "/dependencies", json={"packages": "resvg-py"}).status_code == 422
+
+
+def test_candidate_dependencies_reject_other_users_private_draft(service) -> None:  # noqa: F811
+    draft = _upload(service, {"SKILL.md": SKILL_MD.format(name="private-deps")})
+    response = _as(service, "zhao").post(
+        f"/api/v1/harvest-candidates/{draft['candidate_id']}/dependencies",
+        json={"packages": ["resvg-py"]},
+    )
+    assert response.status_code == 403
+
+
+def test_published_skill_dependencies_create_reviewable_revision(service) -> None:  # noqa: F811
+    draft = _upload(service, {"SKILL.md": SKILL_MD.format(name="published-deps")})
+    submitted = _fill_and_submit(service, draft)
+    assert submitted.status_code == 200, submitted.text
+    listed = service.get("/api/v1/assets", params={"kind": "Skill"}).json()["items"]
+    asset = next(row for row in listed if row["name"] == "published-deps")
+    response = service.post(
+        f"/api/v1/assets/{asset['asset_id']}/dependencies", json={"packages": ["resvg-py"]}
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["added"] == ["resvg-py"]
+    assert payload["candidate"]["status"] == "draft"
+    assert payload["candidate"]["files"]["requirements.txt"] == "resvg-py\n"
+    assert payload["candidate"]["candidate_id"] != draft["candidate_id"]
+
+
 def test_wanted_status_report_and_personal_bytes_limit(service, monkeypatch) -> None:  # noqa: F811
     # 一个带依赖的个人技能入库
     draft = _upload(

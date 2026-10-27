@@ -158,6 +158,51 @@ def analyze(files: dict[str, str]) -> dict[str, Any]:
     }
 
 
+#: 导入名 -> 安装包名，扫描出没声明的 import 时用来补 requirements.txt；没列的按「下划线换连字符」猜
+DISTRIBUTION_NAMES = {
+    "PIL": "Pillow",
+    "cv2": "opencv-python-headless",
+    "yaml": "pyyaml",
+    "bs4": "beautifulsoup4",
+    "sklearn": "scikit-learn",
+    "dateutil": "python-dateutil",
+    "fitz": "pymupdf",
+    "attr": "attrs",
+    "jwt": "pyjwt",
+    "dotenv": "python-dotenv",
+    "docx": "python-docx",
+    "pptx": "python-pptx",
+}
+
+
+def distribution_name(module: str) -> str:
+    return DISTRIBUTION_NAMES.get(module, module.replace("_", "-"))
+
+
+def with_requirements(text: str | None, packages: list[str]) -> tuple[str, list[str]]:
+    """把依赖合进 requirements.txt：已有的、运行环境预装的跳过，返回新内容和这次加上的。
+
+    写法不合规（网址、路径、选项）时抛 RequirementsError，和评审时的检查一致。
+    """
+    existing = parse_requirements(text or "")
+    names = {requirement_name(line) for line in existing}
+    preinstalled = {re.sub(r"[-_.]+", "-", name).lower() for name in PREINSTALLED}
+    added: list[str] = []
+    for package in packages:
+        lines = parse_requirements(str(package))
+        if len(lines) != 1:
+            raise RequirementsError(f"依赖写法不支持：{str(package)[:60]}")
+        name = requirement_name(lines[0])
+        if name in names or name in preinstalled:
+            continue
+        names.add(name)
+        added.append(lines[0])
+    parse_requirements("\n".join([*existing, *added]))  # 总数上限等检查
+    body = (text or "").rstrip()
+    new_text = (body + "\n" if body else "") + "".join(line + "\n" for line in added)
+    return new_text, added
+
+
 # ---------- 安装状态（fde-server worker 回报）----------
 
 

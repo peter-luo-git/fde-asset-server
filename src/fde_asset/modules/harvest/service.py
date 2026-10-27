@@ -666,6 +666,36 @@ def read_attachment(candidate_id: str, filename: str, store: BlobStore) -> bytes
     return store.get(candidate_id, filename)
 
 
+def add_dependencies(
+    engine: Engine, candidate: dict[str, Any], packages: list[str] | None = None
+) -> tuple[dict[str, Any], list[str]]:
+    """给技能草稿补依赖：写进 requirements.txt，返回草稿和这次加上的。
+
+    ``packages`` 不给就按脚本里用了却没声明的 import 推断。写法不合规抛 HarvestError。
+    """
+    from fde_asset.modules.asset import skill_checks, skill_deps
+
+    if candidate["kind"] != "Skill":
+        raise HarvestError("只有技能能声明依赖")
+    if candidate["status"] != "draft":
+        raise HarvestError("只有草稿可以修改")
+    files = candidate["files"]
+    if packages is None:
+        report = skill_deps.analyze(skill_checks.skill_files(files))
+        packages = [skill_deps.distribution_name(m) for m in report["undeclared_imports"]]
+    try:
+        text, added = skill_deps.with_requirements(
+            files.get(skill_deps.REQUIREMENTS_FILE), packages
+        )
+    except skill_deps.RequirementsError as exc:
+        raise HarvestError(str(exc)) from None
+    if added:
+        candidate = merge_files(
+            engine, candidate["candidate_id"], {skill_deps.REQUIREMENTS_FILE: text}
+        )
+    return candidate, added
+
+
 def update_candidate(engine: Engine, candidate_id: str, files: dict[str, str]) -> dict[str, Any]:
     with engine.begin() as conn:
         conn.execute(

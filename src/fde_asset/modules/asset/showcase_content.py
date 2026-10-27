@@ -351,6 +351,65 @@ if __name__ == "__main__":
     sys.exit(main())
 '''
 
+PPTX_SVG_SCRIPT = '''#!/usr/bin/env python3
+"""把 SVG 转成 PNG，好插进 PPT（PowerPoint 和 python-pptx 都不能直接插 SVG）。
+
+用法：python3 svg_to_png.py 输入.svg 输出.png [--scale 2]
+依赖 resvg-py（写在技能的 requirements.txt 里，平台预装），不需要 cairo 等系统库。
+"""
+import argparse
+import re
+import sys
+from pathlib import Path
+
+
+def scaled(svg: str, scale: float) -> str:
+    """按倍数放大：改根元素的 width/height，没有就从 viewBox 推出来。"""
+    if scale == 1:
+        return svg
+    head = re.search(r"<svg\\b[^>]*>", svg)
+    if not head:
+        return svg
+    tag = head.group(0)
+    size = {}
+    for name in ("width", "height"):
+        found = re.search(rf\'\\b{name}="([0-9.]+)(px)?"\', tag)
+        if found:
+            size[name] = float(found.group(1))
+    if len(size) < 2:
+        box = re.search(r\'viewBox="[-0-9. ]*?([0-9.]+)[ ,]+([0-9.]+)"\', tag)
+        if not box:
+            return svg
+        size = {"width": float(box.group(1)), "height": float(box.group(2))}
+        if "viewBox" not in tag:
+            return svg
+    new = re.sub(r\'\\s(width|height)="[^"]*"\', "", tag)
+    new = new.replace("<svg", f\'<svg width="{size["width"] * scale:g}" height="{size["height"] * scale:g}"\', 1)
+    return svg.replace(tag, new, 1)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("source")
+    parser.add_argument("target")
+    parser.add_argument("--scale", type=float, default=1.0, help="放大倍数，投影用 2")
+    args = parser.parse_args()
+    try:
+        import resvg_py
+    except ImportError:
+        print("没有 resvg_py：这个技能的依赖还没装好，请告诉用户（依赖写在技能的 requirements.txt）", file=sys.stderr)
+        return 2
+    svg = scaled(Path(args.source).read_text(encoding="utf-8"), args.scale)
+    data = resvg_py.svg_to_bytes(svg_string=svg)
+    Path(args.target).write_bytes(bytes(data))
+    print(f"已生成 {args.target}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
 PPTX_SKILL = """---
 name: fcp-pptx-builder
 description: 在需要交付 PowerPoint 文件（.pptx）时使用：把 Markdown 页面稿一键转成可编辑的 PPT（文字、表格、讲稿备注都能再改），或用 python-pptx 直接生成、修改 PPT，交付前核对页数和内容
@@ -398,6 +457,17 @@ slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(0.8), Inches(1.6),
 prs.save("slides/告警趋势.pptx")
 ```
 
+## 插 SVG 图（流程图、架构图、图标）
+PowerPoint 和 python-pptx 都不能直接插 SVG，先转成 PNG 再插：
+
+```bash
+python3 <本技能目录>/scripts/svg_to_png.py 图/架构.svg 图/架构.png --scale 2
+```
+
+- 转换用的 resvg-py 写在本技能的 `requirements.txt` 里，平台按技能依赖预装，**不用自己安装**；SVG 里的中文用运行环境自带的中文字体
+- `--scale 2` 出两倍分辨率，投影更清楚；插图用 `slide.shapes.add_picture("图/架构.png", left, top, width=...)`，只给宽度就会按比例缩放
+- 提示没有 resvg_py：说明这个技能的依赖还没装好（刚加依赖、评审还没通过时会这样），如实告诉用户，不要改用别的办法自己装
+
 ## 交付前检查
 - 重新打开文件，核对页数、每页标题、表格和图表的数据、讲稿备注
 - 文字放不放得下：每页要点不超过 6 条，单条不超过 40 个字
@@ -405,7 +475,7 @@ prs.save("slides/告警趋势.pptx")
 - python-pptx 不是渲染引擎，上面的检查保证不了视觉效果，要提醒用户打开看一遍
 
 ## 注意事项
-- 运行环境已经预装了 python-pptx，直接用，不要另行安装；真缺依赖时如实告诉用户
+- 运行环境已经预装了 python-pptx，直接用，不要另行安装；本技能另外要的库写在 `requirements.txt`，平台会预装；真缺依赖时如实告诉用户
 - 产出放在工作目录里（比如 `slides/`），不要写进技能目录
 - 图片用本地文件，不要用网络图片地址
 
@@ -919,6 +989,9 @@ SHOWCASE: list[dict[str, Any]] = [
             "references/LICENSE-office-pptx.md": PPTX_LICENSE,
             "scripts/md_to_pptx.py": PPTX_SCRIPT,
             "scripts/check_pptx.py": PPTX_CHECK_SCRIPT,
+            "scripts/svg_to_png.py": PPTX_SVG_SCRIPT,
+            # 技能依赖第 2 层：平台按这个文件在 Agent 机器上预装，resvg-py 自带渲染器，不需要系统库
+            "requirements.txt": "resvg-py\n",
         },
     ),
     _skill(

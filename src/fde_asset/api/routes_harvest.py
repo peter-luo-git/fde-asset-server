@@ -392,6 +392,30 @@ def candidate_review(
     }
 
 
+@router.post("/harvest-candidates/{candidate_id}/dependencies")
+def add_candidate_dependencies(
+    candidate_id: str,
+    payload: dict[str, Any] = Body(default={}),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """技能草稿一键补依赖：不给 packages 就按脚本里用了却没声明的 import 推断。"""
+    candidate = get_candidate(candidate_id, context, principal)
+    packages = payload.get("packages")
+    if packages is not None and (
+        not isinstance(packages, list) or not all(isinstance(p, str) for p in packages)
+    ):
+        raise HTTPException(status_code=422, detail="packages 要是包名列表")
+    try:
+        candidate, added = service.add_dependencies(context.engine, candidate, packages)
+    except service.HarvestError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    if added:
+        service.run_checks(context.engine, candidate_id, _scan_context(context))
+        candidate = service.get_candidate(context.engine, candidate_id)
+    return {"candidate": candidate, "added": added}
+
+
 @router.post("/harvest-candidates/{candidate_id}/attachments")
 def add_attachment(
     candidate_id: str,

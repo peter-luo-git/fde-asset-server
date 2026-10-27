@@ -1,6 +1,6 @@
 # fde-asset-server
 
-文档版本：1.0（2026-10-27）。本轮同步 `peter-luo-git/fde-asset-server` 的 `dev1005`（`e4d2bdb`）源码与契约；下文历史测试、现场切换和 `tasks/ENV_BLOCKERS.md` 的上游环境记录保留原时点，不代表当前服务器已升级为 PostgreSQL、启用回调或完成模型验收。
+文档版本：1.1（2026-10-27）。最新 dev1005 候选在已合并的 `e4d2bdb` 后继续同步 `016d0ba` 技能补依赖及 SVG 转图示例；下文历史测试、现场切换和 `tasks/ENV_BLOCKERS.md` 的上游环境记录保留原时点，不代表当前服务器已升级为 PostgreSQL、启用回调或完成模型验收。
 
 FDE 协同平台的**资产中心服务**：索引、目录、沉淀、评审、分发与复用计量。
 
@@ -109,6 +109,10 @@ Gitea 推送同步需配置 `FDE_ASSET_GITEA_WEBHOOK_URL`、Gitea 地址与服�
 
 ### 技能依赖状态与人文示范技能
 
+技能补依赖新增两个公开接口：`POST /api/v1/assets/{asset_id}/dependencies` 为有管理权限的可见 Skill 创建或复用修订稿，`POST /api/v1/harvest-candidates/{candidate_id}/dependencies` 在有权访问的 Skill 草稿中补齐依赖。输入 `{packages?: string[]}`，返回 `{candidate, added}`；省略 `packages` 时按脚本中未声明的 import 推断包名，推断映射仍需人在评审时核对。依赖写入 `requirements.txt`，跳过已声明或镜像预装的包，并沿用包名、版本及数量校验；只有实际新增时重新运行检查。补依赖不直接入库或安装，仍需提交资产评审，再由配套 Server 预装。新增接口无数据库迁移，当前迁移头仍为 `0014_skill_deps_status`。
+
+PowerPoint 示范技能新增 `scripts/svg_to_png.py`，先用声明于 `requirements.txt` 的 `resvg-py` 将 SVG 转成 PNG，再由 `python-pptx` 插图；中文字体依赖配套 Runtime 的字体和 fontconfig。示例转换、依赖声明与实际在线安装分别验收。
+
 已入库 Skill 声明的依赖通过服务密钥保护的 `GET /internal/v1/skill-deps/wanted` 去重提供给 Server worker；worker 用 `POST /internal/v1/skill-deps/status` 回报 `ready`、`failed`、`installing` 或 `missing`、安装字节数和原因。依赖键沿用 `fde-skill-deps/v1` 与 `cp311-debian12` 算法；状态保存在 `0014_skill_deps_status` 新表，评审检查结果可展示安装状态。个人带依赖技能仍最多10个，新增安装大小合计1 GiB上限，同一依赖键只计算一次；该大小按 worker 已回报记录计算，未知大小不代表安装完成。真实在线依赖安装到 Agent 执行的端到端链路尚需独立验收。
 
 示范库新增节气诗笺、苏东坡视角和成语锦囊。管理员安装仍走现有草稿、检查和入库流程；源文件中的 MIT 许可及诗文/历法来源声明随完整技能目录保留。节气诗笺脚本使用预生成日历和古诗数据，不在运行时安装历法库；离线脚本测试不等同模型实际使用验收。
@@ -133,6 +137,7 @@ dev 模式只接受 `directory.json` 中 `work_items` 显式登记的任务，�
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-10-27 | 1.1 | 同步最新 dev1005 技能/草稿补依赖接口、评审边界与 SVG 转 PNG 示例；无新增迁移。 |
 | 2026-10-27 | 1.0 | 同步 dev1005 e4d2bdb：依赖安装状态/个人容量、SOP看板与轮次保留、人文示范技能；核对0014迁移和相关契约。 |
 | 2026-10-26 | 0.9 | 同步 dev1005 9a812e3 的任务流程、技能供应与新迁移；保留独立的关联权限复核和解除能力，仅执行相关验证。 |
 | 2026-10-19 | 0.8 | 同步 PostgreSQL 必配与测试前置、0009～0011迁移、必选组包、修订与范围视图拒绝、每日保留策略及推送回调；保留历史现场和上游环境边界。 |

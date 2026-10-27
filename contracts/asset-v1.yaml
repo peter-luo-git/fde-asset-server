@@ -1316,6 +1316,62 @@ paths:
       summary: Copy Asset
       tags:
       - showcase
+  /api/v1/assets/{asset_id}/dependencies:
+    post:
+      description: '给技能补依赖：起一份修订稿，把依赖写进 requirements.txt，改完照常提交评审。
+
+
+        ``packages`` 给了就用它（会话里临时装过、要转成技能依赖时用）；不给就按脚本里
+
+        用了却没声明的 import 自动推断。评审通过后平台按技能依赖预装（第 2 层）。'
+      operationId: add_skill_dependencies_api_v1_assets__asset_id__dependencies_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              default: {}
+              title: Payload
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Add Skill Dependencies Api V1 Assets  Asset Id  Dependencies Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Add Skill Dependencies
+      tags:
+      - assets
   /api/v1/assets/{asset_id}/edit:
     post:
       description: '在网页上修改一份已入库资产：起一份带着现在全部内容的修订稿，改完提交评审，
@@ -2754,6 +2810,58 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
           description: Validation Error
       summary: Post Checks
+      tags:
+      - harvest
+  /api/v1/harvest-candidates/{candidate_id}/dependencies:
+    post:
+      description: 技能草稿一键补依赖：不给 packages 就按脚本里用了却没声明的 import 推断。
+      operationId: add_candidate_dependencies_api_v1_harvest_candidates__candidate_id__dependencies_post
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              default: {}
+              title: Payload
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Add Candidate Dependencies Api V1 Harvest Candidates  Candidate Id  Dependencies
+                  Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Add Candidate Dependencies
       tags:
       - harvest
   /api/v1/harvest-candidates/{candidate_id}/review:
