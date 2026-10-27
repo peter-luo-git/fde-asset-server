@@ -600,7 +600,28 @@ def get_candidate(engine: Engine, candidate_id: str) -> dict[str, Any]:
     data["revises_asset_id"] = data.get("revises_asset_id") or ""
     for key in ("created_at", "updated_at"):
         data[key] = data[key].isoformat()
+    _refresh_skill_checks(engine, data)
     return data
+
+
+def _refresh_skill_checks(engine: Engine, data: dict[str, Any]) -> None:
+    """检查结果是跑检查那一刻存下的；试跑和模型通读在后台进行，读草稿时换成它们现在的状态，
+    否则页面一直停在「排队等试跑」，评审人也勾不了试跑已通过的脚本。"""
+    skill = (data.get("checks") or {}).get("skill")
+    if data.get("kind") != "Skill" or not isinstance(skill, dict):
+        return
+    from fde_asset.modules.asset import skill_checks, skill_package
+
+    trial = skill.get("trial")
+    if isinstance(trial, dict) and trial.get("id"):
+        live = skill_checks.trial_progress(engine, int(trial["id"]))
+        if live is not None:
+            skill["trial"] = live
+            report = skill.get("report")
+            if isinstance(report, dict):
+                skill["default_executables"] = skill_package.default_executables(report, live)
+                skill["tickable"] = skill_package.allowed_to_tick(report, live)
+    skill["model"] = skill_checks.model_for(engine, data.get("files") or {})
 
 
 def merge_files(engine: Engine, candidate_id: str, files: dict[str, str]) -> dict[str, Any]:

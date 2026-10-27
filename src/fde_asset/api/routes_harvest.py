@@ -220,6 +220,18 @@ def _model_review_in_background(engine, candidate_id: str, files: dict[str, str]
         logger.exception("skill model review failed for %s", candidate_id)
 
 
+@router.get("/harvest-candidates/{candidate_id}/skill-progress")
+def get_skill_progress(
+    candidate_id: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """试跑和模型通读的实时进度，草稿页在它们没跑完时轮询，不用整页刷新。"""
+    candidate = get_candidate(candidate_id, context, principal)
+    skill = (candidate.get("checks") or {}).get("skill") or {}
+    return {"trial": skill.get("trial"), "model": skill.get("model")}
+
+
 @router.put("/harvest-candidates/{candidate_id}/skill-files")
 def put_skill_file(
     candidate_id: str,
