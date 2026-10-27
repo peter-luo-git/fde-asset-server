@@ -584,3 +584,39 @@ def linked_assets(
         }
         for row in rows
     ]
+
+
+def project_own_assets(
+    engine: Engine, principal: Principal, engagement_slug: str, skip: set[str]
+) -> list[dict[str, Any]]:
+    """项目自己沉淀的资产（作用域就是这个项目）：不用关联，Agent 每次都会带上（见 snapshot.select_assets）。
+    推荐页把它们和关联的列在一起，看到的就是 Agent 实际拿到的。草稿、弃用、归档的不带；SOP 按步骤注入，不进资产包。"""
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(assets).where(
+                and_(
+                    assets.c.scope == "engagement",
+                    assets.c.engagement_slug == engagement_slug,
+                    assets.c.deleted_at.is_(None),
+                    assets.c.valid.is_(True),
+                    assets.c.restricted.is_(False),
+                    assets.c.lifecycle.notin_(["deprecated", "archived", "draft"]),
+                    assets.c.kind != "Sop",
+                    visibility_clause(principal),
+                )
+            )
+        ).fetchall()
+    return [
+        {
+            "asset_id": row.asset_id,
+            "kind": row.kind,
+            "title": row.title,
+            "summary": row.summary,
+            "ref": f"[[{row.kind.lower()}/{row.name}]]",
+            "mount_name": row.name,
+            "source": "project",
+            "created_by": "",
+        }
+        for row in rows
+        if row.asset_id not in skip
+    ]

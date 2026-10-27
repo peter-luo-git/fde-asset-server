@@ -29,7 +29,6 @@ from fde_asset.modules.harvest import service
 from fde_asset.modules.leads import rules as leads_rules
 from fde_asset.modules.notify import service as notify_service
 from fde_asset.platform.blobs import BlobError
-from fde_asset.platform import settings_store
 from fde_asset.platform.identity import Principal
 
 logger = logging.getLogger(__name__)
@@ -187,29 +186,17 @@ def create_from_skill_package(
 def _checked_upload(
     context: ServiceContext, candidate: dict[str, Any], background: BackgroundTasks
 ) -> dict[str, Any]:
-    """上传完马上跑规则扫描、依赖检查和试跑排队；带脚本的再在后台让模型通读一遍（几十秒，不拖慢上传）。"""
-    from fde_asset.modules.asset import skill_checks, skill_package
-
+    """上传完马上跑规则扫描、依赖检查和试跑排队。模型通读放在评审环节（提交评审时才读）。"""
     candidate_id = candidate["candidate_id"]
     service.run_checks(context.engine, candidate_id, _scan_context(context))
-    candidate = service.get_candidate(context.engine, candidate_id)
-    files = skill_checks.skill_files(candidate["files"])
-    if candidate["kind"] == "Skill" and any(
-        skill_package.is_script(path, text) for path, text in files.items()
-    ):
-        if skill_checks.MODEL_REVIEW_ENABLED:
-            background.add_task(_model_review_in_background, context.engine, candidate_id, files)
-    return candidate
+    return service.get_candidate(context.engine, candidate_id)
 
 
 def _model_llm(engine):
-    from fde_asset.platform.llm.client import build_client
+    """模型通读用和 Agent 同一套模型（主线路不通自动走备用线路）。"""
+    from fde_asset.platform.llm.client import agent_model_client
 
-    llm = build_client(str(settings_store.get(engine, "rerank_model") or ""))
-    config = getattr(llm, "config", None)
-    if config is not None:
-        config.timeout = max(config.timeout, 90)
-    return llm
+    return agent_model_client()
 
 
 def _model_review_in_background(engine, candidate_id: str, files: dict[str, str]) -> None:
@@ -285,10 +272,6 @@ def put_skill_file(
     except service.HarvestError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     service.run_checks(context.engine, candidate_id, _scan_context(context))
-    changed_script = skill_package.is_script(path, content or candidate["files"].get(path, ""))
-    if changed_script and any(skill_package.is_script(p, t) for p, t in package.items()):
-        if skill_checks.MODEL_REVIEW_ENABLED:
-            background.add_task(_model_review_in_background, context.engine, candidate_id, package)
     return service.get_candidate(context.engine, candidate_id)
 
 
@@ -612,6 +595,7 @@ def post_checks(
 @router.post("/harvest-candidates/{candidate_id}/submit")
 def submit_candidate(
     candidate_id: str,
+    background: BackgroundTasks,
     payload: dict[str, Any] = Body(default={}),
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
@@ -693,6 +677,17 @@ def submit_candidate(
         )
         finish_index(context.engine, owner_of=context.target_owner)
         return {**result, "auto_approved": True, "status": decided.get("status")}
+    if submitted["kind"] == "Skill":
+        from fde_asset.modules.asset import skill_checks
+
+        if skill_checks.MODEL_REVIEW_ENABLED:
+            # 进评审了，后台让模型通读一遍给评审人参考（几秒），不拖慢提交
+            background.add_task(
+                _model_review_in_background,
+                context.engine,
+                candidate_id,
+                skill_checks.skill_files(submitted["files"]),
+            )
     reviewer_ids = [item["user_id"] for item in _reviewers(context, submitted)]
     review_ref = str((submitted.get("review_id") or ""))
     # 平台工作台：给评审人开一条待办；提交人之前那条"被打回"随着重新提交收掉

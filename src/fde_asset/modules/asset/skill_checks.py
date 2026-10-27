@@ -270,9 +270,12 @@ def trial_for(engine: Engine, files: dict[str, str], selftest: str = "") -> dict
         return view(_row(conn, digest({**files, "\0selftest": selftest}), "trial"))
 
 
-#: 技能的模型通读（2026-10-27 默认关闭）：当前配的模型 2 分钟内读不完，页面只会显示失败。把关靠规则扫描、
-#: 断网试跑和评审人勾选可执行脚本。换了够快的模型后设 FDE_ASSET_SKILL_MODEL_REVIEW=1 重新打开。
-MODEL_REVIEW_ENABLED = os.environ.get("FDE_ASSET_SKILL_MODEL_REVIEW") == "1"
+#: 技能的模型通读放在评审环节（2026-10-27）：提交评审时后台读一遍，评审人也可以重新读；
+#: 用和 Agent 同一套模型（FDE_MODEL_*，关掉思考几秒就出结果）。没配这套模型就不通读。
+#: 原来用资产中心自己的生成模型，带思考，2 分钟读不完。
+MODEL_REVIEW_ENABLED = bool(
+    os.environ.get("FDE_MODEL_BASE_URL") and os.environ.get("FDE_MODEL_API_KEY")
+)
 MODEL_REVIEW_VERSION = "2"
 MODEL_SYSTEM = (
     "你是安全评审助手。下面是一个要放进 AI Agent 环境的技能（Skill）目录：先是说明文字，后面是脚本源码。"

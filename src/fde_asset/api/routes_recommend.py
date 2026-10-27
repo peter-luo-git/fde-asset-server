@@ -328,7 +328,15 @@ def link(
 def linked(
     target_type: str,
     target_id: str,
+    include_own: bool = False,
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
-    return {"items": service.linked_assets(context.engine, principal, target_type, target_id)}
+    """关联给目标的资产。`include_own=true` 且目标是项目时，再带上项目自己的资产（source=project），
+    它们不用关联也会给项目的 Agent。"""
+    items = service.linked_assets(context.engine, principal, target_type, target_id)
+    if include_own and target_type == "engagement":
+        items += service.project_own_assets(
+            context.engine, principal, target_id, {item["asset_id"] for item in items}
+        )
+    return {"items": items}
