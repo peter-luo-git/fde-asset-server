@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import BackgroundTasks, APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import select
 
 from fde_asset.api.deps import ServiceContext, get_context, get_principal
@@ -17,6 +17,8 @@ from fde_asset.modules.asset import catalog as catalog_module
 from fde_asset.modules.asset import skill_sources
 from fde_asset.modules.harvest import service as harvest
 from fde_asset.platform.identity import Principal
+
+from fde_asset.api.routes_harvest import _checked_upload  # noqa: E402
 
 router = APIRouter(prefix="/api/v1", tags=["skill-market"])
 
@@ -104,6 +106,7 @@ def source_catalog(
 
 @router.post("/skill-market/install")
 def install(
+    background: BackgroundTasks,
     payload: dict[str, Any] = Body(...),
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
@@ -116,17 +119,21 @@ def install(
             str(payload.get("path") or ""),
             _cache(context),
         )
-        return harvest.draft_from_skill_package(
-            context.engine,
-            principal,
-            package,
-            title=str(payload.get("title") or ""),
-            scope=str(payload.get("scope") or "user"),
-            department_code=str(payload.get("department_code") or ""),
-            engagement_slug=str(payload.get("engagement_slug") or ""),
-            customer_code=str(payload.get("customer_code") or ""),
-            origin="install",
-            source=source,
+        return _checked_upload(
+            context,
+            harvest.draft_from_skill_package(
+                context.engine,
+                principal,
+                package,
+                title=str(payload.get("title") or ""),
+                scope=str(payload.get("scope") or "user"),
+                department_code=str(payload.get("department_code") or ""),
+                engagement_slug=str(payload.get("engagement_slug") or ""),
+                customer_code=str(payload.get("customer_code") or ""),
+                origin="install",
+                source=source,
+            ),
+            background,
         )
     except (skill_sources.SkillSourceError, harvest.HarvestError, ValueError) as exc:
         raise _fail(exc) from None
@@ -173,6 +180,7 @@ def update_status(
 @router.post("/skill-market/assets/{asset_id}/update")
 def update_installed(
     asset_id: str,
+    background: BackgroundTasks,
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
@@ -188,18 +196,22 @@ def update_installed(
         package, source = skill_sources.package_for(
             context.engine, status["source_id"], status["source"]["path"], _cache(context)
         )
-        return harvest.draft_from_skill_package(
-            context.engine,
-            principal,
-            package,
-            title=row.title,
-            scope=row.scope,
-            department_code=row.department_code or "",
-            engagement_slug=row.engagement_slug or "",
-            customer_code=row.customer_code or "",
-            origin="install",
-            source=source,
-            revises_asset_id=asset_id,
+        return _checked_upload(
+            context,
+            harvest.draft_from_skill_package(
+                context.engine,
+                principal,
+                package,
+                title=row.title,
+                scope=row.scope,
+                department_code=row.department_code or "",
+                engagement_slug=row.engagement_slug or "",
+                customer_code=row.customer_code or "",
+                origin="install",
+                source=source,
+                revises_asset_id=asset_id,
+            ),
+            background,
         )
     except (skill_sources.SkillSourceError, harvest.HarvestError) as exc:
         raise _fail(exc) from None

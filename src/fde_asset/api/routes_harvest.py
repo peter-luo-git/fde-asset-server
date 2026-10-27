@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from urllib.parse import quote
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Response
 from sqlalchemy import or_, select, update
 
 from fde_asset.api.deps import ServiceContext, get_context, get_principal
@@ -31,6 +32,7 @@ from fde_asset.platform.blobs import BlobError
 from fde_asset.platform import settings_store
 from fde_asset.platform.identity import Principal
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["harvest"])
 
 
@@ -135,6 +137,7 @@ def create_from_issue(
 
 @router.post("/harvest-candidates/from-skill-package")
 def create_from_skill_package(
+    background: BackgroundTasks,
     payload: dict[str, Any] = Body(...),
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
@@ -164,7 +167,7 @@ def create_from_skill_package(
                 "path": str(payload.get("source_path") or "")[:300],
                 "commit": str(payload.get("source_commit") or "")[:64],
             }
-        return service.draft_from_skill_package(
+        candidate = service.draft_from_skill_package(
             context.engine,
             principal,
             package,
@@ -178,6 +181,107 @@ def create_from_skill_package(
         )
     except (skill_package.SkillPackageError, service.HarvestError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    return _checked_upload(context, candidate, background)
+
+
+def _checked_upload(
+    context: ServiceContext, candidate: dict[str, Any], background: BackgroundTasks
+) -> dict[str, Any]:
+    """上传完马上跑规则扫描、依赖检查和试跑排队；带脚本的再在后台让模型通读一遍（几十秒，不拖慢上传）。"""
+    from fde_asset.modules.asset import skill_checks, skill_package
+
+    candidate_id = candidate["candidate_id"]
+    service.run_checks(context.engine, candidate_id, _scan_context(context))
+    candidate = service.get_candidate(context.engine, candidate_id)
+    files = skill_checks.skill_files(candidate["files"])
+    if candidate["kind"] == "Skill" and any(
+        skill_package.is_script(path, text) for path, text in files.items()
+    ):
+        background.add_task(_model_review_in_background, context.engine, candidate_id, files)
+    return candidate
+
+
+def _model_llm(engine):
+    from fde_asset.platform.llm.client import build_client
+
+    llm = build_client(str(settings_store.get(engine, "rerank_model") or ""))
+    config = getattr(llm, "config", None)
+    if config is not None:
+        config.timeout = max(config.timeout, 90)
+    return llm
+
+
+def _model_review_in_background(engine, candidate_id: str, files: dict[str, str]) -> None:
+    from fde_asset.modules.asset import skill_checks
+
+    try:
+        skill_checks.model_review(engine, candidate_id, files, _model_llm(engine))
+    except Exception:  # noqa: BLE001 - 后台通读失败不影响草稿，评审人可在页面上重新通读
+        logger.exception("skill model review failed for %s", candidate_id)
+
+
+@router.put("/harvest-candidates/{candidate_id}/skill-files")
+def put_skill_file(
+    candidate_id: str,
+    background: BackgroundTasks,
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """在网页上改技能草稿里的任意文件：`path` + `content`（新建或覆盖）；`content` 为 null 表示删除。
+
+    asset.yaml、附件走各自的入口；主文件 SKILL.md 不能删。改完重跑扫描和依赖检查，改了脚本再在后台让模型通读。
+    """
+    from fde_asset.modules.asset import skill_checks, skill_package
+
+    candidate = get_candidate(candidate_id, context, principal)
+    if candidate["kind"] != "Skill":
+        raise HTTPException(status_code=422, detail="只有技能草稿能这样改文件")
+    if candidate["status"] != "draft":
+        raise HTTPException(status_code=409, detail="只有草稿可以修改")
+    if candidate["created_by"] != principal.user_id:
+        raise HTTPException(status_code=403, detail="只有草稿作者能改文件")
+    path = skill_package._clean_path(str(payload.get("path") or ""))
+    if (
+        not path
+        or path == "asset.yaml"
+        or path == "attachments"
+        or path.startswith("attachments/")
+        or any(part.lower() == ".git" for part in path.split("/"))
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="文件路径不对：要用技能目录里的相对路径，不能改 asset.yaml 和附件",
+        )
+    content = payload.get("content")
+    files = dict(candidate["files"])
+    main = KIND_RULES["Skill"].main_file
+    if content is None:
+        if path == main:
+            raise HTTPException(status_code=422, detail=f"{main} 是技能的主文件，不能删")
+        if path not in files:
+            raise HTTPException(status_code=404, detail="没有这个文件")
+        files.pop(path)
+    else:
+        if not isinstance(content, str):
+            raise HTTPException(status_code=422, detail="content 要是文字")
+        if len(content.encode("utf-8")) > skill_package.MAX_FILE_BYTES:
+            raise HTTPException(status_code=413, detail="单个文件最大 1MB")
+        files[path] = content
+    package = skill_checks.skill_files(files)
+    if len(package) > skill_package.MAX_FILES:
+        raise HTTPException(status_code=413, detail=f"技能最多 {skill_package.MAX_FILES} 个文件")
+    if sum(len(text.encode("utf-8")) for text in package.values()) > skill_package.MAX_TOTAL_BYTES:
+        raise HTTPException(status_code=413, detail="技能文件合计最大 5MB")
+    try:
+        service.update_candidate(context.engine, candidate_id, files)
+    except service.HarvestError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    service.run_checks(context.engine, candidate_id, _scan_context(context))
+    changed_script = skill_package.is_script(path, content or candidate["files"].get(path, ""))
+    if changed_script and any(skill_package.is_script(p, t) for p, t in package.items()):
+        background.add_task(_model_review_in_background, context.engine, candidate_id, package)
+    return service.get_candidate(context.engine, candidate_id)
 
 
 @router.post("/harvest-candidates/{candidate_id}/skill-model-review")
@@ -188,16 +292,13 @@ def skill_model_review(
 ) -> dict[str, Any]:
     """让模型通读一遍技能里的文字，找可疑说法。只给评审人参考，不自动拦截。"""
     from fde_asset.modules.asset import skill_checks
-    from fde_asset.platform.llm.client import build_client
 
     candidate = get_candidate(candidate_id, context, principal)
     if candidate["kind"] != "Skill":
         raise HTTPException(status_code=422, detail="只有技能有模型通读")
-    llm = build_client(str(settings_store.get(context.engine, "rerank_model") or ""))
-    config = getattr(llm, "config", None)
-    if config is not None:
-        config.timeout = max(config.timeout, 90)
-    return skill_checks.model_review(context.engine, candidate_id, candidate["files"], llm)
+    return skill_checks.model_review(
+        context.engine, candidate_id, candidate["files"], _model_llm(context.engine)
+    )
 
 
 @router.post("/harvest-candidates/from-upload")
@@ -283,6 +384,13 @@ def get_candidate(
         # 入库的结果本人已经看到了，平台工作台里那条不用再留着
         context.platform_inbox.resolve(
             candidate_id=candidate_id, event="result", usernames=[principal.user_id]
+        )
+    if candidate["kind"] == "Skill" and isinstance(candidate["checks"].get("skill"), dict):
+        from fde_asset.modules.asset import skill_checks
+
+        # 后台结果按内容摘要保存；读取当前文件对应的结果，旧任务不能覆盖新草稿的检查状态。
+        candidate["checks"]["skill"]["model"] = skill_checks.model_for(
+            context.engine, candidate["files"]
         )
     return candidate
 
