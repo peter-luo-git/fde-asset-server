@@ -224,7 +224,8 @@ def build_snapshot(
     not_carried = chosen.not_carried
 
     fingerprint = hashlib.sha256()
-    fingerprint.update(f"selection={selection}|".encode())
+    # 快照布局改了就加版本号，旧快照不再复用（2：知识正文末尾附上附件清单）
+    fingerprint.update(f"layout=2|selection={selection}|".encode())
     for row in selected:
         fingerprint.update(
             f"{row.asset_id}|{row.kind}|{mounted[row.asset_id]}|{row.commit_sha}|{row.updated_at}".encode()
@@ -283,7 +284,9 @@ def build_snapshot(
                 )
         elif row.kind in KNOWLEDGE_KINDS:
             destination = staging / "knowledge" / SHORT_BY_KIND[row.kind] / mount / "README.md"
-            _write(destination, repo_port.read_file(repo, f"{row.path}/README.md"))
+            readme = repo_port.read_file(repo, f"{row.path}/README.md")
+            # 附件的文字版放在 attachments-text/ 下；Agent 不列目录，所以在正文末尾列出来，它读正文就知道有哪些、各是什么
+            listed: list[str] = []
             for attachment in json.loads(row.attachments_json or "[]"):
                 if attachment.get("text_extraction") != "ok":
                     skipped.append(
@@ -309,6 +312,16 @@ def build_snapshot(
                 text = extract_text(attachment["path"], blob).text
                 name = Path(attachment["path"]).name + ".txt"
                 _write(destination.parent / "attachments-text" / name, text.encode("utf-8"))
+                summary = str(attachment.get("summary") or "").strip()
+                listed.append(
+                    f"- `attachments-text/{name}`（原件 {Path(attachment['path']).name}）"
+                    + (f"：{summary}" if summary else "")
+                )
+            if listed:
+                text = readme.decode("utf-8", "replace").rstrip()
+                text += "\n\n## 附件（文字版，按需用 read 打开；路径相对本文件所在目录）\n\n"
+                readme = (text + "\n".join(listed) + "\n").encode("utf-8")
+            _write(destination, readme)
             applicability = json.loads(row.applicability_json or "{}")
             index_rows[(row.kind, mount)] = {
                 "ref": f"[[{SHORT_BY_KIND[row.kind]}/{row.name}]]",

@@ -562,6 +562,50 @@ def download_attachment(
     )
 
 
+@router.put("/harvest-candidates/{candidate_id}/attachments/{filename}/summary")
+def put_attachment_summary(
+    candidate_id: str,
+    filename: str,
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """保存附件摘要（草稿才能改）；Agent 读资产正文时会看到附件清单和这句摘要，靠它决定要不要打开附件。"""
+    get_candidate(candidate_id, context, principal)
+    try:
+        service.set_attachment_summary(
+            context.engine, candidate_id, filename, str(payload.get("summary") or "")
+        )
+    except service.HarvestError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return service.get_candidate(context.engine, candidate_id)
+
+
+@router.post("/harvest-candidates/{candidate_id}/attachments/{filename}/summary/generate")
+def generate_attachment_summary(
+    candidate_id: str,
+    filename: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """让模型读附件写一段摘要，只返回不保存：页面填进输入框，用户改好再保存。用和 Agent 同一套模型。"""
+    candidate = get_candidate(candidate_id, context, principal)
+    if candidate["status"] != "draft":
+        raise HTTPException(status_code=409, detail="只有草稿可以改附件摘要")
+    try:
+        summary = service.generate_attachment_summary(
+            candidate_id, filename, context.blob_store, _model_llm(context.engine)
+        )
+    except service.HarvestError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except Exception as exc:  # noqa: BLE001 - 模型超时、网关出错
+        logger.warning("attachment summary failed: %s", exc)
+        raise HTTPException(
+            status_code=502, detail="模型这次没有回应，请稍后重试或手写摘要"
+        ) from None
+    return {"summary": summary}
+
+
 @router.delete("/harvest-candidates/{candidate_id}/attachments/{filename}")
 def remove_attachment(
     candidate_id: str,

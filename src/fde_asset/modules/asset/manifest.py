@@ -64,6 +64,8 @@ class AttachmentRef(BaseModel):
     name: str
     sha256: str
     bytes: int = 0
+    #: 一两句话说清这个附件是什么、什么时候用得上；Agent 靠它决定要不要打开附件
+    summary: str = ""
 
     @field_validator("name")
     @classmethod

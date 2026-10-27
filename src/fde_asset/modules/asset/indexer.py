@@ -133,6 +133,7 @@ def _attachments(
             "name": attachment.name,
             "sha256": attachment.sha256,
             "bytes": attachment.bytes,
+            "summary": attachment.summary,
             "text_extraction": "skipped",
             "detail": "",
         }
