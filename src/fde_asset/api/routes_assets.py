@@ -256,6 +256,66 @@ def edit_asset(
     return candidate
 
 
+@router.post("/assets/{asset_id}/dependencies")
+def add_skill_dependencies(
+    asset_id: str,
+    payload: dict[str, Any] = Body(default={}),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """给技能补依赖：起一份修订稿，把依赖写进 requirements.txt，改完照常提交评审。
+
+    ``packages`` 给了就用它（会话里临时装过、要转成技能依赖时用）；不给就按脚本里
+    用了却没声明的 import 自动推断。评审通过后平台按技能依赖预装（第 2 层）。
+    """
+    if catalog.get_asset(context.engine, principal, asset_id) is None:
+        raise HTTPException(status_code=404, detail="资产不存在或无权查看")
+    with context.engine.connect() as conn:
+        row = conn.execute(select(assets).where(assets.c.asset_id == asset_id)).first()
+    if row.kind != "Skill":
+        raise HTTPException(status_code=422, detail="只有技能能声明依赖")
+    if not lifecycle.may_manage(principal, row):
+        raise HTTPException(
+            status_code=403, detail="只有技能负责人或它所在范围的评审人能改依赖，请联系他们"
+        )
+    packages = payload.get("packages")
+    if packages is not None and (
+        not isinstance(packages, list) or not all(isinstance(p, str) for p in packages)
+    ):
+        raise HTTPException(status_code=422, detail="packages 要是包名列表")
+    try:
+        candidate = harvest_service.draft_revision(
+            context.engine,
+            principal,
+            context.repo_port,
+            row,
+            blob_store=context.blob_store,
+            file_store=context.file_store,
+            note="补技能依赖",
+        )
+    except harvest_service.HarvestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    if candidate["created_by"] != principal.user_id and candidate["origin"] != "feedback":
+        raise HTTPException(
+            status_code=409,
+            detail=f"{candidate['created_by']} 正在修订这份技能，等那份入库或删掉后再改",
+        )
+    if candidate["status"] != "draft":
+        raise HTTPException(status_code=409, detail="这份技能的修订稿已在评审中，等评审完再补依赖")
+    try:
+        candidate, added = harvest_service.add_dependencies(context.engine, candidate, packages)
+    except harvest_service.HarvestError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    if added:
+        from fde_asset.api.routes_harvest import _scan_context
+
+        harvest_service.run_checks(
+            context.engine, candidate["candidate_id"], _scan_context(context)
+        )
+        candidate = harvest_service.get_candidate(context.engine, candidate["candidate_id"])
+    return {"candidate": candidate, "added": added}
+
+
 @router.get("/assets/{asset_id}/versions")
 def asset_versions_view(
     asset_id: str,
