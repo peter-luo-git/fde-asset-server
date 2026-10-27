@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from urllib.parse import quote
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Response
 from sqlalchemy import or_, select, update
 
 from fde_asset.api.deps import ServiceContext, get_context, get_principal
@@ -31,6 +32,7 @@ from fde_asset.platform.blobs import BlobError
 from fde_asset.platform import settings_store
 from fde_asset.platform.identity import Principal
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["harvest"])
 
 
@@ -135,6 +137,7 @@ def create_from_issue(
 
 @router.post("/harvest-candidates/from-skill-package")
 def create_from_skill_package(
+    background: BackgroundTasks,
     payload: dict[str, Any] = Body(...),
     context: ServiceContext = Depends(get_context),
     principal: Principal = Depends(get_principal),
@@ -164,7 +167,7 @@ def create_from_skill_package(
                 "path": str(payload.get("source_path") or "")[:300],
                 "commit": str(payload.get("source_commit") or "")[:64],
             }
-        return service.draft_from_skill_package(
+        candidate = service.draft_from_skill_package(
             context.engine,
             principal,
             package,
@@ -178,6 +181,43 @@ def create_from_skill_package(
         )
     except (skill_package.SkillPackageError, service.HarvestError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    return _checked_upload(context, candidate, background)
+
+
+def _checked_upload(
+    context: ServiceContext, candidate: dict[str, Any], background: BackgroundTasks
+) -> dict[str, Any]:
+    """上传完马上跑规则扫描、依赖检查和试跑排队；带脚本的再在后台让模型通读一遍（几十秒，不拖慢上传）。"""
+    from fde_asset.modules.asset import skill_checks, skill_package
+
+    candidate_id = candidate["candidate_id"]
+    service.run_checks(context.engine, candidate_id, _scan_context(context))
+    candidate = service.get_candidate(context.engine, candidate_id)
+    files = skill_checks.skill_files(candidate["files"])
+    if candidate["kind"] == "Skill" and any(
+        skill_package.is_script(path, text) for path, text in files.items()
+    ):
+        background.add_task(_model_review_in_background, context.engine, candidate_id, files)
+    return candidate
+
+
+def _model_llm(engine):
+    from fde_asset.platform.llm.client import build_client
+
+    llm = build_client(str(settings_store.get(engine, "rerank_model") or ""))
+    config = getattr(llm, "config", None)
+    if config is not None:
+        config.timeout = max(config.timeout, 90)
+    return llm
+
+
+def _model_review_in_background(engine, candidate_id: str, files: dict[str, str]) -> None:
+    from fde_asset.modules.asset import skill_checks
+
+    try:
+        skill_checks.model_review(engine, candidate_id, files, _model_llm(engine))
+    except Exception:  # noqa: BLE001 - 后台通读失败不影响草稿，评审人可在页面上重新通读
+        logger.exception("skill model review failed for %s", candidate_id)
 
 
 @router.post("/harvest-candidates/{candidate_id}/skill-model-review")
@@ -188,16 +228,13 @@ def skill_model_review(
 ) -> dict[str, Any]:
     """让模型通读一遍技能里的文字，找可疑说法。只给评审人参考，不自动拦截。"""
     from fde_asset.modules.asset import skill_checks
-    from fde_asset.platform.llm.client import build_client
 
     candidate = get_candidate(candidate_id, context, principal)
     if candidate["kind"] != "Skill":
         raise HTTPException(status_code=422, detail="只有技能有模型通读")
-    llm = build_client(str(settings_store.get(context.engine, "rerank_model") or ""))
-    config = getattr(llm, "config", None)
-    if config is not None:
-        config.timeout = max(config.timeout, 90)
-    return skill_checks.model_review(context.engine, candidate_id, candidate["files"], llm)
+    return skill_checks.model_review(
+        context.engine, candidate_id, candidate["files"], _model_llm(context.engine)
+    )
 
 
 @router.post("/harvest-candidates/from-upload")
