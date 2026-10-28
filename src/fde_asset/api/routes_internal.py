@@ -292,7 +292,11 @@ def agent_bundle(
     if known and agent_bundle_module.unchanged(context.engine, context.repo_port, known, **request):
         return {"revision": known, "unchanged": True}
     bundle = agent_bundle_module.build_bundle(
-        context.engine, context.repo_port, bundle_root=context.settings.bundle_dir, **request
+        context.engine,
+        context.repo_port,
+        bundle_root=context.settings.bundle_dir,
+        file_store=context.file_store,
+        **request,
     )
     return bundle.as_payload()
 

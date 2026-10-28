@@ -35,7 +35,13 @@ import yaml
 from sqlalchemy.engine import Engine
 
 from fde_asset.modules.asset.manifest import KIND_RULES
-from fde_asset.modules.asset.snapshot import Selection, _renamed, select_assets
+from fde_asset.modules.asset.snapshot import KNOWLEDGE_KINDS
+from fde_asset.modules.asset.snapshot import (
+    Selection,
+    _renamed,
+    select_assets,
+    with_attachment_texts,
+)
 from fde_asset.platform.repo.ports import RepoRef
 
 #: 类型 → 包里的目录。规范单独处理（一份一个文件）；应用是拿来跑的，不给 Agent
@@ -213,6 +219,7 @@ def build_bundle(
     agent_key: str = "",
     username: str = "",
     sop_skills: str = "",
+    file_store: Any = None,
 ) -> AgentBundle:
     """`agent_key`：这次干活的是哪个 Agent；给它关联过的资产和项目关联的合在一起挑。
 
@@ -254,6 +261,16 @@ def build_bundle(
                     elif relative == main_file and mount != row.name:
                         content = _renamed(content, row.name, mount)
                     files[f"{prefix}/{relative}"] = content
+                if row.kind in KNOWLEDGE_KINDS and f"{prefix}/{main_file}" in files:
+                    # 知识类的附件：文字版放进 attachments-text/，正文末尾列出清单和摘要（2026-10-28）。
+                    # 以前只在 snapshot.py 里做了，Agent 实际用的这份资产包里一直没有附件内容
+                    readme, texts, missed = with_attachment_texts(
+                        row, files[f"{prefix}/{main_file}"], file_store
+                    )
+                    files[f"{prefix}/{main_file}"] = readme
+                    for relative, text in texts.items():
+                        files[f"{prefix}/{relative}"] = text
+                    skipped.extend(missed)
         except FileNotFoundError:
             skipped.append({"asset": row.title, "asset_id": row.asset_id, "reason": "file_missing"})
             continue

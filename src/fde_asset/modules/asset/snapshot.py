@@ -285,42 +285,10 @@ def build_snapshot(
         elif row.kind in KNOWLEDGE_KINDS:
             destination = staging / "knowledge" / SHORT_BY_KIND[row.kind] / mount / "README.md"
             readme = repo_port.read_file(repo, f"{row.path}/README.md")
-            # 附件的文字版放在 attachments-text/ 下；Agent 不列目录，所以在正文末尾列出来，它读正文就知道有哪些、各是什么
-            listed: list[str] = []
-            for attachment in json.loads(row.attachments_json or "[]"):
-                if attachment.get("text_extraction") != "ok":
-                    skipped.append(
-                        {
-                            "asset": row.name,
-                            "attachment": attachment.get("path"),
-                            "reason": attachment.get("text_extraction"),
-                        }
-                    )
-                    continue
-                blob = (
-                    file_store.get(attachment.get("sha256", "")) if file_store is not None else None
-                )
-                if blob is None:
-                    skipped.append(
-                        {
-                            "asset": row.name,
-                            "attachment": attachment.get("path"),
-                            "reason": "missing",
-                        }
-                    )
-                    continue
-                text = extract_text(attachment["path"], blob).text
-                name = Path(attachment["path"]).name + ".txt"
-                _write(destination.parent / "attachments-text" / name, text.encode("utf-8"))
-                summary = str(attachment.get("summary") or "").strip()
-                listed.append(
-                    f"- `attachments-text/{name}`（原件 {Path(attachment['path']).name}）"
-                    + (f"：{summary}" if summary else "")
-                )
-            if listed:
-                text = readme.decode("utf-8", "replace").rstrip()
-                text += "\n\n## 附件（文字版，按需用 read 打开；路径相对本文件所在目录）\n\n"
-                readme = (text + "\n".join(listed) + "\n").encode("utf-8")
+            readme, texts, missed = with_attachment_texts(row, readme, file_store)
+            skipped.extend(missed)
+            for relative, content in texts.items():
+                _write(destination.parent / relative, content)
             _write(destination, readme)
             applicability = json.loads(row.applicability_json or "{}")
             index_rows[(row.kind, mount)] = {
@@ -444,3 +412,74 @@ def _rmtree(path: Path) -> None:
     import shutil
 
     shutil.rmtree(path, ignore_errors=True)
+
+
+#: 一份知识资产交给平台的全部文件不能超过 1MB（平台超了会整份丢掉），附件文字合计控制在这个数以内
+ATTACHMENT_TEXT_BUDGET = 900_000
+_TEXT_CACHE: dict[str, str] = {}
+_TEXT_CACHE_LIMIT = 64
+
+
+def _attachment_text(attachment: dict[str, Any], blob: bytes) -> str:
+    """提取附件文字；按文件哈希缓存，几十 MB 的 PDF、PPT 不用每次重新提取。"""
+    key = str(attachment.get("sha256") or hashlib.sha256(blob).hexdigest())
+    if key not in _TEXT_CACHE:
+        if len(_TEXT_CACHE) >= _TEXT_CACHE_LIMIT:
+            _TEXT_CACHE.pop(next(iter(_TEXT_CACHE)))
+        _TEXT_CACHE[key] = extract_text(attachment["path"], blob).text
+    return _TEXT_CACHE[key]
+
+
+def _clip(text: str, limit: int) -> bytes:
+    data = text.encode("utf-8")
+    if len(data) <= limit:
+        return data
+    note = "\n\n（文字版到这里截断：附件太大，完整内容请看原件）\n".encode("utf-8")
+    return data[: max(0, limit - len(note))].decode("utf-8", "ignore").encode("utf-8") + note
+
+
+def with_attachment_texts(
+    row: Any, readme: bytes, file_store: Any, budget: int = ATTACHMENT_TEXT_BUDGET
+) -> tuple[bytes, dict[str, bytes], list[dict[str, Any]]]:
+    """知识类资产的附件交给 Agent：每个附件的文字版放在 attachments-text/ 下，正文末尾列出清单和摘要。
+
+    Agent 不列目录，只读正文，所以清单要写进正文它才知道有哪些附件、各讲什么。
+    附件文字合计不超过 budget 字节（按份数平分，超的截断并注明），免得整份资产超出平台上限被丢掉。
+    返回（加了清单的正文、{相对路径: 文字}、没带上的附件）。
+    """
+    attachments = json.loads(row.attachments_json or "[]")
+    missed: list[dict[str, Any]] = []
+    usable: list[tuple[dict[str, Any], bytes]] = []
+    for attachment in attachments:
+        if attachment.get("text_extraction") != "ok":
+            missed.append(
+                {
+                    "asset": row.name,
+                    "attachment": attachment.get("path"),
+                    "reason": attachment.get("text_extraction"),
+                }
+            )
+            continue
+        blob = file_store.get(attachment.get("sha256", "")) if file_store is not None else None
+        if blob is None:
+            missed.append(
+                {"asset": row.name, "attachment": attachment.get("path"), "reason": "missing"}
+            )
+            continue
+        usable.append((attachment, blob))
+    texts: dict[str, bytes] = {}
+    listed: list[str] = []
+    share = max(0, budget - len(readme)) // max(1, len(usable))
+    for attachment, blob in usable:
+        name = Path(attachment["path"]).name + ".txt"
+        texts[f"attachments-text/{name}"] = _clip(_attachment_text(attachment, blob), share)
+        summary = str(attachment.get("summary") or "").strip()
+        listed.append(
+            f"- `attachments-text/{name}`（原件 {Path(attachment['path']).name}）"
+            + (f"：{summary}" if summary else "")
+        )
+    if listed:
+        text = readme.decode("utf-8", "replace").rstrip()
+        text += "\n\n## 附件（文字版，按需用 read 打开；路径相对本文件所在目录）\n\n"
+        readme = (text + "\n".join(listed) + "\n").encode("utf-8")
+    return readme, texts, missed
