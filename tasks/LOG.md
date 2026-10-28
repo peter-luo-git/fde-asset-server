@@ -49,3 +49,5 @@
 
 - 2026-10-28：Root合并 dev1005 71b6376（4提交），采用实时试跑进度、评审阶段Agent模型通读、项目自有资产与规范20000字节校验；解决recommend/linked与本地unlink相邻冲突、删除重复model结果覆盖；机械导出契约并同步Specs。第1轮相关81通过/1新增夹具作用域错误，第2轮82通过，临时PostgreSQL已清理；未运行全量/E2E/真实模型，未推送部署。证据：工作区.run/dev1005-merge-20261028/asset-targeted-final.log。
 - 2026-10-28增量：继续合入46a7706附件摘要与layout=2快照，模型生成只返回不保存；附件/快照/契约27通过，契约同步至110路径。本轮未运行真实模型或部署。
+
+- 2026-10-28 github-harvest-sync-20261028 / implementer_sync_asset 合并相关评审：通过；合入精确cd8bd8a并保留本地身份、权限、typed解除与重排设置；修来源ACL、只读及撤权、DM去重保密、跨会话文件、私有Agent清单和草稿/资产引用权限；官方Alembic1.14.1机制适配解决33字符0017标识写入32字符版本列，空库及0015合成库升级/重复升级/资产保留2通过。相关批次229通过/3目录夹具失败，修夹具后重排文件34通过、最后候选文件18通过、契约2通过（跨批236个不同相关用例）；29变更Python编译/Ruff及diff检查通过，公开契约118路径。未全量/E2E/真实模型/提交/推送/部署；Root负责最终审查、固定冒烟、Specs镜像、生产副本及部署，贡献见operations/agent-contributions/github-harvest-sync-20261028/implementer_sync_asset.md。

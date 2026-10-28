@@ -26,7 +26,7 @@ from fde_asset.modules.asset import sop_progress
 from fde_asset.modules.asset import usage as usage_module
 from fde_asset.modules.asset.visibility import audience_clause
 from fde_asset.modules.asset.manifest import KIND_RULES
-from fde_asset.platform.identity import PlatformUnavailable, PrincipalNotFound
+from fde_asset.platform.identity import PlatformDirectory, PlatformUnavailable, PrincipalNotFound
 from fde_asset.platform.repo.ports import RepoRef
 
 # 内部接口不进对外的接口契约
@@ -347,6 +347,22 @@ def agent_attachment(
     if membership is None and not principal.is_admin:
         raise HTTPException(status_code=403, detail="这个用户不在这个项目里")
     project = context.directory.engagements().get(engagement_slug, {})
+    # Agent 在资产目录里看到的是标识（目录名，如 solution-20261028-3ccb），常拿它当 asset_id 传：
+    # 两种都认。按标识找时只认知识类、没删除的，重名就要求用编号
+    with context.engine.connect() as conn:
+        if (
+            conn.execute(select(assets.c.asset_id).where(assets.c.asset_id == asset_id)).first()
+            is None
+        ):
+            named = conn.execute(
+                select(assets.c.asset_id).where(
+                    assets.c.name == asset_id,
+                    assets.c.kind.in_(sorted(KNOWLEDGE_KINDS)),
+                    assets.c.deleted_at.is_(None),
+                )
+            ).fetchall()
+            if len(named) == 1:
+                asset_id = named[0].asset_id
     visible = recommend_service.visible_to_project(
         context.engine,
         [asset_id],
@@ -385,6 +401,56 @@ def agent_attachment(
         "bytes": len(content),
         "content_base64": base64.b64encode(content).decode(),
     }
+
+
+@router.post("/harvest-suggestions", dependencies=[Depends(require_service_key)])
+def agent_harvest_suggestion(
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+) -> dict[str, Any]:
+    """Agent 主动提的沉淀候选（平台工具 fde_asset_harvest_suggest 转过来）。
+
+    平台已核对这一轮的身份和会话；这里再核对发起这一轮的人是项目成员。私聊的候选只记给这个人。
+    """
+    from fde_asset.modules.harvest import suggestions
+
+    username = str(payload.get("username") or "")
+    engagement_slug = str(payload.get("engagement_slug") or "")
+    try:
+        if isinstance(context.directory, PlatformDirectory):
+            context.directory.refresh()
+        principal = context.directory.resolve(username)
+    except PrincipalNotFound:
+        raise HTTPException(status_code=404, detail="没有这个用户") from None
+    except PlatformUnavailable:
+        raise HTTPException(status_code=503, detail="暂时无法向平台确认身份") from None
+    if not suggestions.may_write_project(principal, engagement_slug):
+        raise HTTPException(status_code=403, detail="只有项目可写成员能记录沉淀候选")
+    extra = {}
+    if payload.get("skill") or payload.get("packages"):
+        extra = {
+            "skill": str(payload.get("skill") or ""),
+            "packages": [str(item) for item in (payload.get("packages") or [])][:30],
+        }
+    try:
+        source = suggestions.checked_source(context.directory, principal, payload, message=False)
+        return suggestions.record(
+            context.engine,
+            engagement_slug=source["engagement_slug"],
+            scope=source["scope"],
+            scope_id=source["scope_id"],
+            owner_user=principal.user_id,
+            source="agent",
+            created_by=source["agent_profile_id"] or "agent",
+            kind=str(payload.get("kind") or ""),
+            title=str(payload.get("title") or ""),
+            summary=str(payload.get("summary") or ""),
+            conversation_id=source["conversation_id"],
+            files=payload.get("files"),
+            extra=extra,
+        )
+    except suggestions.SuggestionError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from None
 
 
 @router.post("/agent-usage", dependencies=[Depends(require_service_key)])

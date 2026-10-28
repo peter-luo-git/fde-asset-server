@@ -513,6 +513,52 @@ attachment_texts = Table(
     Column("updated_at", DateTime(timezone=True)),
 )
 
+#: 沉淀候选（2026-10-28）：会话里可能值得沉淀成资产的内容，分散的地方先统一记下来，
+#: 点「沉淀资产」时再唤醒处理。来源：Agent 主动提（fde_asset_harvest_suggest）、人在消息上「记为可沉淀」。
+#: scope=channel 时项目成员都能看、能处理；scope=dm 时只有私聊本人（owner_user）。
+harvest_suggestions = Table(
+    "harvest_suggestions",
+    metadata,
+    Column("id", String(32), primary_key=True),
+    Column("engagement_slug", String(128), nullable=False),
+    # channel | dm
+    Column("scope", String(16), nullable=False),
+    # 频道编号或私聊会话编号
+    Column("scope_id", String(64), nullable=False),
+    # 提出它的 Agent 会话（找会话目录里的文件用）；人标记的可以为空
+    Column("conversation_id", String(64), nullable=False, default=""),
+    Column("owner_user", String(128), nullable=False, default=""),
+    # agent | message
+    Column("source", String(16), nullable=False),
+    # 建议的资产类型（Solution、Case、Experience、Implementation、Rule、Skill……）或 skill_deps
+    Column("kind", String(32), nullable=False, default=""),
+    Column("title", String(255), nullable=False, default=""),
+    Column("summary", Text, nullable=False, default=""),
+    Column("message_id", String(64), nullable=False, default=""),
+    # 会话目录里的相关文件（相对会话目录）
+    Column("files_json", Text, nullable=False, default="[]"),
+    # 依赖建议：{"skill": "...", "packages": [...]}
+    Column("extra_json", Text, nullable=False, default="{}"),
+    # open 待处理 | hold 待定 | drafted 已起草（评审中、已沉淀跟着草稿算）| linked 已有资产 |
+    # duplicate 和另一条重复 | ignored 不沉淀（2026-10-28 扩充）
+    Column("status", String(16), nullable=False, default="open"),
+    Column("candidate_id", String(32), nullable=False, default=""),
+    Column("created_by", String(128), nullable=False, default=""),
+    Column("decided_by", String(128), nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    Column("updated_at", DateTime(timezone=True)),
+    # 处理说明（不沉淀的原因等）
+    Column("decision_note", Text, nullable=False, default=""),
+    # linked：覆盖它的已有资产
+    Column("related_asset_id", String(64), nullable=False, default=""),
+    # duplicate：合并到哪一条
+    Column("merged_into", String(32), nullable=False, default=""),
+    # 处理后又被提到的次数和最近几次（来源、谁、什么时候）
+    Column("mentions", Integer, nullable=False, default=0),
+    Column("mentions_json", Text, nullable=False, default="[]"),
+    Column("decided_at", DateTime(timezone=True)),
+)
+
 #: 公开技能库：管理员配的来源；目录清单缓存在 catalog_json
 skill_sources = Table(
     "skill_sources",

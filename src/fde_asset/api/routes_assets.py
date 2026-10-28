@@ -953,7 +953,11 @@ def match_assets(
         stage=payload.get("stage", ""),
         keywords=list(payload.get("keywords", []) or []),
     )
-    return matching.match(context.engine, principal, match_context)
+    result = matching.match(context.engine, principal, match_context)
+    # 给重排模型看的完整描述不回给页面
+    for group in ("rules", "sops", "skills", "knowledge"):
+        result[group] = [{k: v for k, v in item.items() if k != "_doc"} for item in result[group]]
+    return result
 
 
 @router.post("/admin/assets/reindex")

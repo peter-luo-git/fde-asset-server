@@ -313,3 +313,35 @@ def test_candidate_text_retry_requires_its_author_and_draft_status(
             select(attachment_texts.c.include_json).where(attachment_texts.c.sha256 == sha)
         ).scalar_one()
     assert json.loads(include) == (["u1-i1"] if expected_status == 200 and payload else [])
+
+
+def test_search_index_uses_text_with_picture_descriptions() -> None:
+    """资产中心检索用带图片说明的文字版：截图里的内容也能搜到；图片附件也有了文字（2026-10-28）。"""
+    from fde_asset.modules.asset.indexer import _attachments
+
+    deck, picture = _deck(), _png((7, 8, 9))
+    blobs = {
+        hashlib.sha256(deck).hexdigest(): deck,
+        hashlib.sha256(picture).hexdigest(): picture,
+    }
+    manifest = SimpleNamespace(
+        spec=SimpleNamespace(
+            attachments=[
+                SimpleNamespace(name="deck.pptx", sha256=sha, bytes=len(data), summary="")
+                if data is deck
+                else SimpleNamespace(name="架构.png", sha256=sha, bytes=len(data), summary="")
+                for sha, data in blobs.items()
+            ]
+        )
+    )
+    store = SimpleNamespace(get=blobs.get)
+    enriched = {sha: f"【第 1 页图片说明】华电燃机运维大屏 {i}" for i, sha in enumerate(blobs)}
+    listed, chunks = _attachments(manifest, store, 200_000, enriched)
+    assert all(
+        entry["text_extraction"] == "ok" and entry["detail"] == "含图片说明" for entry in listed
+    )
+    assert sum("华电燃机运维大屏" in chunk for chunk in chunks) == 2
+    # 没做图片理解的照旧：PPT 提取普通文字，图片提取不了
+    plain, plain_chunks = _attachments(manifest, store, 200_000)
+    statuses = {entry["name"]: entry["text_extraction"] for entry in plain}
+    assert statuses == {"deck.pptx": "ok", "架构.png": "unsupported"}

@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from fde_asset.modules.asset import ask
-from fde_asset.platform.identity import Principal
+from fde_asset.platform.identity import LocalDirectory, Principal
 from fde_asset.platform.llm.client import LlmConfig
 from fde_asset.platform.llm.reranker import HttpReranker, build_reranker, parse_results
 
@@ -190,7 +190,7 @@ def test_model_override_reaches_rerank_http_body(wire, configured_rerank_env, se
     "selected,expected", [("selected-ranker", "selected-ranker"), ("", "environment-ranker")]
 )
 def test_each_entry_uses_selected_rerank_model(
-    wire, configured_rerank_env, monkeypatch, entry, selected, expected
+    wire, configured_rerank_env, monkeypatch, tmp_path, entry, selected, expected
 ):
     from fde_asset.api import routes_assets, routes_mcp, routes_recommend
     from fde_asset.modules.recommend.service import Target
@@ -203,7 +203,9 @@ def test_each_entry_uses_selected_rerank_model(
         "search_min_relevance": 5,
     }
     monkeypatch.setattr(settings_store, "get", lambda _engine, key: values[key])
-    context = SimpleNamespace(engine=object())
+    context = SimpleNamespace(
+        engine=object(), directory=LocalDirectory(tmp_path / "directory.json")
+    )
     principal = Principal("synthetic-user")
 
     def search(_engine, _principal, question, *, reranker, **_kwargs):
@@ -232,7 +234,7 @@ def test_each_entry_uses_selected_rerank_model(
 
 
 def test_recommend_model_change_does_not_reuse_previous_model_cache(
-    wire, configured_rerank_env, monkeypatch
+    wire, configured_rerank_env, monkeypatch, tmp_path
 ):
     from fde_asset.api import routes_recommend
     from fde_asset.modules.recommend.service import Target
@@ -253,7 +255,10 @@ def test_recommend_model_change_does_not_reuse_previous_model_cache(
         return [], "reranked"
 
     monkeypatch.setattr(routes_recommend.service, "compute", compute)
-    context, principal = SimpleNamespace(engine=object()), Principal("synthetic-user")
+    context = SimpleNamespace(
+        engine=object(), directory=LocalDirectory(tmp_path / "directory.json")
+    )
+    principal = Principal("synthetic-user")
     assert routes_recommend.compute({}, context, principal)["mode"] == "reranked"
     assert routes_recommend.compute({}, context, principal)["mode"] == "reranked-cached"
     values["rerank_model_name"] = "second-ranker"

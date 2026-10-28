@@ -3,7 +3,6 @@
 | 任务 | 做什么 | 多久一次 |
 |---|---|---|
 | reindex | 资产仓库有新提交就重建索引（顺带重建关系、发变更通知）。资产仓库挂了 Gitea 推送回调时，推送当场就会同步，这里只是兜底 | `index_poll_seconds`，默认 30 秒；看 Gitea 分支头的缓存 `gitea_sync_seconds` 默认 5 分钟 |
-| leads | 重新扫描沉淀线索 | 10 分钟 |
 | probe | 探一遍应用的演示地址 | 系统配置 `app_probe_interval_minutes`，默认 10 分钟 |
 | checkup | 资产体检，结果落库，新出现的问题通知负责人（B10） | 每天一次 |
 | housekeeping | 清理过期的资产包存档、没人引用的附件原件（B6） | 每天一次 |
@@ -28,12 +27,10 @@ from fde_asset.core.db import assets
 from fde_asset.modules.app import health as app_health
 from fde_asset.modules.asset import checkup, housekeeping
 from fde_asset.modules.asset.indexer import index_all
-from fde_asset.modules.leads import rules as leads_rules
 from fde_asset.platform import settings_store
 
 logger = logging.getLogger(__name__)
 
-LEADS_INTERVAL_SECONDS = 600
 DAILY_SECONDS = 86400.0
 
 
@@ -83,9 +80,6 @@ def build_tasks(context: ServiceContext) -> list[Task]:
         )
         return {"changed": changed, "indexed": sum(report.indexed for report in reports)}
 
-    def leads() -> dict[str, Any]:
-        return leads_rules.refresh(context.engine, context.activity)
-
     def probe() -> dict[str, Any]:
         return {"checked": len(app_health.probe_all(context.engine))}
 
@@ -97,12 +91,26 @@ def build_tasks(context: ServiceContext) -> list[Task]:
         """附件图片理解：一份要好几分钟，放到单独的线程里逐个做，不挡住重建索引等其他定时任务。"""
         from fde_asset.modules.asset import attachment_vision
 
-        return {"started": attachment_vision.start_worker(context.engine, context.file_store)}
+        def reindex_now() -> None:
+            # 图片说明做完后重建一次检索，资产中心搜索能搜到截图里的内容
+            index_all(
+                context.engine,
+                context.repo_port,
+                context.repos(),
+                text_limit=context.settings.index_text_limit,
+                owner_of=context.target_owner,
+                file_store=context.file_store,
+            )
+
+        return {
+            "started": attachment_vision.start_worker(
+                context.engine, context.file_store, on_done=reindex_now
+            )
+        }
 
     return [
         Task("reindex", lambda: float(context.settings.index_poll_seconds), reindex),
         Task("attachment-vision", lambda: 15.0, vision),
-        Task("leads", lambda: float(LEADS_INTERVAL_SECONDS), leads),
         Task("probe", probe_interval, probe),
         Task(
             "checkup",

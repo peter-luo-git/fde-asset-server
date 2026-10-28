@@ -68,6 +68,12 @@ class Target:
     owner: str = ""
     stage: str = ""
     role: str = ""
+    #: Agent 用（2026-10-28）：project = 项目里的 Agent，属于 engagement_slug 这个项目；
+    #: template = 公司模板（含以前直接挂在项目上的遗留用法），不当关联目标；company = 以后的公司级 Agent
+    scope: str = ""
+    engagement_slug: str = ""
+    #: 精确推荐用：项目里近期用户问 Agent 的问题总结（2026-10-28），见 project_focus
+    focus: str = ""
 
     def context(self) -> matching.MatchContext:
         return matching.MatchContext(
@@ -101,7 +107,24 @@ def target_from_directory(directory, target_type: str, target_id: str) -> Target
         owner=raw.get("owner", ""),
         stage=raw.get("stage", ""),
         role=raw.get("role", ""),
+        scope=raw.get("scope", "") if target_type == "agent" else "",
+        engagement_slug=raw.get("engagement_slug", "") if target_type == "agent" else "",
     )
+
+
+def department_targets(directory, department_code: str) -> list[Target]:
+    """部门管理员视角：本部门的全部项目与 Agent。"""
+    found: list[Target] = []
+    for target_type, source in (
+        ("engagement", directory.engagements()),
+        ("agent", directory.agents()),
+    ):
+        for target_id, raw in source.items():
+            if target_type == "agent" and raw.get("scope") == "template":
+                continue  # 公司模板不当推荐目标
+            if raw.get("department_code") == department_code:
+                found.append(target_from_directory(directory, target_type, target_id))
+    return found
 
 
 def compute(
@@ -145,7 +168,11 @@ def compute(
     if semantic and mode != "reranked":
         # 重排没成功：候选是没做字面粗筛的全集，不能原样推出去，重新走一遍关键词粗排
         return compute(engine, principal, target, limit=limit, llm=llm, reranker=None)
-    return (rules + picked)[:limit], mode
+    # 给模型看的完整描述不回给页面
+    return [
+        {key: value for key, value in item.items() if key != "_doc"}
+        for item in (rules + picked)[:limit]
+    ], mode
 
 
 def target_context(target: Target) -> dict[str, Any]:
@@ -157,6 +184,7 @@ def target_context(target: Target) -> dict[str, Any]:
         "阶段": target.stage,
         "类型": "项目" if target.target_type == "engagement" else "Agent",
         "Agent 角色": target.role,
+        "近期在问": target.focus,
     }
 
 

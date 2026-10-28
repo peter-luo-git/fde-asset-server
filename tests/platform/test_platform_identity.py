@@ -12,6 +12,48 @@ from fde_asset.platform.identity import (
     PrincipalNotFound,
 )
 
+
+def test_harvest_source_access_revalidates_and_checks_the_returned_binding() -> None:
+    from fde_asset.platform.identity import HarvestSourceNotFound
+
+    class SourcePlatform:
+        def __init__(self):
+            self.allowed = True
+            self.forge = False
+
+        def get(self, url, *, headers=None, params=None):
+            assert url.endswith("/internal/identity/harvest-source/access")
+            assert headers == {"X-FDE-Service-Key": "k" * 32}
+            if not self.allowed:
+                return _Response(404)
+            return _Response(
+                200,
+                {
+                    **params,
+                    "scope_id": "other" if self.forge else params["scope_id"],
+                    "agent_profile_id": "pa-one",
+                },
+            )
+
+    platform = SourcePlatform()
+    source = PlatformDirectory("http://server-api:8000", "k" * 32, client=platform)
+    args = {
+        "username": "wang",
+        "engagement_slug": "policy-import",
+        "scope": "channel",
+        "scope_id": "ch-1",
+        "message_id": "msg-1",
+    }
+    assert source.harvest_source_access(**args)["message_id"] == "msg-1"
+    platform.allowed = False
+    with pytest.raises(HarvestSourceNotFound):
+        source.harvest_source_access(**args)
+    platform.allowed = True
+    platform.forge = True
+    with pytest.raises(PlatformUnavailable):
+        source.harvest_source_access(**args)
+
+
 WANG = {
     "user_id": "u-1",
     "username": "wang",
@@ -235,6 +277,11 @@ def test_agents_use_the_authenticated_platform_snapshot_and_safe_fields(tmp_path
             "role": "coding_agent",
             "owner": "wang",
             "department_code": "finance",
+            # 和项目、人的关系：老版本平台没给就是空
+            "scope": "",
+            "engagement_slug": "",
+            "engagement_name": "",
+            "sharing_mode": "",
         }
     }
     assert source.users() == ["admin", "wang"]

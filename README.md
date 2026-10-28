@@ -1,6 +1,6 @@
 # fde-asset-server
 
-文档版本：1.4（2026-10-28）。最新 dev1005 `9e39638` 候选补齐知识附件文字版、图片理解及原件取回，并保留本地关联权限防护；下文历史测试、现场切换和 `tasks/ENV_BLOCKERS.md` 的上游环境记录保留原时点，不代表当前服务器已升级为 PostgreSQL、启用回调或完成模型验收。
+文档版本：1.5（2026-10-28）。最新 dev1005 `cd8bd8a` 候选补齐会话沉淀建议、Agent 项目关系、近期问题推荐与实际资产清单，并保留本地关联权限和重排设置；下文历史测试、现场切换和 `tasks/ENV_BLOCKERS.md` 的上游环境记录保留原时点，不代表当前服务器已升级为 PostgreSQL、启用回调或完成模型验收。
 
 FDE 协同平台的**资产中心服务**：索引、目录、沉淀、评审、分发与复用计量。
 
@@ -128,6 +128,18 @@ PDF、PPT、Word 和图片附件进入持久化 `attachment_texts` 队列，以�
 服务密钥保护的 `POST /internal/v1/agent-attachment` 接收 `{username,engagement_slug,asset_id,filename}`，核对当前身份、项目成员关系和项目资产可见范围后返回原件的 base64、SHA-256及字节数；管理员可代项目访问，仍不能取回受限、无效、草稿、弃用、归档或已删除资产的原件。仅支持上述四类知识资产中已登记的附件。配套 Server 将原件放入本轮工作目录，`fde_asset_attachment_fetch` 供 Agent 在需要修改时调用，交付新文件而非回写资产。该接口不进入公开 OpenAPI；上线需先升级 `0015_attachment_texts`，并配对验收 Server 原件工具。
 
 `GET /api/v1/recommend/linked` 可选 `include_own=true`：仅项目目标额外返回当前可见、有效且非草稿/弃用/归档/受限的项目自有非SOP资产，标记 `source=project` 并排除已关联重复项；默认行为不变。项目自有资产无需另建关联，SOP仍按任务步骤注入；项目关联列表补充 `project_can_see`，不可带入的旧关联另给 `scope_label`。直接关联先按当前用户可见性统一404，再对项目不可见的资产返回422并提示调整范围；该列表不构成每个实际运行已装载全部资产的证明，实际快照选择及体积限制仍适用。
+
+### 会话沉淀建议与 Agent 实际资产（2026-10-28）
+
+`GET/POST /api/v1/harvest-suggestions`、`GET /api/v1/harvest-suggestions/counts` 和 `POST /api/v1/harvest-suggestions/{suggestion_id}/decide` 提供待沉淀列表、按项目计数、消息标记和处理。频道建议由项目成员查看、可写成员处理；私聊建议仅本人查看，处理仍要求当前项目写权限。写入前刷新平台成员关系；浏览器标记必须有真实 `message_id`，内部 Agent 建议必须有真实 `conversation_id`，两者均通过 Server `GET /internal/identity/harvest-source/access` 重新校验来源，不缓存或信任请求自报的频道/私聊归属。来源不存在或无权访问返回404，平台不可用返回503；本地模式也须在目录 `harvest_sources` 显式登记可访问来源。
+
+同项目同类型同标题可合并；频道与私聊分开，私聊还按本人和会话隔离，已处理建议再次出现只记录提及。相对文件路径只合并到相同频道/私聊和相同 `conversation_id`，不把另一会话的文件挂到原会话；拒绝绝对、越界、反斜杠、空字符和 `.git` 路径。处理支持 `open/hold/drafted/linked/duplicate/ignored`，重复提交同一处理不重复增加目标提及。起草记录跟随草稿状态，项目列表读取时发现草稿已删除则回到待处理。旧线索定时扫描停止，既有线索接口保留。
+
+`GET /api/v1/agent-assets?engagement_slug=...&agent_key=...` 与既有 `agent-skills` 共用快照挑选规则；Agent 必须属于该项目，私有 Agent 配置仅本人、项目负责人或管理员可读，读不到的旧关联不返回资产标题。清单给出挂载名、带入原因、用法及附件图片说明状态；个人资产标明仅本人私聊带入，清单不是某次执行已装载成功的证明。公司模板从推荐目标移除且不可新增关联，旧关联仍可解除。关联项目 Agent 时同时核验当前用户与所属项目的资产可见性。
+
+精确推荐在项目资料之外使用项目频道最近30天的问题摘要；仅当前项目成员或管理员读取，私聊不参与。按问题内容缓存摘要最多6小时，身份授权核验成功后，近期问题读取或总结不可用时沿用既有关键词/重排降级；用户配置的 `rerank_model_name` 继续生效。检索索引包含已完成的附件图片文字说明，处理完成后触发重建。
+
+上线迁移至 `0017_harvest_suggestion_decisions`（依次经过0016），保持上游 revision 标识。Alembic 1.14.1 默认版本列只有32字符，0017标识为33字符；迁移入口复用官方版本表工厂，在原事务内为空 PostgreSQL 库建64字符版本列，仅在已有版本列过短时扩列，不额外提交事务。官方机制见 [Alembic 1.14.1 源码](https://github.com/sqlalchemy/alembic/blob/rel_1_14_1/alembic/ddl/impl.py) 与 [version_table_impl 文档](https://alembic.sqlalchemy.org/en/latest/api/ddl.html#alembic.ddl.impl.DefaultImpl.version_table_impl)，核对日期2026-10-28；不复制框架代码、不引入另一套状态。空库与0015合成旧库升级及重复升级已验证，生产数据恢复/迁移验收由 Root 另记。
 
 ### 技能依赖状态与人文示范技能
 

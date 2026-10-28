@@ -32,6 +32,63 @@ def _link(context, target_type: str, target_id: str, name: str) -> None:
         )
 
 
+@pytest.mark.parametrize("endpoint", ["agent-assets", "agent-skills"])
+def test_agent_asset_lists_reject_an_agent_from_another_project(client, endpoint) -> None:
+    context = client.app.state.context
+    data = context.directory._load()
+    data["agents"]["pa-other"] = {
+        "scope": "project",
+        "engagement_slug": "claims-recon",
+        "owner": "sun",
+        "sharing_mode": "project",
+    }
+    context.directory.write(data)
+    client.headers.update({"X-FDE-User": "chen"})
+    response = client.get(
+        f"/api/v1/{endpoint}",
+        params={
+            "engagement_slug": "policy-import",
+            "agent_key": "pa-other",
+        },
+    )
+    assert response.status_code == 404, response.text
+
+
+def test_agent_assets_do_not_expose_titles_of_invisible_linked_assets(client) -> None:
+    context = client.app.state.context
+    _link(context, "engagement", "policy-import", "pg-vacuum-tuning")
+    client.headers.update({"X-FDE-User": "wang"})
+    response = client.get("/api/v1/agent-assets", params={"engagement_slug": "policy-import"})
+    assert response.status_code == 200, response.text
+    hidden_id = _asset_id(context, "pg-vacuum-tuning")
+    assert hidden_id not in {item["asset_id"] for item in response.json()["not_carried"]}
+
+
+@pytest.mark.parametrize("endpoint", ["agent-assets", "agent-skills"])
+@pytest.mark.parametrize("actor,expected", [("chen", 404), ("wang", 200), ("admin", 200)])
+def test_private_agent_asset_configuration_is_limited_to_managers(
+    client, endpoint, actor, expected
+):
+    context = client.app.state.context
+    data = context.directory._load()
+    data["agents"]["pa-private"] = {
+        "scope": "project",
+        "engagement_slug": "policy-import",
+        "owner": "wang",
+        "sharing_mode": "private",
+    }
+    context.directory.write(data)
+    client.headers.update({"X-FDE-User": actor})
+    response = client.get(
+        f"/api/v1/{endpoint}",
+        params={
+            "engagement_slug": "policy-import",
+            "agent_key": "pa-private",
+        },
+    )
+    assert response.status_code == expected, response.text
+
+
 def _bundle(context, tmp_path, **kwargs):
     return agent_bundle.build_bundle(
         context.engine,
@@ -240,6 +297,14 @@ def test_agent_fetches_attachment_original_only_when_project_can_see_it(seeded) 
         assert got.status_code == 200, got.text
         content = base64.b64decode(got.json()["content_base64"])
         assert content[:2] == b"PK" and got.json()["bytes"] == len(content)
+        # Agent 常拿资产目录名（标识）当 asset_id 传，也要认
+        by_name = service.post(
+            "/internal/v1/agent-attachment",
+            json={**body, "asset_id": "oracle-to-pg-cutover"},
+            headers=HEADERS,
+        )
+        assert by_name.status_code == 200, by_name.text
+        assert by_name.json()["asset_id"] == asset_id
         missing = service.post(
             "/internal/v1/agent-attachment", json={**body, "filename": "没有.xlsx"}, headers=HEADERS
         )

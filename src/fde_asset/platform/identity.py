@@ -83,6 +83,25 @@ class WorkItemForbidden(PermissionError):
     pass
 
 
+class HarvestSourceNotFound(LookupError):
+    pass
+
+
+def _checked_harvest_source(payload: object, expected: dict[str, str]) -> dict[str, str]:
+    if not isinstance(payload, dict):
+        raise PlatformUnavailable("平台沉淀来源响应格式无效")
+    for key, value in expected.items():
+        if key == "conversation_id" and not value:
+            continue
+        if payload.get(key) != value:
+            raise PlatformUnavailable("平台沉淀来源响应与请求不匹配")
+    conversation = payload.get("conversation_id", "")
+    agent = payload.get("agent_profile_id", "")
+    if not isinstance(conversation, str) or not isinstance(agent, str):
+        raise PlatformUnavailable("平台沉淀来源响应格式无效")
+    return {**expected, "conversation_id": conversation, "agent_profile_id": agent}
+
+
 class LocalDirectory:
     """开发用目录：一个 JSON 文件描述用户、部门与项目成员关系。"""
 
@@ -157,6 +176,39 @@ class LocalDirectory:
         """部门代号 → 名称。开发名单里没写就为空，页面显示代号。"""
         return dict(self._load().get("departments", {}))
 
+    def recent_questions(self, engagement_slug: str, agent: str = "") -> list[str]:
+        """项目频道里最近用户问 Agent 的问题（精确推荐用）。开发名单里写在 recent_questions 下，
+        给了 agent 就读 recent_questions["项目:Agent"]。"""
+        key = f"{engagement_slug}:{agent}" if agent else engagement_slug
+        raw = self._load().get("recent_questions", {}).get(key, [])
+        return [str(item) for item in raw if str(item).strip()]
+
+    def harvest_source_access(
+        self,
+        username: str,
+        engagement_slug: str,
+        scope: str,
+        scope_id: str,
+        *,
+        conversation_id: str = "",
+        message_id: str = "",
+    ) -> dict[str, str]:
+        """开发目录也要求显式登记来源和可访问者，不相信请求自己声明的频道或私聊。"""
+        expected = {
+            "username": username,
+            "engagement_slug": engagement_slug,
+            "scope": scope,
+            "scope_id": scope_id,
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+        }
+        for raw in self._load().get("harvest_sources", []):
+            if isinstance(raw, dict) and all(
+                raw.get(key, "") == value for key, value in expected.items()
+            ):
+                return _checked_harvest_source(raw, expected)
+        raise HarvestSourceNotFound(scope_id)
+
     def write(self, data: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -230,6 +282,65 @@ class PlatformDirectory:
             return self._http().get(self.base_url + path, **kwargs)
         except Exception as exc:  # noqa: BLE001 - 网络层的各种失败都算「问不到」
             raise PlatformUnavailable(str(exc)) from None
+
+    def recent_questions(self, engagement_slug: str, agent: str = "") -> list[str]:
+        """项目频道、话题里最近用户问 Agent 的问题（2026-10-28，精确推荐用）。私聊的平台不给。
+        给了 agent 就只要问这个 Agent 的（为 Agent 找资产）。
+        问不到（老版本平台没有这个接口、网络问题）就返回空，推荐照常按项目信息算。"""
+        if not self._service_key:
+            return []
+        try:
+            response = self._get(
+                "/internal/identity/engagements/"
+                + quote(engagement_slug, safe="")
+                + "/recent-questions",
+                headers={"X-FDE-Service-Key": self._service_key},
+                params={"days": 30, "limit": 60, **({"agent": agent} if agent else {})},
+            )
+            if response.status_code != 200:
+                return []
+            return [
+                str(item.get("text") or "")
+                for item in response.json().get("questions") or []
+                if isinstance(item, dict) and str(item.get("text") or "").strip()
+            ]
+        except (PlatformUnavailable, ValueError, AttributeError):
+            return []
+
+    def harvest_source_access(
+        self,
+        username: str,
+        engagement_slug: str,
+        scope: str,
+        scope_id: str,
+        *,
+        conversation_id: str = "",
+        message_id: str = "",
+    ) -> dict[str, str]:
+        """沉淀前重新核验真实来源；不缓存会话权限，撤权后立即失效。"""
+        if not self._service_key:
+            raise PlatformUnavailable("没有配置和 fde-server 共用的服务密钥")
+        expected = {
+            "username": username,
+            "engagement_slug": engagement_slug,
+            "scope": scope,
+            "scope_id": scope_id,
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+        }
+        response = self._get(
+            "/internal/identity/harvest-source/access",
+            headers={"X-FDE-Service-Key": self._service_key},
+            params=expected,
+        )
+        if response.status_code in (401, 403, 404):
+            raise HarvestSourceNotFound(scope_id)
+        if response.status_code != 200:
+            raise PlatformUnavailable("暂时无法确认沉淀来源权限")
+        try:
+            return _checked_harvest_source(response.json(), expected)
+        except (TypeError, ValueError):
+            raise PlatformUnavailable("平台沉淀来源响应格式无效") from None
 
     def work_item_access(self, work_item_id: str, username: str, *, write: bool = False) -> str:
         """不缓存任务权限：任务归属、成员撤权和读写限制每次由平台重新核验。"""
@@ -329,6 +440,10 @@ class PlatformDirectory:
             ):
                 raise PlatformUnavailable("fde-server Agent 推荐目录格式无效")
             agent_snapshot[raw["key"]] = {field: raw[field] for field in fields}
+            # 和项目、人的关系（2026-10-28）：老版本平台没有这几项，按空处理
+            for extra in ("scope", "engagement_slug", "engagement_name", "sharing_mode"):
+                value = raw.get(extra)
+                agent_snapshot[raw["key"]][extra] = value if isinstance(value, str) else ""
         try:
             snapshot = {
                 "departments": {

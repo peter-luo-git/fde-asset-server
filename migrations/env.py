@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import String, engine_from_config, inspect, pool
 
 config = context.config
 target_metadata = None
@@ -35,6 +35,30 @@ def run_migrations_online() -> None:
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
+            if connection.dialect.name == "postgresql":
+                migration = context.get_context()
+                # Alembic 1.14.1 默认 VARCHAR(32)，上游 0017 的历史 revision 为33字符。
+                # 用官方工厂保留版本表约束；空库建64列，旧库仅在过短时扩列。
+                version = migration.impl.version_table_impl(
+                    version_table=migration.version_table,
+                    version_table_schema=migration.version_table_schema,
+                    version_table_pk=True,
+                )
+                version.c.version_num.type = String(64)
+                version.create(connection, checkfirst=True)
+                column = next(
+                    item
+                    for item in inspect(connection).get_columns(
+                        migration.version_table, schema=migration.version_table_schema
+                    )
+                    if item["name"] == "version_num"
+                )
+                width = getattr(column["type"], "length", None)
+                if width is not None and width < 64:
+                    table_name = connection.dialect.identifier_preparer.format_table(version)
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE {table_name} ALTER COLUMN version_num TYPE VARCHAR(64)"
+                    )
             context.run_migrations()
 
 

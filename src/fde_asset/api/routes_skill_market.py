@@ -16,7 +16,7 @@ from fde_asset.core.db import assets
 from fde_asset.modules.asset import catalog as catalog_module
 from fde_asset.modules.asset import skill_sources
 from fde_asset.modules.harvest import service as harvest
-from fde_asset.platform.identity import Principal
+from fde_asset.platform.identity import PlatformDirectory, Principal
 
 from fde_asset.api.routes_harvest import _checked_upload  # noqa: E402
 
@@ -217,6 +217,33 @@ def update_installed(
         raise _fail(exc) from None
 
 
+def _require_agent_project(
+    context: ServiceContext, principal: Principal, engagement_slug: str, agent_key: str
+) -> Principal:
+    if isinstance(context.directory, PlatformDirectory):
+        context.directory.refresh()
+        principal = context.directory.resolve(principal.user_id)
+    if not principal.is_admin and engagement_slug not in principal.engagement_slugs:
+        raise HTTPException(status_code=404, detail="项目不存在或无权访问")
+    if not agent_key:
+        return principal
+    agent = context.directory.agents().get(agent_key)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent 不存在或无权访问")
+    project = str(agent.get("engagement_slug") or "")
+    if project != engagement_slug and (
+        project or agent.get("scope") == "project" or agent_key.startswith("pa-")
+    ):
+        raise HTTPException(status_code=404, detail="Agent 不存在或不属于这个项目")
+    if agent.get("sharing_mode") == "private" and not (
+        principal.is_admin
+        or agent.get("owner") == principal.user_id
+        or principal.owns_engagement(engagement_slug)
+    ):
+        raise HTTPException(status_code=404, detail="Agent 不存在或无权访问")
+    return principal
+
+
 @router.get("/agent-skills")
 def agent_skills(
     engagement_slug: str = Query(..., min_length=1),
@@ -229,8 +256,7 @@ def agent_skills(
     from fde_asset.modules.asset import mandatory
     from fde_asset.modules.asset.snapshot import select_assets
 
-    if not principal.is_admin and engagement_slug not in principal.engagement_slugs:
-        raise HTTPException(status_code=404, detail="项目不存在或无权访问")
+    principal = _require_agent_project(context, principal, engagement_slug, agent_key)
     project = (context.directory.engagements() or {}).get(engagement_slug, {})
     membership = next(
         (m for m in principal.memberships if m.engagement_slug == engagement_slug), None
@@ -293,3 +319,151 @@ def agent_skills(
             }
         )
     return {"items": items}
+
+
+#: 各类资产在 Agent 那里怎么用
+USAGE = {
+    "Rule": "整篇写进提示词，每轮都遵守",
+    "Skill": "进技能清单，Agent 按说明自己决定要不要加载",
+    "Solution": "进知识索引，用到时读正文和附件",
+    "Implementation": "进知识索引，用到时读正文和附件",
+    "Case": "进知识索引，用到时读正文和附件",
+    "Experience": "进知识索引，用到时读正文和附件",
+    "Application": "进知识索引（只有介绍，演示要在资产中心启动）",
+}
+
+
+@router.get("/agent-assets")
+def agent_assets(
+    engagement_slug: str = Query(..., min_length=1),
+    agent_key: str = Query(""),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """这个 Agent 在这个项目里实际会带上的全部资产（2026-10-28）：和平台拼资产包用同一套挑选规则。
+
+    items：会带上的，每份写明为什么带（项目自己的、关联的、必选的、个人的）、Agent 怎么用、
+    在 Agent 那里叫什么、附件和图片理解情况；
+    not_carried：关联了却带不上的，写明原因（项目看不到、已废弃、格式没通过、流程只在按步骤执行时注入……）。
+    """
+    import json as _json
+
+    from fde_asset.core.db import assets, target_assets
+    from fde_asset.modules.asset import attachment_vision, mandatory
+    from fde_asset.modules.asset.snapshot import select_assets
+    from fde_asset.modules.asset.visibility import visibility_clause
+
+    principal = _require_agent_project(context, principal, engagement_slug, agent_key)
+    project = (context.directory.engagements() or {}).get(engagement_slug, {})
+    membership = next(
+        (m for m in principal.memberships if m.engagement_slug == engagement_slug), None
+    )
+    department = str(project.get("department_code", "")) or (
+        membership.department_code if membership else ""
+    )
+    customer = str(project.get("customer_code", "")) or (
+        membership.customer_code if membership else ""
+    )
+    chosen = select_assets(
+        context.engine,
+        department_code=department,
+        customer_code=customer,
+        engagement_slug=engagement_slug,
+        target_type="engagement",
+        target_id=engagement_slug,
+        also_targets=(("agent", agent_key),) if agent_key else (),
+        username=principal.user_id,
+    )
+    with context.engine.connect() as conn:
+        links = conn.execute(
+            select(target_assets.c.target_type, target_assets.c.asset_id).where(
+                target_assets.c.target_id.in_([v for v in (engagement_slug, agent_key) if v])
+            )
+        ).fetchall()
+        linked = {(row.target_type, row.asset_id) for row in links}
+        forced = mandatory.ids_for(
+            conn,
+            department_code=department,
+            customer_code=customer,
+            engagement_slug=engagement_slug,
+            username=principal.user_id,
+        )
+        carried_ids = {row.asset_id for row in chosen.rows}
+        missing_ids = sorted({asset_id for _, asset_id in linked} - carried_ids)
+        missing_rows = (
+            conn.execute(
+                select(assets).where(
+                    assets.c.asset_id.in_(missing_ids), visibility_clause(principal)
+                )
+            ).fetchall()
+            if missing_ids
+            else []
+        )
+    shas = [
+        str(entry.get("sha256") or "")
+        for row in chosen.rows
+        for entry in _json.loads(row.attachments_json or "[]")
+    ]
+    vision_done = attachment_vision.finished_texts(context.engine, shas)
+
+    items = []
+    for row in chosen.rows:
+        reasons = []
+        if row.scope == "engagement":
+            reasons.append("项目自己的")
+        if ("engagement", row.asset_id) in linked:
+            reasons.append("关联给项目")
+        if ("agent", row.asset_id) in linked:
+            reasons.append("关联给这个 Agent")
+        if row.asset_id in forced:
+            reasons.append("必选")
+        if row.scope == "user":
+            reasons.append("你的个人技能（只在你的私聊里带）")
+        attachments = _json.loads(row.attachments_json or "[]")
+        mount = chosen.mounted.get(row.asset_id, row.name)
+        items.append(
+            {
+                "asset_id": row.asset_id,
+                "kind": row.kind,
+                "name": mount,
+                "renamed": mount != row.name,
+                "title": row.title,
+                "summary": row.summary,
+                "version": row.version,
+                "reasons": reasons,
+                "usage": USAGE.get(row.kind, "进资产包"),
+                "attachments": len(attachments),
+                "attachments_with_pictures": sum(
+                    1 for entry in attachments if entry.get("sha256") in vision_done
+                ),
+            }
+        )
+    order = {"Rule": 0, "Skill": 1, "Solution": 2, "Implementation": 3, "Case": 4, "Experience": 5}
+    items.sort(key=lambda item: (order.get(item["kind"], 9), item["title"]))
+
+    def why_not(row) -> str:
+        if row.deleted_at is not None:
+            return "资产已删除"
+        if row.kind == "Sop":
+            return "流程不当参考资料带，只在任务按流程执行时由平台按当前步骤注入"
+        if not row.valid:
+            return "资产格式校验没通过"
+        if row.restricted:
+            return "资产受限，不进资产包"
+        if row.lifecycle in {"deprecated", "archived", "draft"}:
+            return {"deprecated": "资产已废弃", "archived": "资产已归档", "draft": "资产还是草稿"}[
+                row.lifecycle
+            ]
+        return "项目看不到这份资产（不在它的可见范围里），需要先调整可见范围"
+
+    not_carried = [
+        {
+            "asset_id": row.asset_id,
+            "kind": row.kind,
+            "title": row.title,
+            "linked_to": "这个 Agent" if ("agent", row.asset_id) in linked else "项目",
+            "reason": why_not(row),
+        }
+        for row in missing_rows
+    ]
+    return {"items": items, "not_carried": not_carried}

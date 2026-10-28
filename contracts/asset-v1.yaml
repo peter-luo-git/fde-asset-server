@@ -205,6 +205,65 @@ paths:
       summary: Rebuild Relations
       tags:
       - assets
+  /api/v1/agent-assets:
+    get:
+      description: '这个 Agent 在这个项目里实际会带上的全部资产（2026-10-28）：和平台拼资产包用同一套挑选规则。
+
+
+        items：会带上的，每份写明为什么带（项目自己的、关联的、必选的、个人的）、Agent 怎么用、
+
+        在 Agent 那里叫什么、附件和图片理解情况；
+
+        not_carried：关联了却带不上的，写明原因（项目看不到、已废弃、格式没通过、流程只在按步骤执行时注入……）。'
+      operationId: agent_assets_api_v1_agent_assets_get
+      parameters:
+      - in: query
+        name: engagement_slug
+        required: true
+        schema:
+          minLength: 1
+          title: Engagement Slug
+          type: string
+      - in: query
+        name: agent_key
+        required: false
+        schema:
+          default: ''
+          title: Agent Key
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Agent Assets Api V1 Agent Assets Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Agent Assets
+      tags:
+      - skill-market
   /api/v1/agent-skills:
     get:
       description: 这个 Agent 在这个项目里实际会带哪些技能、各自为什么带（项目自己的、关联的、必选的、个人的）。
@@ -3432,6 +3491,209 @@ paths:
       summary: Submit Candidate
       tags:
       - harvest
+  /api/v1/harvest-suggestions:
+    get:
+      description: '给了 engagement_slug：项目「资产 → 待沉淀」（status=all 是全部）；给了 scope、scope_id：这个频道或私聊里的；
+
+        都不给：我能看到的、还没处理的（工作台用）。'
+      operationId: list_suggestions_api_v1_harvest_suggestions_get
+      parameters:
+      - in: query
+        name: engagement_slug
+        required: false
+        schema:
+          default: ''
+          title: Engagement Slug
+          type: string
+      - in: query
+        name: scope
+        required: false
+        schema:
+          default: ''
+          title: Scope
+          type: string
+      - in: query
+        name: scope_id
+        required: false
+        schema:
+          default: ''
+          title: Scope Id
+          type: string
+      - in: query
+        name: status
+        required: false
+        schema:
+          default: open
+          title: Status
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response List Suggestions Api V1 Harvest Suggestions Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: List Suggestions
+      tags:
+      - harvest-suggestions
+    post:
+      description: 人在消息上「记为可沉淀」：频道里要是项目成员，私聊只记给自己。
+      operationId: mark_message_api_v1_harvest_suggestions_post
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Mark Message Api V1 Harvest Suggestions Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Mark Message
+      tags:
+      - harvest-suggestions
+  /api/v1/harvest-suggestions/counts:
+    get:
+      description: 红色数字：我能看到的待处理候选数，按项目分（项目「资产」菜单、工作台卡片用）。
+      operationId: suggestion_counts_api_v1_harvest_suggestions_counts_get
+      parameters:
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Suggestion Counts Api V1 Harvest Suggestions Counts Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Suggestion Counts
+      tags:
+      - harvest-suggestions
+  /api/v1/harvest-suggestions/{suggestion_id}/decide:
+    post:
+      description: '处理：drafted 起草了（带 candidate_id）、linked 已有资产（带 asset_id）、duplicate 重复（带 merged_into）、
+
+        ignored 不沉淀（可带 note）、hold 待定、open 恢复。'
+      operationId: decide_api_v1_harvest_suggestions__suggestion_id__decide_post
+      parameters:
+      - in: path
+        name: suggestion_id
+        required: true
+        schema:
+          title: Suggestion Id
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              title: Payload
+              type: object
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Decide Api V1 Harvest Suggestions  Suggestion Id  Decide Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Decide
+      tags:
+      - harvest-suggestions
   /api/v1/kinds:
     get:
       description: 七种资产类型各自的必填要求，前端据此标红必填项，避免两边各写一份口径。
