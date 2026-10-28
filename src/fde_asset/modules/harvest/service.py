@@ -37,6 +37,10 @@ from fde_asset.platform.repo.ports import RepoRef
 from fde_asset.platform.scan.rules import blocking, scan_files
 
 
+#: 不从文件导入正文的类型：正文按模板手写，历史文档作附件
+NO_IMPORT_KINDS = frozenset({"Solution", "Implementation", "Case", "Experience"})
+
+
 class HarvestError(ValueError):
     pass
 
@@ -344,7 +348,15 @@ def draft_from_upload(
     legacy_note: str = "",
     store: BlobStore | None = None,
 ) -> dict[str, Any]:
-    """历史文档导入：提取文本预填正文，结论与适用边界留给人补，原件存进 BlobStore。"""
+    """历史文档导入：提取文本预填正文，结论与适用边界留给人补，原件存进 BlobStore。
+
+    方案、实施、问题、经验不从文件导入（2026-10-28）：正文按模板手写，历史文档作为附件上传，
+    免得整段原文当正文、结论空着，Agent 和人都容易误解。
+    规范导入时原文整段就是正文，原件不再留成附件（规范的附件 Agent 读不到，只是重复存一份）。"""
+    if kind in NO_IMPORT_KINDS:
+        raise HarvestError(
+            "方案、实施、问题、经验的正文请按模板手写；历史文档请新建草稿后在「附件」里上传"
+        )
     extraction = extract_text(filename, content)
     # 中文标题转不出 ASCII，以前一律落成 legacy-import，多传几份就重名了
     name = _slugify(title, fallback="") or generate_name(engine, kind)
@@ -363,6 +375,17 @@ def draft_from_upload(
     body = (
         f"# {title}\n\n## 结论\n<请用一句话写清楚结论>\n\n{sections}\n\n## 原文摘录\n\n{excerpt}\n"
     )
+    if kind == "Rule":
+        # 规范整篇进 Agent 的提示词：原文全部作正文（超过 20KB 时草稿检查会拦下），不另留原件
+        body = (
+            f"# {title}\n\n"
+            + (
+                extraction.text.strip()
+                if extraction.status == "ok"
+                else "（未能提取文本，请把规范内容写在这里）"
+            )
+            + "\n"
+        )
     if kind == "Skill":
         # 技能靠开头的 name、description 被 Agent 发现，没有它入库了也用不上
         from fde_asset.modules.asset.skill_package import with_frontmatter
@@ -390,11 +413,9 @@ def draft_from_upload(
             f"    note: {legacy_note or filename}",
         ]
     )
-    files = {
-        rule.main_file: body,
-        "asset.yaml": manifest,
-        f"{ATTACHMENT_PREFIX}{safe_name(filename)}": ATTACHMENT_PLACEHOLDER,
-    }
+    files = {rule.main_file: body, "asset.yaml": manifest}
+    if kind != "Rule":
+        files[f"{ATTACHMENT_PREFIX}{safe_name(filename)}"] = ATTACHMENT_PLACEHOLDER
     result = create_draft(
         engine,
         principal,
@@ -411,7 +432,7 @@ def draft_from_upload(
             files=files,
         ),
     )
-    if store is not None:
+    if store is not None and kind != "Rule":
         store.put(result["candidate_id"], filename, content)
     result["extraction"] = {
         "status": extraction.status,
@@ -659,6 +680,8 @@ def attach_file(
     candidate = get_candidate(engine, candidate_id)
     if candidate["status"] != "draft":
         raise HarvestError("只有草稿可以加附件")
+    if candidate["kind"] == "Rule":
+        raise HarvestError("规范不收附件：Agent 只读规范正文，要它遵守的内容请直接写进正文")
     if len(content) > size_limit:
         raise HarvestError(f"附件超过 {size_limit // 1024 // 1024}MB 上限")
     name = safe_name(filename)

@@ -56,9 +56,9 @@ def test_own_name_is_kept_and_validated(client) -> None:
 def test_uploads_with_chinese_titles_no_longer_collide(client) -> None:
     chen = as_user(client, "chen")
     names = []
-    for title in ("历史方案一", "历史方案二"):
+    for title in ("历史规范一", "历史规范二"):
         body = {
-            "kind": "Solution",
+            "kind": "Rule",
             "title": title,
             "filename": "note.txt",
             "content_base64": base64.b64encode("一些正文".encode()).decode(),
@@ -69,4 +69,4 @@ def test_uploads_with_chinese_titles_no_longer_collide(client) -> None:
         assert response.status_code == 200, response.text
         names.append(response.json()["name"])
     assert names[0] != names[1]
-    assert all(re.match(r"^solution-\d{8}-[0-9a-f]{4}$", name) for name in names), names
+    assert all(re.match(r"^rule-\d{8}-[0-9a-f]{4}$", name) for name in names), names
