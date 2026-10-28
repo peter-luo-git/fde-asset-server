@@ -490,12 +490,21 @@ def with_attachment_texts(
         full = enriched.get(attachment.get("sha256", "")) or _attachment_text(attachment, blob)
         texts[f"attachments-text/{name}"] = _clip(full, share)
         summary = str(attachment.get("summary") or "").strip()
+        original = Path(attachment["path"]).name
+        asset_id = getattr(row, "asset_id", "")
         listed.append(
-            f"- `attachments-text/{name}`（原件 {Path(attachment['path']).name}）"
+            f"- `attachments-text/{name}`（原件 {original}）"
             + (f"：{summary}" if summary else "")
+            + (f"　〔原件：asset_id={asset_id}，filename={original}〕" if asset_id else "")
         )
     if listed:
         text = readme.decode("utf-8", "replace").rstrip()
         text += "\n\n## 附件（文字版，按需用 read 打开；路径相对本文件所在目录）\n\n"
+        if any("〔原件：" in line for line in listed):
+            text += (
+                "文字版已含图片说明，读内容、查资料用它；要基于原件修改（改几页 PPT、改某个章节）时，"
+                "用 fde_asset_attachment_fetch 按〔原件〕里的 asset_id 和 filename 把原件取到本轮工作目录再改，"
+                "交付新文件，不改资产本身。\n\n"
+            )
         readme = (text + "\n".join(listed) + "\n").encode("utf-8")
     return readme, texts, missed
