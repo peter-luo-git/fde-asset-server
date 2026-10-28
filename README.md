@@ -1,6 +1,6 @@
 # fde-asset-server
 
-文档版本：1.3（2026-10-28）。最新 dev1005 `46a7706` 候选同步技能实时进度、评审时模型通读、项目自有资产和附件摘要；下文历史测试、现场切换和 `tasks/ENV_BLOCKERS.md` 的上游环境记录保留原时点，不代表当前服务器已升级为 PostgreSQL、启用回调或完成模型验收。
+文档版本：1.4（2026-10-28）。最新 dev1005 `9e39638` 候选补齐知识附件文字版、图片理解及原件取回，并保留本地关联权限防护；下文历史测试、现场切换和 `tasks/ENV_BLOCKERS.md` 的上游环境记录保留原时点，不代表当前服务器已升级为 PostgreSQL、启用回调或完成模型验收。
 
 FDE 协同平台的**资产中心服务**：索引、目录、沉淀、评审、分发与复用计量。
 
@@ -42,7 +42,7 @@ make worker                 # 另一个终端：索引轮询与快照生成
 make demo                   # 12 步演示；另配独立空库的 FDE_ASSET_DATABASE_URL
 ```
 
-另一个终端也须加载同一套环境。`FDE_ASSET_DATABASE_URL` 必填，只接受 PostgreSQL；缺失时启动失败，不回退 SQLite。旧库升级涉及 `0009_asset_mandatory`、`0010_visibility_requests`、`0011_checkup_findings`、`0012_sop_execution`、`0013_skill_packages`、`0014_skill_deps_status`，当前源码的迁移头为 `0014_skill_deps_status`；检查迁移头不等于目标数据库已完成升级。
+另一个终端也须加载同一套环境。`FDE_ASSET_DATABASE_URL` 必填，只接受 PostgreSQL；缺失时启动失败，不回退 SQLite。旧库升级涉及 `0009_asset_mandatory`、`0010_visibility_requests`、`0011_checkup_findings`、`0012_sop_execution`、`0013_skill_packages`、`0014_skill_deps_status`、`0015_attachment_texts`，当前源码的迁移头为 `0015_attachment_texts`；检查迁移头不等于目标数据库已完成升级。
 
 数据默认落在：
 
@@ -71,7 +71,7 @@ Git 子进程回收（2026-10-23 源码修复）：本地仓库与 Gitea 缓存�
 
 **SQLite 已去掉（2026-10-18）**：服务、迁移、测试都不再支持 SQLite。只保留启动时的一次性搬迁（`core/sqlite_import.py`）：PostgreSQL 业务表均为空且数据目录里还有旧的 `asset.db` 时搬入数据，成功后将原文件改名为带 `.migrated-to-postgres` 后缀的备份。升级前保护数据库、资产文件与配置，搬迁结果仍需独立核验；本轮源码同步不表示当前服务器已执行搬迁。旧的 `scripts/rename_user.py` 已删除。
 
-仓库保留真实生成的 [uv.lock](uv.lock)，固定 Python 3.12 范围内的依赖解析；原 `pyproject.toml` 的16个运行依赖和3个开发依赖直接 pin、项目版本保持。2026-10-12 首轮完整检查使用既有只读依赖环境，423项通过/2项条件跳过，当时共享 PATH 未找到 uv，未执行条件锁检查。Root 后继补验发现缺锁后，使用私有 uv0.13.0、PyPI 与私有缓存生成锁；在线/离线 `uv lock --check` 和独立产物目录中的 `uv build --no-sources` 均通过，wheel依赖及sdist内的锁/清单与源码一致。本轮未执行 `uv sync` 或修改共享虚拟环境；先前全量结果不表示已在新锁同步出的环境重跑全部测试，详细证据见[实现贡献](operations/agent-contributions/full-test-fixes-20261012/implementer_specs_asset_fixes.md)。
+仓库保留真实生成的 [uv.lock](uv.lock)，固定 Python 3.12 范围内的依赖解析；运行与开发依赖均直接 pin，项目版本保持；本次新增 `pymupdf==1.28.2` 并同步依赖锁。2026-10-12 首轮完整检查使用既有只读依赖环境，423项通过/2项条件跳过，当时共享 PATH 未找到 uv，未执行条件锁检查。Root 后继补验发现缺锁后，使用私有 uv0.13.0、PyPI 与私有缓存生成锁；在线/离线 `uv lock --check` 和独立产物目录中的 `uv build --no-sources` 均通过，wheel依赖及sdist内的锁/清单与源码一致。本轮未执行 `uv sync` 或修改共享虚拟环境；先前全量结果不表示已在新锁同步出的环境重跑全部测试，详细证据见[实现贡献](operations/agent-contributions/full-test-fixes-20261012/implementer_specs_asset_fixes.md)。
 
 真实容器用例要求可用 Docker，多容器用例还要求 `docker compose`；构建使用 `busybox` 基础镜像，并显式传入 `--network none --pull=false`，构建失败时该用例按现有规则跳过。完整结果须同时查看通过与跳过项；未执行的 Docker、模型用例不能当作已通过，普通 PostgreSQL 测试连接失败也不能当作条件跳过。
 
@@ -119,13 +119,19 @@ Gitea 推送同步需配置 `FDE_ASSET_GITEA_WEBHOOK_URL`、Gitea 地址与服�
 
 草稿附件新增 `PUT /api/v1/harvest-candidates/{candidate_id}/attachments/{filename}/summary` 保存 `{summary}`，空字符串删除摘要；`POST .../summary/generate` 使用 Agent 模型读取最多前30000字符提取文本，只返回 `{summary}`，须确认或修改后显式保存。摘要压平空白并截到300字符；无法提取文字或缺模型时可手写。保存沿用草稿访问及状态校验；入库写入 `spec.attachments[*].summary`，起修订稿时带回，删除附件时同时删除摘要，无新增数据库迁移。
 
-知识类 `Solution`、`Implementation`、`Case`、`Experience` 的快照正文末尾列出成功提取的附件相对路径 `attachments-text/<原文件名>.txt` 及摘要，供按需读取；`layout=2` 参与快照指纹，旧布局缓存不复用。Rule 附件仅供人查看/下载，不进入 Agent 规范上下文；Skill 参考文字应放技能目录 `references/` 并由 `SKILL.md` 引导读取。Rule 正文新增20000 UTF-8字节检查上限，超过记 `rule_too_large`，不是20000字符。
+知识类 `Solution`、`Implementation`、`Case`、`Experience` 的快照和平台 Agent 资产包均在正文末尾列出可用附件的 `attachments-text/<原文件名>.txt`、摘要及原件标识，供按需读取；仅成功提取且原件可读、或已有图片理解文字版的附件进入清单，其余记录为未带入。附件文字总预算为900000字节减去原正文大小后按可用附件平分，超出截断并注明。`layout=3` 及已完成图片理解的附件哈希参与快照指纹，旧布局缓存不复用。Skill 参考文字应放技能目录 `references/` 并由 `SKILL.md` 引导读取。Rule 正文20000 UTF-8字节检查上限保持，超过记 `rule_too_large`，不是20000字符。
 
-`GET /api/v1/recommend/linked` 可选 `include_own=true`：仅项目目标额外返回当前可见、有效且非草稿/弃用/归档/受限的项目自有非SOP资产，标记 `source=project` 并排除已关联重复项；默认行为不变。项目自有资产无需另建关联，SOP仍按任务步骤注入；该列表不构成每个实际运行已装载全部资产的证明，实际快照选择及体积限制仍适用。
+知识类正文按模板填写，`POST /api/v1/harvest-candidates/from-upload` 不再从历史文件生成这四种类型的正文，历史文件应作为草稿附件上传。Rule 导入将提取的全文作正文，不留原件附件，新 Rule 草稿拒绝附件；旧附件保留既有下载入口。部门作用域草稿默认由选中的部门负责。
+
+PDF、PPT、Word 和图片附件进入持久化 `attachment_texts` 队列，以内容 SHA-256 去重；worker 每15秒尝试启动单线程处理，先按规则筛图，再用模型挑选和描述，结果插回文字版。缺模型时保持 pending，旧附件在组包时补排队；仅离线合成模型回归不代表真实图片模型已验收。资产与草稿附件均有 `GET .../attachments/{filename}/text-version` 及 `POST .../text-version/retry`，读取沿用资产可见性或草稿访问权限；已入库资产retry要求资产管理权，草稿retry只允许作者且状态必须是draft（无权403、非草稿409）；retry 可带 `{target}` 强制补看页面或图片。
+
+服务密钥保护的 `POST /internal/v1/agent-attachment` 接收 `{username,engagement_slug,asset_id,filename}`，核对当前身份、项目成员关系和项目资产可见范围后返回原件的 base64、SHA-256及字节数；管理员可代项目访问，仍不能取回受限、无效、草稿、弃用、归档或已删除资产的原件。仅支持上述四类知识资产中已登记的附件。配套 Server 将原件放入本轮工作目录，`fde_asset_attachment_fetch` 供 Agent 在需要修改时调用，交付新文件而非回写资产。该接口不进入公开 OpenAPI；上线需先升级 `0015_attachment_texts`，并配对验收 Server 原件工具。
+
+`GET /api/v1/recommend/linked` 可选 `include_own=true`：仅项目目标额外返回当前可见、有效且非草稿/弃用/归档/受限的项目自有非SOP资产，标记 `source=project` 并排除已关联重复项；默认行为不变。项目自有资产无需另建关联，SOP仍按任务步骤注入；项目关联列表补充 `project_can_see`，不可带入的旧关联另给 `scope_label`。直接关联先按当前用户可见性统一404，再对项目不可见的资产返回422并提示调整范围；该列表不构成每个实际运行已装载全部资产的证明，实际快照选择及体积限制仍适用。
 
 ### 技能依赖状态与人文示范技能
 
-技能补依赖新增两个公开接口：`POST /api/v1/assets/{asset_id}/dependencies` 为有管理权限的可见 Skill 创建或复用修订稿，`POST /api/v1/harvest-candidates/{candidate_id}/dependencies` 在有权访问的 Skill 草稿中补齐依赖。输入 `{packages?: string[]}`，返回 `{candidate, added}`；省略 `packages` 时按脚本中未声明的 import 推断包名，推断映射仍需人在评审时核对。依赖写入 `requirements.txt`，跳过已声明或镜像预装的包，并沿用包名、版本及数量校验；只有实际新增时重新运行检查。补依赖不直接入库或安装，仍需提交资产评审，再由配套 Server 预装。新增接口无数据库迁移，当前迁移头仍为 `0014_skill_deps_status`。
+技能补依赖新增两个公开接口：`POST /api/v1/assets/{asset_id}/dependencies` 为有管理权限的可见 Skill 创建或复用修订稿，`POST /api/v1/harvest-candidates/{candidate_id}/dependencies` 在有权访问的 Skill 草稿中补齐依赖。输入 `{packages?: string[]}`，返回 `{candidate, added}`；省略 `packages` 时按脚本中未声明的 import 推断包名，推断映射仍需人在评审时核对。依赖写入 `requirements.txt`，跳过已声明或镜像预装的包，并沿用包名、版本及数量校验；只有实际新增时重新运行检查。补依赖不直接入库或安装，仍需提交资产评审，再由配套 Server 预装。这两个依赖补齐接口本身无数据库迁移；本次附件图片理解另新增 `0015_attachment_texts`。
 
 PowerPoint 示范技能新增 `scripts/svg_to_png.py`，先用声明于 `requirements.txt` 的 `resvg-py` 将 SVG 转成 PNG，再由 `python-pptx` 插图；中文字体依赖配套 Runtime 的字体和 fontconfig。示例转换、依赖声明与实际在线安装分别验收。
 
@@ -153,6 +159,7 @@ dev 模式只接受 `directory.json` 中 `work_items` 显式登记的任务，�
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-10-28 | 1.4 | 同步知识附件文字/图片理解与原件接口、0015迁移及依赖锁；保留关联可见性与引用防护。 |
 | 2026-10-28 | 1.3 | 同步技能实时进度、评审模型配置、附件摘要/布局2、项目自有资产与Rule字节上限；保留无模型和非持久后台限制。 |
 | 2026-10-27 | 1.2 | 同步最新技能上传检查、有限后台模型通读与作者草稿文件编辑；明确路径/体积边界及非持久后台限制。 |
 | 2026-10-27 | 1.1 | 同步最新 dev1005 技能/草稿补依赖接口、评审边界与 SVG 转 PNG 示例；无新增迁移。 |

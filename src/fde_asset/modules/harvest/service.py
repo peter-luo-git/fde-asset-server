@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from dataclasses import dataclass, field, replace
@@ -35,6 +36,25 @@ from fde_asset.platform.extract import extract_text
 from fde_asset.platform.identity import Principal
 from fde_asset.platform.repo.ports import RepoRef
 from fde_asset.platform.scan.rules import blocking, scan_files
+
+
+#: 不从文件导入正文的类型：正文按模板手写，历史文档作附件
+NO_IMPORT_KINDS = frozenset({"Solution", "Implementation", "Case", "Experience"})
+
+
+def default_owner(principal: Principal, scope: str, department_code: str = "") -> str:
+    """新草稿默认的负责方。
+
+    作用域选了某个部门，负责方就是那个部门（2026-10-28）：以前一律填起草人自己的部门，
+    数据智能部的人起草平台部的规范，作用域是平台部、负责方却是数据智能部，两边都管不了它。
+    个人专用的是本人；其余作用域仍是起草人所在部门，没有部门时是本人。"""
+    if scope == "user":
+        return f"user:{principal.user_id}"
+    if scope == "department" and department_code:
+        return f"department:{department_code}"
+    if principal.department_code:
+        return f"department:{principal.department_code}"
+    return f"user:{principal.user_id}"
 
 
 class HarvestError(ValueError):
@@ -180,11 +200,7 @@ def create_draft(engine: Engine, principal: Principal, data: CandidateInput) -> 
     if data.scope == "user":
         # 个人专用：负责人是本人；部门记下来，带脚本时由本部门评审员看
         data = replace(data, department_code=principal.department_code)
-    owner = (
-        f"user:{principal.user_id}"
-        if data.scope == "user" or not principal.department_code
-        else f"department:{principal.department_code}"
-    )
+    owner = default_owner(principal, data.scope, data.department_code)
     files = data.files or render_template(
         data.kind,
         name=data.name,
@@ -344,15 +360,19 @@ def draft_from_upload(
     legacy_note: str = "",
     store: BlobStore | None = None,
 ) -> dict[str, Any]:
-    """历史文档导入：提取文本预填正文，结论与适用边界留给人补，原件存进 BlobStore。"""
+    """历史文档导入：提取文本预填正文，结论与适用边界留给人补，原件存进 BlobStore。
+
+    方案、实施、问题、经验不从文件导入（2026-10-28）：正文按模板手写，历史文档作为附件上传，
+    免得整段原文当正文、结论空着，Agent 和人都容易误解。
+    规范导入时原文整段就是正文，原件不再留成附件（规范的附件 Agent 读不到，只是重复存一份）。"""
+    if kind in NO_IMPORT_KINDS:
+        raise HarvestError(
+            "方案、实施、问题、经验的正文请按模板手写；历史文档请新建草稿后在「附件」里上传"
+        )
     extraction = extract_text(filename, content)
     # 中文标题转不出 ASCII，以前一律落成 legacy-import，多传几份就重名了
     name = _slugify(title, fallback="") or generate_name(engine, kind)
-    owner = (
-        f"department:{principal.department_code}"
-        if principal.department_code
-        else f"user:{principal.user_id}"
-    )
+    owner = default_owner(principal, scope, department_code)
     rule = KIND_RULES[kind]
     excerpt = (
         extraction.text[:4000] if extraction.status == "ok" else "（未能提取文本，请人工补充要点）"
@@ -363,6 +383,17 @@ def draft_from_upload(
     body = (
         f"# {title}\n\n## 结论\n<请用一句话写清楚结论>\n\n{sections}\n\n## 原文摘录\n\n{excerpt}\n"
     )
+    if kind == "Rule":
+        # 规范整篇进 Agent 的提示词：原文全部作正文（超过 20KB 时草稿检查会拦下），不另留原件
+        body = (
+            f"# {title}\n\n"
+            + (
+                extraction.text.strip()
+                if extraction.status == "ok"
+                else "（未能提取文本，请把规范内容写在这里）"
+            )
+            + "\n"
+        )
     if kind == "Skill":
         # 技能靠开头的 name、description 被 Agent 发现，没有它入库了也用不上
         from fde_asset.modules.asset.skill_package import with_frontmatter
@@ -390,11 +421,9 @@ def draft_from_upload(
             f"    note: {legacy_note or filename}",
         ]
     )
-    files = {
-        rule.main_file: body,
-        "asset.yaml": manifest,
-        f"{ATTACHMENT_PREFIX}{safe_name(filename)}": ATTACHMENT_PLACEHOLDER,
-    }
+    files = {rule.main_file: body, "asset.yaml": manifest}
+    if kind != "Rule":
+        files[f"{ATTACHMENT_PREFIX}{safe_name(filename)}"] = ATTACHMENT_PLACEHOLDER
     result = create_draft(
         engine,
         principal,
@@ -411,7 +440,7 @@ def draft_from_upload(
             files=files,
         ),
     )
-    if store is not None:
+    if store is not None and kind != "Rule":
         store.put(result["candidate_id"], filename, content)
     result["extraction"] = {
         "status": extraction.status,
@@ -455,11 +484,7 @@ def draft_from_skill_package(
     origin_note = dict(source or {})
     if package.rejected:
         origin_note["rejected_files"] = package.rejected[:50]
-    owner = (
-        f"user:{principal.user_id}"
-        if scope == "user" or not principal.department_code
-        else f"department:{principal.department_code}"
-    )
+    owner = default_owner(principal, scope, department_code)
     manifest = {
         "apiVersion": "fde.asset/v1",
         "kind": "Skill",
@@ -659,6 +684,8 @@ def attach_file(
     candidate = get_candidate(engine, candidate_id)
     if candidate["status"] != "draft":
         raise HarvestError("只有草稿可以加附件")
+    if candidate["kind"] == "Rule":
+        raise HarvestError("规范不收附件：Agent 只读规范正文，要它遵守的内容请直接写进正文")
     if len(content) > size_limit:
         raise HarvestError(f"附件超过 {size_limit // 1024 // 1024}MB 上限")
     name = safe_name(filename)
@@ -666,6 +693,11 @@ def attach_file(
     files = dict(candidate["files"])
     files[f"{ATTACHMENT_PREFIX}{name}"] = ATTACHMENT_PLACEHOLDER
     update_candidate(engine, candidate_id, files)
+    if candidate["kind"] in NO_IMPORT_KINDS:
+        # 知识类附件：后台把里面的图片转成文字说明，插进给 Agent 的文字版（按内容哈希只做一次）
+        from fde_asset.modules.asset import attachment_vision
+
+        attachment_vision.enqueue(engine, hashlib.sha256(content).hexdigest(), name)
     extraction = extract_text(name, content)
     return {
         "path": f"{ATTACHMENT_PREFIX}{name}",

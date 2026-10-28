@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -292,7 +293,11 @@ def agent_bundle(
     if known and agent_bundle_module.unchanged(context.engine, context.repo_port, known, **request):
         return {"revision": known, "unchanged": True}
     bundle = agent_bundle_module.build_bundle(
-        context.engine, context.repo_port, bundle_root=context.settings.bundle_dir, **request
+        context.engine,
+        context.repo_port,
+        bundle_root=context.settings.bundle_dir,
+        file_store=context.file_store,
+        **request,
     )
     return bundle.as_payload()
 
@@ -310,6 +315,76 @@ def _usage(
         actor_type="agent",
         actor_id=str(payload.get("agent_key") or ""),
     )
+
+
+@router.post("/agent-attachment", dependencies=[Depends(require_service_key)])
+def agent_attachment(
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+) -> dict[str, Any]:
+    """Agent 要基于附件原件修改时来取原件（平台再放进本轮工作目录）。
+
+    和资产包同一条规则：这个用户是项目成员，项目看得到这份资产，资产是知识类、附件属于它。
+    """
+    from fde_asset.modules.asset.snapshot import KNOWLEDGE_KINDS
+    from fde_asset.modules.recommend import service as recommend_service
+
+    username = str(payload.get("username") or "")
+    engagement_slug = str(payload.get("engagement_slug") or "")
+    asset_id = str(payload.get("asset_id") or "")
+    filename = str(payload.get("filename") or "")
+    if not username or not engagement_slug or not asset_id or not filename:
+        raise HTTPException(status_code=422, detail="要给出用户、项目、资产和附件名")
+    try:
+        principal = context.directory.resolve(username)
+    except PrincipalNotFound:
+        raise HTTPException(status_code=404, detail="没有这个用户") from None
+    except PlatformUnavailable:
+        raise HTTPException(status_code=503, detail="暂时无法向平台确认身份") from None
+    membership = next(
+        (m for m in principal.memberships if m.engagement_slug == engagement_slug), None
+    )
+    if membership is None and not principal.is_admin:
+        raise HTTPException(status_code=403, detail="这个用户不在这个项目里")
+    project = context.directory.engagements().get(engagement_slug, {})
+    visible = recommend_service.visible_to_project(
+        context.engine,
+        [asset_id],
+        engagement_slug=engagement_slug,
+        department_code=str(project.get("department_code", ""))
+        or (membership.department_code if membership else ""),
+        customer_code=str(project.get("customer_code", ""))
+        or (membership.customer_code if membership else ""),
+    )
+    if asset_id not in visible:
+        raise HTTPException(status_code=404, detail="这个项目看不到这份资产")
+    with context.engine.connect() as conn:
+        row = conn.execute(
+            select(assets.c.kind, assets.c.attachments_json).where(
+                assets.c.asset_id == asset_id, assets.c.deleted_at.is_(None)
+            )
+        ).first()
+    if row is None or row.kind not in KNOWLEDGE_KINDS:
+        raise HTTPException(status_code=404, detail="只有方案、实施、问题、经验的附件能取原件")
+    entry = next(
+        (
+            item
+            for item in json.loads(row.attachments_json or "[]")
+            if item.get("name") == filename
+            or str(item.get("path") or "").rsplit("/", 1)[-1] == filename
+        ),
+        None,
+    )
+    content = context.file_store.get(str(entry.get("sha256") or "")) if entry else None
+    if content is None:
+        raise HTTPException(status_code=404, detail="这份资产没有这个附件")
+    return {
+        "asset_id": asset_id,
+        "filename": filename,
+        "sha256": entry["sha256"],
+        "bytes": len(content),
+        "content_base64": base64.b64encode(content).decode(),
+    }
 
 
 @router.post("/agent-usage", dependencies=[Depends(require_service_key)])

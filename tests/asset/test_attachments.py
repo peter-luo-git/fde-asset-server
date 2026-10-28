@@ -53,7 +53,7 @@ def test_upload_draft_keeps_asset_valid_when_extraction_fails(client) -> None:
     response = client.post(
         "/api/v1/harvest-candidates/from-upload",
         json={
-            "kind": "Solution",
+            "kind": "Rule",
             "title": "坏文件",
             "filename": "broken.docx",
             "content_base64": base64.b64encode(b"not a docx").decode(),
@@ -62,6 +62,55 @@ def test_upload_draft_keeps_asset_valid_when_extraction_fails(client) -> None:
     )
     assert response.status_code == 200
     assert response.json()["extraction"]["status"] == "failed"
+
+
+def test_knowledge_kinds_are_not_imported_from_files(client) -> None:
+    """方案、实施、问题、经验的正文按模板手写，历史文档作附件上传（2026-10-28）。"""
+    import base64
+
+    client.headers.update({"X-FDE-User": "chen"})
+    for kind in ("Solution", "Implementation", "Case", "Experience"):
+        response = client.post(
+            "/api/v1/harvest-candidates/from-upload",
+            json={
+                "kind": kind,
+                "title": "历史文档",
+                "filename": "note.md",
+                "content_base64": base64.b64encode("一些正文".encode()).decode(),
+                "scope": "company",
+            },
+        )
+        assert response.status_code == 422, kind
+        assert "附件" in response.json()["detail"]
+
+
+def test_rule_import_puts_full_text_in_body_and_keeps_no_attachment(client) -> None:
+    import base64
+
+    client.headers.update({"X-FDE-User": "chen"})
+    text = "\n".join(f"第 {i} 条：变量名用 snake_case" for i in range(1, 400))
+    response = client.post(
+        "/api/v1/harvest-candidates/from-upload",
+        json={
+            "kind": "Rule",
+            "title": "编码规范",
+            "filename": "规范.md",
+            "content_base64": base64.b64encode(text.encode()).decode(),
+            "scope": "company",
+        },
+    )
+    assert response.status_code == 200, response.text
+    candidate = client.get(f"/api/v1/harvest-candidates/{response.json()['candidate_id']}").json()
+    body = candidate["files"]["RULE.md"]
+    assert "第 399 条" in body and "原文摘录" not in body and "<请用一句话" not in body
+    assert not any(path.startswith("attachments/") for path in candidate["files"])
+
+    # 规范不收附件：Agent 读不到，要遵守的写进正文
+    attach = client.post(
+        f"/api/v1/harvest-candidates/{candidate['candidate_id']}/attachments",
+        json={"filename": "原件.md", "content_base64": base64.b64encode(b"x").decode()},
+    )
+    assert attach.status_code == 409 and "正文" in attach.json()["detail"]
 
 
 def test_oversize_upload_rejected(client) -> None:
@@ -80,3 +129,37 @@ def test_oversize_upload_rejected(client) -> None:
         },
     )
     assert response.status_code == 413
+
+
+def test_owner_defaults_to_the_department_chosen_as_scope(client) -> None:
+    """作用域选了某个部门，负责方默认就是那个部门，不是起草人自己的部门（2026-10-28）。"""
+    import base64
+
+    client.headers.update({"X-FDE-User": "chen"})  # chen 在 data-intel
+    response = client.post(
+        "/api/v1/harvest-candidates/from-upload",
+        json={
+            "kind": "Rule",
+            "title": "平台部编码规范",
+            "filename": "规范.md",
+            "content_base64": base64.b64encode("变量名用 snake_case".encode()).decode(),
+            "scope": "department",
+            "department_code": "platform",
+        },
+    )
+    assert response.status_code == 200, response.text
+    candidate = client.get(f"/api/v1/harvest-candidates/{response.json()['candidate_id']}").json()
+    assert "owner: department:platform" in candidate["files"]["asset.yaml"]
+
+    blank = client.post(
+        "/api/v1/harvest-candidates",
+        json={
+            "kind": "Case",
+            "title": "平台部的问题",
+            "scope": "department",
+            "department_code": "platform",
+        },
+    )
+    assert blank.status_code in (200, 201), blank.text
+    created = client.get(f"/api/v1/harvest-candidates/{blank.json()['candidate_id']}").json()
+    assert "owner: department:platform" in created["files"]["asset.yaml"]

@@ -83,7 +83,7 @@ def config_from_env(model_override: str = "") -> LlmConfig:
 
 
 class LlmClient(Protocol):
-    def complete_json(self, system: str, user: str) -> dict[str, Any]: ...
+    def complete_json(self, system: str, user: str | list[dict[str, Any]]) -> dict[str, Any]: ...
 
 
 class NullLlmClient:
@@ -105,7 +105,8 @@ class OpenAICompatibleClient:
     def usable(self) -> bool:
         return self.config.usable
 
-    def complete_json(self, system: str, user: str) -> dict[str, Any]:
+    def complete_json(self, system: str, user: str | list[dict[str, Any]]) -> dict[str, Any]:
+        """user 可以是一段文字，也可以是多段内容（文字加图片 image_url），用于看图。"""
         import httpx
 
         response = httpx.post(
@@ -142,7 +143,7 @@ class FallbackLlmClient:
     def usable(self) -> bool:
         return bool(self.clients)
 
-    def complete_json(self, system: str, user: str) -> dict[str, Any]:
+    def complete_json(self, system: str, user: str | list[dict[str, Any]]) -> dict[str, Any]:
         error: Exception | None = None
         for client in self.clients:
             try:

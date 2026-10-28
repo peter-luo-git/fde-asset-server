@@ -1174,6 +1174,115 @@ paths:
       summary: Download Asset Attachment
       tags:
       - assets
+  /api/v1/assets/{asset_id}/attachments/{filename}/text-version:
+    get:
+      description: 已入库资产的附件文字版（带图片说明），给人核对 Agent 读到的是什么。
+      operationId: asset_attachment_text_version_api_v1_assets__asset_id__attachments__filename__text_version_get
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: path
+        name: filename
+        required: true
+        schema:
+          title: Filename
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Asset Attachment Text Version Api V1 Assets  Asset Id  Attachments  Filename  Text
+                  Version Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Asset Attachment Text Version
+      tags:
+      - assets
+  /api/v1/assets/{asset_id}/attachments/{filename}/text-version/retry:
+    post:
+      description: 重新做图片理解；带 target（页面或图片 id）时是「这页也要理解」。
+      operationId: asset_attachment_text_version_retry_api_v1_assets__asset_id__attachments__filename__text_version_retry_post
+      parameters:
+      - in: path
+        name: asset_id
+        required: true
+        schema:
+          title: Asset Id
+          type: string
+      - in: path
+        name: filename
+        required: true
+        schema:
+          title: Filename
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              default: {}
+              title: Payload
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Asset Attachment Text Version Retry Api V1 Assets  Asset Id  Attachments  Filename  Text
+                  Version Retry Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Asset Attachment Text Version Retry
+      tags:
+      - assets
   /api/v1/assets/{asset_id}/body:
     get:
       description: '资产正文全文（主文件的 Markdown）。详情页原来只显示结论段，正文其余章节看不到（B1）。
@@ -2876,6 +2985,115 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
           description: Validation Error
       summary: Generate Attachment Summary
+      tags:
+      - harvest
+  /api/v1/harvest-candidates/{candidate_id}/attachments/{filename}/text-version:
+    get:
+      description: 草稿附件给 Agent 的文字版：图片理解进度、图片说明、跳过了哪些和理由。
+      operationId: candidate_attachment_text_version_api_v1_harvest_candidates__candidate_id__attachments__filename__text_version_get
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: path
+        name: filename
+        required: true
+        schema:
+          title: Filename
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Candidate Attachment Text Version Api V1 Harvest Candidates  Candidate
+                  Id  Attachments  Filename  Text Version Get
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Candidate Attachment Text Version
+      tags:
+      - harvest
+  /api/v1/harvest-candidates/{candidate_id}/attachments/{filename}/text-version/retry:
+    post:
+      description: 重新做图片理解；带 target（页面或图片 id）时是「这页也要理解」。
+      operationId: candidate_attachment_text_version_retry_api_v1_harvest_candidates__candidate_id__attachments__filename__text_version_retry_post
+      parameters:
+      - in: path
+        name: candidate_id
+        required: true
+        schema:
+          title: Candidate Id
+          type: string
+      - in: path
+        name: filename
+        required: true
+        schema:
+          title: Filename
+          type: string
+      - in: header
+        name: X-FDE-User
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Fde-User
+      - in: header
+        name: authorization
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        content:
+          application/json:
+            schema:
+              default: {}
+              title: Payload
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                title: Response Candidate Attachment Text Version Retry Api V1 Harvest Candidates  Candidate
+                  Id  Attachments  Filename  Text Version Retry Post
+                type: object
+          description: Successful Response
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+          description: Validation Error
+      summary: Candidate Attachment Text Version Retry
       tags:
       - harvest
   /api/v1/harvest-candidates/{candidate_id}/checks:

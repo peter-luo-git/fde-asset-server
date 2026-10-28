@@ -64,6 +64,60 @@ def test_attachment_text_written_for_agent(indexed) -> None:
     assert not list(result.path.rglob("*.xlsx"))  # 二进制不进快照
 
 
+def test_agent_bundle_carries_attachment_text_and_list(indexed, tmp_path) -> None:
+    """Agent 实际用的是资产包（agent_bundle），附件文字和清单要在这里（2026-10-28 补上）。"""
+    from fde_asset.modules.asset import agent_bundle
+
+    bundle = agent_bundle.build_bundle(
+        indexed.engine, indexed.repo_port, bundle_root=tmp_path, file_store=indexed.file_store
+    )
+    prefix = "knowledge/implementations/oracle-to-pg-cutover"
+    assert f"{prefix}/attachments-text/baseline.xlsx.txt" in bundle.files
+    readme = bundle.files[f"{prefix}/README.md"].decode("utf-8")
+    assert "## 附件" in readme and "`attachments-text/baseline.xlsx.txt`" in readme
+    assert not any(path.endswith(".xlsx") for path in bundle.files)
+
+
+def test_attachment_text_is_clipped_to_keep_asset_under_platform_limit() -> None:
+    """附件文字合计有上限：超的截断并注明，免得整份资产超出平台 1MB 被丢掉。"""
+    import json
+    from types import SimpleNamespace
+
+    from fde_asset.modules.asset import snapshot
+
+    blobs = {"a": b"x", "b": b"y"}
+    row = SimpleNamespace(
+        name="big",
+        attachments_json=json.dumps(
+            [
+                {
+                    "path": "attachments/甲.md",
+                    "sha256": "a",
+                    "text_extraction": "ok",
+                    "summary": "甲方案",
+                },
+                {"path": "attachments/乙.md", "sha256": "b", "text_extraction": "ok"},
+                {"path": "attachments/图.png", "sha256": "c", "text_extraction": "unsupported"},
+            ]
+        ),
+    )
+    store = SimpleNamespace(get=blobs.get)
+    long_text = "华电案例" * 50_000
+    original = snapshot._attachment_text
+    snapshot._attachment_text = lambda attachment, blob: long_text
+    try:
+        readme, texts, missed = snapshot.with_attachment_texts(
+            row, b"# big\n", store, budget=10_000
+        )
+    finally:
+        snapshot._attachment_text = original
+    assert set(texts) == {"attachments-text/甲.md.txt", "attachments-text/乙.md.txt"}
+    assert all(len(text) <= 5_000 for text in texts.values())
+    assert "截断" in texts["attachments-text/甲.md.txt"].decode("utf-8")
+    assert "：甲方案" in readme.decode("utf-8")
+    assert missed == [{"asset": "big", "attachment": "attachments/图.png", "reason": "unsupported"}]
+
+
 def test_customer_layer_sits_between_department_and_engagement() -> None:
     """合并顺序：公司 → 部门 → 客户 → 项目，越靠后越具体。"""
     from fde_asset.modules.asset.snapshot import _layer_order

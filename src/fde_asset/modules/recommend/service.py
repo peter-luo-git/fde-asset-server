@@ -27,7 +27,7 @@ from fde_asset.core.db import (
     target_assets,
 )
 from fde_asset.modules.asset import matching, rerank
-from fde_asset.modules.asset.visibility import visibility_clause
+from fde_asset.modules.asset.visibility import audience_clause, visibility_clause
 from fde_asset.platform.identity import Principal
 
 TARGET_TYPES = ("engagement", "agent")
@@ -590,6 +590,60 @@ def unlink(
                 },
             )
     return {"unlinked": unlinked}
+
+
+def visible_to_project(
+    engine: Engine,
+    asset_ids: list[str] | set[str],
+    *,
+    engagement_slug: str,
+    department_code: str = "",
+    customer_code: str = "",
+) -> set[str]:
+    """这些资产里，哪些在项目的可见范围内（和 Agent 资产快照用同一条规则，见 snapshot.select_assets）。
+
+    关联只是「想带上」，项目看不到的资产生成快照时会被滤掉，Agent 拿不到。"""
+    ids = sorted(set(asset_ids))
+    if not ids:
+        return set()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(assets.c.asset_id).where(
+                assets.c.asset_id.in_(ids),
+                assets.c.deleted_at.is_(None),
+                assets.c.valid.is_(True),
+                assets.c.restricted.is_(False),
+                assets.c.lifecycle.notin_(["deprecated", "archived", "draft"]),
+                audience_clause(
+                    department_codes=[department_code],
+                    customer_codes=[customer_code],
+                    engagement_slugs=[engagement_slug],
+                ),
+            )
+        ).fetchall()
+    return {row.asset_id for row in rows}
+
+
+def scope_label(engine: Engine, asset_id: str, departments: dict[str, str] | None = None) -> str:
+    """资产当前可见范围的说明，用在「项目看不到」的提示里。"""
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(
+                assets.c.scope,
+                assets.c.department_code,
+                assets.c.customer_code,
+                assets.c.engagement_slug,
+            ).where(assets.c.asset_id == asset_id)
+        ).first()
+    if row is None:
+        return ""
+    if row.scope == "department":
+        return f"部门 · {(departments or {}).get(row.department_code) or row.department_code}"
+    if row.scope == "customer":
+        return f"客户 · {row.customer_code}"
+    if row.scope == "engagement":
+        return f"项目 · {row.engagement_slug}"
+    return {"company": "全公司", "user": "个人"}.get(row.scope, row.scope)
 
 
 def linked_assets(

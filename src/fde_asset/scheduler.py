@@ -93,8 +93,15 @@ def build_tasks(context: ServiceContext) -> list[Task]:
         minutes = int(settings_store.get(context.engine, "app_probe_interval_minutes") or 10)
         return max(minutes, 1) * 60.0
 
+    def vision() -> dict[str, Any]:
+        """附件图片理解：一份要好几分钟，放到单独的线程里逐个做，不挡住重建索引等其他定时任务。"""
+        from fde_asset.modules.asset import attachment_vision
+
+        return {"started": attachment_vision.start_worker(context.engine, context.file_store)}
+
     return [
         Task("reindex", lambda: float(context.settings.index_poll_seconds), reindex),
+        Task("attachment-vision", lambda: 15.0, vision),
         Task("leads", lambda: float(LEADS_INTERVAL_SECONDS), leads),
         Task("probe", probe_interval, probe),
         Task(

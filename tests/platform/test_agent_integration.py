@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from datetime import datetime, timezone
+
+import pytest
+from sqlalchemy import select, update
 
 from fde_asset.core.db import asset_usages, assets, target_assets
 from fde_asset.modules.asset import agent_bundle
@@ -213,3 +216,89 @@ def test_references_in_a_delivery_summary_are_kept_apart_from_reuse(seeded) -> N
             ).fetchall()
         assert row.event == "cited" and row.asset_id == skill
         assert service.get(f"/api/v1/assets/{skill}").json()["usage_count"] == before
+
+
+def test_agent_fetches_attachment_original_only_when_project_can_see_it(seeded) -> None:
+    """Agent 要改附件原件时来取：项目看得到、是知识类、附件属于它才给；README 里写明怎么取。"""
+    import base64
+
+    with _service(seeded) as service:
+        context = service.app.state.context
+        asset_id = _asset_id(context, "oracle-to-pg-cutover")
+        body = {
+            "username": "chen",
+            "engagement_slug": "policy-import",
+            "asset_id": asset_id,
+            "filename": "baseline.xlsx",
+        }
+        assert service.post("/internal/v1/agent-attachment", json=body).status_code in (
+            401,
+            403,
+            404,
+        )
+        got = service.post("/internal/v1/agent-attachment", json=body, headers=HEADERS)
+        assert got.status_code == 200, got.text
+        content = base64.b64decode(got.json()["content_base64"])
+        assert content[:2] == b"PK" and got.json()["bytes"] == len(content)
+        missing = service.post(
+            "/internal/v1/agent-attachment", json={**body, "filename": "没有.xlsx"}, headers=HEADERS
+        )
+        assert missing.status_code == 404
+        outsider = service.post(
+            "/internal/v1/agent-attachment", json={**body, "username": "zhao"}, headers=HEADERS
+        )
+        assert outsider.status_code == 403
+
+        _link(context, "engagement", "policy-import", "oracle-to-pg-cutover")
+        bundle = service.post(
+            "/internal/v1/agent-bundle",
+            json={"username": "chen", "engagement_slug": "policy-import"},
+            headers=HEADERS,
+        ).json()
+        readme_path = next(
+            path for path in bundle["files"] if path.endswith("oracle-to-pg-cutover/README.md")
+        )
+        readme = base64.b64decode(bundle["files"][readme_path]).decode("utf-8")
+        assert f"asset_id={asset_id}，filename=baseline.xlsx" in readme
+        assert "fde_asset_attachment_fetch" in readme
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["restricted", "invalid", "deprecated", "archived", "draft", "deleted", "outside_project"],
+)
+def test_attachment_original_refuses_assets_excluded_from_project_snapshot(seeded, case) -> None:
+    """原件取回和资产快照遵循同一权限、有效性和生命周期边界。"""
+    with _service(seeded) as service:
+        context = service.app.state.context
+        asset_id = _asset_id(context, "oracle-to-pg-cutover")
+        if case == "outside_project":
+            from fde_asset.core.db import asset_audiences
+
+            with context.engine.begin() as conn:
+                conn.execute(asset_audiences.delete().where(asset_audiences.c.asset_id == asset_id))
+                conn.execute(
+                    asset_audiences.insert().values(
+                        asset_id=asset_id, audience="engagement", code="other-project"
+                    )
+                )
+        else:
+            values = {
+                "restricted": {"restricted": True},
+                "invalid": {"valid": False},
+                "deleted": {"deleted_at": datetime.now(timezone.utc)},
+            }.get(case, {"lifecycle": case})
+            with context.engine.begin() as conn:
+                conn.execute(update(assets).where(assets.c.asset_id == asset_id).values(**values))
+        response = service.post(
+            "/internal/v1/agent-attachment",
+            json={
+                "username": "chen",
+                "engagement_slug": "policy-import",
+                "asset_id": asset_id,
+                "filename": "baseline.xlsx",
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 404, response.text
+        assert "content_base64" not in response.json()
