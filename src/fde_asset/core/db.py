@@ -493,6 +493,26 @@ skill_checks = Table(
     UniqueConstraint("digest", "kind", name="uq_skill_check"),
 )
 
+#: 附件的图片理解结果（2026-10-28）：按附件内容的 SHA-256 存，同一份文件只做一次。
+#: text 是带图片说明的文字版，report_json 记下看了哪些、跳过哪些和理由。
+attachment_texts = Table(
+    "attachment_texts",
+    metadata,
+    Column("sha256", String(64), primary_key=True),
+    Column("filename", String(255), nullable=False, default=""),
+    # pending | running | done | failed
+    Column("status", String(16), nullable=False, default="pending"),
+    Column("done", Integer, nullable=False, default=0),
+    Column("total", Integer, nullable=False, default=0),
+    Column("text", Text, nullable=False, default=""),
+    Column("report_json", Text, nullable=False, default="{}"),
+    Column("include_json", Text, nullable=False, default="[]"),
+    Column("error", Text, nullable=False, default=""),
+    Column("claimed_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=_now),
+    Column("updated_at", DateTime(timezone=True)),
+)
+
 #: 公开技能库：管理员配的来源；目录清单缓存在 catalog_json
 skill_sources = Table(
     "skill_sources",

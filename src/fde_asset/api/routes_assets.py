@@ -402,6 +402,61 @@ def download_asset_attachment(
     )
 
 
+def _text_version(context: ServiceContext, sha256: str, filename: str) -> dict[str, Any]:
+    """附件给 Agent 的文字版：图片理解的进度、图片说明、跳过了哪些和理由。"""
+    from fde_asset.modules.asset import attachment_vision
+
+    if not attachment_vision.wanted(filename):
+        return {"status": "not_applicable"}
+    saved = attachment_vision.get(context.engine, sha256)
+    if saved is None:
+        attachment_vision.enqueue(context.engine, sha256, filename)
+        saved = attachment_vision.get(context.engine, sha256)
+    return saved or {"status": "pending"}
+
+
+def _asset_attachment_sha(context, principal, asset_id: str, filename: str) -> str:
+    data = catalog.get_asset(context.engine, principal, asset_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="资产不存在或无权查看")
+    entry = next((item for item in data["attachments"] if item.get("name") == filename), None)
+    if entry is None or not entry.get("sha256"):
+        raise HTTPException(status_code=404, detail="附件不存在")
+    return str(entry["sha256"])
+
+
+@router.get("/assets/{asset_id}/attachments/{filename}/text-version")
+def asset_attachment_text_version(
+    asset_id: str,
+    filename: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """已入库资产的附件文字版（带图片说明），给人核对 Agent 读到的是什么。"""
+    sha = _asset_attachment_sha(context, principal, asset_id, filename)
+    return _text_version(context, sha, filename)
+
+
+@router.post("/assets/{asset_id}/attachments/{filename}/text-version/retry")
+def asset_attachment_text_version_retry(
+    asset_id: str,
+    filename: str,
+    payload: dict[str, Any] = Body(default={}),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """重新做图片理解；带 target（页面或图片 id）时是「这页也要理解」。"""
+    from fde_asset.modules.asset import attachment_vision
+
+    sha = _asset_attachment_sha(context, principal, asset_id, filename)
+    target = str(payload.get("target") or "")
+    if target:
+        attachment_vision.include_target(context.engine, sha, target)
+    else:
+        attachment_vision.enqueue(context.engine, sha, filename, force=True)
+    return _text_version(context, sha, filename)
+
+
 @router.post("/assets/{asset_id}/visibility")
 def change_visibility(
     asset_id: str,

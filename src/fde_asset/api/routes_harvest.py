@@ -537,6 +537,51 @@ def add_attachment(
     return result
 
 
+def _candidate_attachment_sha(context: ServiceContext, candidate_id: str, filename: str) -> str:
+    sha = context.blob_store.sha256(candidate_id, filename)
+    if not sha:
+        raise HTTPException(status_code=404, detail="附件不存在")
+    return sha
+
+
+@router.get("/harvest-candidates/{candidate_id}/attachments/{filename}/text-version")
+def candidate_attachment_text_version(
+    candidate_id: str,
+    filename: str,
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """草稿附件给 Agent 的文字版：图片理解进度、图片说明、跳过了哪些和理由。"""
+    from fde_asset.api.routes_assets import _text_version
+
+    get_candidate(candidate_id, context, principal)
+    return _text_version(
+        context, _candidate_attachment_sha(context, candidate_id, filename), filename
+    )
+
+
+@router.post("/harvest-candidates/{candidate_id}/attachments/{filename}/text-version/retry")
+def candidate_attachment_text_version_retry(
+    candidate_id: str,
+    filename: str,
+    payload: dict[str, Any] = Body(default={}),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """重新做图片理解；带 target（页面或图片 id）时是「这页也要理解」。"""
+    from fde_asset.api.routes_assets import _text_version
+    from fde_asset.modules.asset import attachment_vision
+
+    get_candidate(candidate_id, context, principal)
+    sha = _candidate_attachment_sha(context, candidate_id, filename)
+    target = str(payload.get("target") or "")
+    if target:
+        attachment_vision.include_target(context.engine, sha, target)
+    else:
+        attachment_vision.enqueue(context.engine, sha, filename, force=True)
+    return _text_version(context, sha, filename)
+
+
 @router.get("/harvest-candidates/{candidate_id}/attachments/{filename}")
 def download_attachment(
     candidate_id: str,

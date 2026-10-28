@@ -223,9 +223,13 @@ def build_snapshot(
     selected, mounted, selection = chosen.rows, chosen.mounted, chosen.selection
     not_carried = chosen.not_carried
 
+    from fde_asset.modules.asset import attachment_vision
+
+    # 附件的图片理解做完了要重新拼：已完成的附件也算进指纹
+    vision_texts = attachment_vision.texts_for(engine, selected)
     fingerprint = hashlib.sha256()
-    # 快照布局改了就加版本号，旧快照不再复用（2：知识正文末尾附上附件清单）
-    fingerprint.update(f"layout=2|selection={selection}|".encode())
+    # 快照布局改了就加版本号，旧快照不再复用（2：知识正文末尾附上附件清单；3：附件带图片说明）
+    fingerprint.update(f"layout=3|selection={selection}|vision={sorted(vision_texts)}|".encode())
     for row in selected:
         fingerprint.update(
             f"{row.asset_id}|{row.kind}|{mounted[row.asset_id]}|{row.commit_sha}|{row.updated_at}".encode()
@@ -285,7 +289,9 @@ def build_snapshot(
         elif row.kind in KNOWLEDGE_KINDS:
             destination = staging / "knowledge" / SHORT_BY_KIND[row.kind] / mount / "README.md"
             readme = repo_port.read_file(repo, f"{row.path}/README.md")
-            readme, texts, missed = with_attachment_texts(row, readme, file_store)
+            readme, texts, missed = with_attachment_texts(
+                row, readme, file_store, enriched=vision_texts
+            )
             skipped.extend(missed)
             for relative, content in texts.items():
                 _write(destination.parent / relative, content)
@@ -439,18 +445,27 @@ def _clip(text: str, limit: int) -> bytes:
 
 
 def with_attachment_texts(
-    row: Any, readme: bytes, file_store: Any, budget: int = ATTACHMENT_TEXT_BUDGET
+    row: Any,
+    readme: bytes,
+    file_store: Any,
+    budget: int = ATTACHMENT_TEXT_BUDGET,
+    enriched: dict[str, str] | None = None,
 ) -> tuple[bytes, dict[str, bytes], list[dict[str, Any]]]:
     """知识类资产的附件交给 Agent：每个附件的文字版放在 attachments-text/ 下，正文末尾列出清单和摘要。
 
     Agent 不列目录，只读正文，所以清单要写进正文它才知道有哪些附件、各讲什么。
     附件文字合计不超过 budget 字节（按份数平分，超的截断并注明），免得整份资产超出平台上限被丢掉。
+    enriched：已做完图片理解的附件 {sha256: 带图片说明的文字版}，有就用它（图片附件、扫描件也靠它才有文字）。
     返回（加了清单的正文、{相对路径: 文字}、没带上的附件）。
     """
+    enriched = enriched or {}
     attachments = json.loads(row.attachments_json or "[]")
     missed: list[dict[str, Any]] = []
     usable: list[tuple[dict[str, Any], bytes]] = []
     for attachment in attachments:
+        if attachment.get("sha256") in enriched:
+            usable.append((attachment, b""))
+            continue
         if attachment.get("text_extraction") != "ok":
             missed.append(
                 {
@@ -472,7 +487,8 @@ def with_attachment_texts(
     share = max(0, budget - len(readme)) // max(1, len(usable))
     for attachment, blob in usable:
         name = Path(attachment["path"]).name + ".txt"
-        texts[f"attachments-text/{name}"] = _clip(_attachment_text(attachment, blob), share)
+        full = enriched.get(attachment.get("sha256", "")) or _attachment_text(attachment, blob)
+        texts[f"attachments-text/{name}"] = _clip(full, share)
         summary = str(attachment.get("summary") or "").strip()
         listed.append(
             f"- `attachments-text/{name}`（原件 {Path(attachment['path']).name}）"

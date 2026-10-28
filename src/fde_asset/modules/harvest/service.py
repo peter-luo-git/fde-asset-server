@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from dataclasses import dataclass, field, replace
@@ -692,6 +693,11 @@ def attach_file(
     files = dict(candidate["files"])
     files[f"{ATTACHMENT_PREFIX}{name}"] = ATTACHMENT_PLACEHOLDER
     update_candidate(engine, candidate_id, files)
+    if candidate["kind"] in NO_IMPORT_KINDS:
+        # 知识类附件：后台把里面的图片转成文字说明，插进给 Agent 的文字版（按内容哈希只做一次）
+        from fde_asset.modules.asset import attachment_vision
+
+        attachment_vision.enqueue(engine, hashlib.sha256(content).hexdigest(), name)
     extraction = extract_text(name, content)
     return {
         "path": f"{ATTACHMENT_PREFIX}{name}",
