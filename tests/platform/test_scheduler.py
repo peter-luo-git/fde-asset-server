@@ -68,12 +68,11 @@ def test_fresh_worker_does_not_reindex_what_is_already_indexed(indexed) -> None:
     assert _index_events(indexed) == events
 
 
-def test_leads_task_scans_activity(indexed) -> None:
+def test_leads_are_no_longer_scanned(indexed) -> None:
+    """2026-10-28 起沉淀线索就是项目里的沉淀候选（Agent 提的、消息上标记的），不再按规则扫描平台活动。"""
+    assert "leads" not in {task.name for task in build_tasks(indexed)}
     with indexed.engine.connect() as conn:
         assert conn.execute(select(asset_leads)).fetchall() == []
-    result = _task(indexed, "leads").run()
-    assert result["created"] > 0
-    assert _task(indexed, "leads").run()["created"] == 0, "重复扫描不重复建"
 
 
 def test_probe_task_uses_the_configured_interval(indexed, monkeypatch) -> None:

@@ -23,7 +23,11 @@ EXPLAIN_TIMEOUT_SECONDS = 90.0
 
 
 def _target(
-    context: ServiceContext, payload: dict[str, Any], *, override_context: bool = True
+    context: ServiceContext,
+    payload: dict[str, Any],
+    *,
+    override_context: bool = True,
+    allow_template: bool = False,
 ) -> service.Target:
     try:
         target = service.target_from_directory(
@@ -31,6 +35,14 @@ def _target(
         )
     except service.RecommendError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    # Agent 都属于项目：公司模板改了只影响以后新建的 Agent，给它关联资产会在所有直接用它的项目里生效，
+    # 不再允许（解除旧关联可以）。以后的公司级 Agent 是 scope=company，不受这条限制
+    if not override_context and not allow_template and target.scope == "template":
+        raise HTTPException(
+            status_code=422,
+            detail="这是公司模板，不能关联资产；请关联给项目，或项目里具体的 Agent",
+        )
+    return target
     # 只读匹配允许试验台覆盖上下文；写操作必须用目录归属授权。
     if override_context:
         for field in ("title", "description", "industry", "department_code", "stage", "role"):
@@ -45,7 +57,10 @@ def _owns(principal: Principal, target: service.Target) -> bool:
         return True
     if target.owner and target.owner == principal.user_id:
         return True
-    return target.target_type == "engagement" and principal.owns_engagement(target.target_id)
+    if target.target_type == "agent":
+        # 项目负责人能管项目里的 Agent
+        return bool(target.engagement_slug) and principal.owns_engagement(target.engagement_slug)
+    return principal.owns_engagement(target.target_id)
 
 
 def _may_manage(principal: Principal, target: service.Target) -> bool:
@@ -94,6 +109,10 @@ def list_targets(
         ("agent", context.directory.agents()),
     ):
         for target_id, raw in source.items():
+            # Agent 都属于项目；公司模板（白板、阿码、闪电等，含以前直接挂在项目上的遗留用法）不当目标。
+            # 以后的公司级 Agent（scope=company）照常列出，页面单独一组
+            if target_type == "agent" and raw.get("scope") == "template":
+                continue
             item = {
                 "target_type": target_type,
                 "target_id": target_id,
@@ -105,8 +124,17 @@ def list_targets(
                 "role": raw.get("role", ""),
                 "description": raw.get("description", ""),
             }
-            owned = raw.get("owner") == principal.user_id or (
-                target_type == "engagement" and principal.owns_engagement(target_id)
+            if target_type == "agent":
+                # 和项目、人的关系：属于哪个项目、调用范围（本人专用 / 项目共享）
+                project_slug = raw.get("engagement_slug", "")
+                item["scope"] = raw.get("scope", "") or ("project" if project_slug else "")
+                item["engagement_slug"] = project_slug
+                item["engagement_title"] = raw.get("engagement_name", "") or (
+                    context.directory.engagements().get(project_slug, {}).get("title", project_slug)
+                )
+                item["sharing_mode"] = raw.get("sharing_mode", "")
+            owned = raw.get("owner") == principal.user_id or principal.owns_engagement(
+                target_id if target_type == "engagement" else raw.get("engagement_slug", "")
             )
             # 部门视图里自己负责的和同事负责的走不同流程，页面要分得清
             item["mine"] = owned
@@ -137,6 +165,21 @@ def compute(
     llm = None
     reranker = build_reranker() if accurate and enabled else None
     limit = int(payload.get("limit", service.DEFAULT_LIMIT))
+    # 精确模式：项目信息之外，再加上项目里近期用户问 Agent 的问题总结（Agent 用它所在的项目）
+    focus: dict[str, Any] = {"summary": "", "keywords": [], "questions": 0}
+    if accurate and enabled:
+        from fde_asset.modules.recommend import project_focus
+        from fde_asset.platform.llm.client import agent_model_client
+
+        # 项目：项目里问所有 Agent 的；Agent：只看项目里问这个 Agent 的
+        slug = target.target_id if target.target_type == "engagement" else target.engagement_slug
+        focus = project_focus.for_project(
+            context.directory,
+            slug,
+            agent_model_client(timeout=60.0),
+            agent=target.target_id if target.target_type == "agent" else "",
+        )
+        target.focus = focus["summary"]
     # 缓存键带上用户：可见范围因人而异，不能把别人能看的缓存给我
     cache_key = ":".join(
         [
@@ -149,6 +192,7 @@ def compute(
             target.description[:80],
             target.industry,
             target.stage,
+            target.focus[:80],
         ]
     )
     cached = None if payload.get("refresh") else recommendation_cache.get(cache_key)
@@ -168,6 +212,8 @@ def compute(
         recommendation_cache.set(cache_key, (items, mode))
     return {
         "mode": mode,
+        # 精确推荐用到的项目近期问题总结；没用到时 summary 为空
+        "focus": focus,
         "target": {
             "target_type": target.target_type,
             "target_id": target.target_id,
@@ -199,15 +245,28 @@ def explain(
     cached = None if payload.get("refresh") else recommendation_cache.get(cache_key)
     if cached is not None:
         return {"available": True, "reasons": cached, "cached": True}
-    llm = build_client(str(settings_store.get(context.engine, "rerank_model") or ""))
-    config = getattr(llm, "config", None)
+    from fde_asset.platform.llm.client import FallbackLlmClient, agent_model_client
+
+    primary = build_client(str(settings_store.get(context.engine, "rerank_model") or ""))
+    config = getattr(primary, "config", None)
     if config is not None:
         # 写理由是人点了才等的，给够时间：实测生成模型写两句话要三十秒上下，默认的 30 秒超时刚好卡在边上
         config.timeout = max(config.timeout, EXPLAIN_TIMEOUT_SECONDS)
+    # 写理由的模型失败（比如限流 429）就换 Agent 用的那套模型（主线路、备用线路），2026-10-28
+    llm = FallbackLlmClient(
+        [
+            *([primary] if getattr(primary, "usable", False) else []),
+            *agent_model_client(timeout=EXPLAIN_TIMEOUT_SECONDS).clients,
+        ]
+    )
     reasons = service.explain(context.engine, principal, target, asset_ids, llm)
     if reasons is None:
-        # 没配生成模型或它这次没成功：照实说，页面上仍然有相关度和规则给的理由
-        return {"available": False, "reasons": {}}
+        # 照实说：是没配模型，还是模型这次没成功（限流、超时）；页面上仍然有相关度和规则给的理由
+        return {
+            "available": False,
+            "reasons": {},
+            "why": "failed" if llm.usable else "not_configured",
+        }
     recommendation_cache.set(cache_key, reasons)
     return {"available": True, "reasons": reasons, "cached": False}
 
@@ -315,8 +374,9 @@ def link(
     if not _owns(principal, target):
         raise HTTPException(status_code=403, detail="只有目标负责人或管理员能关联资产")
     asset_id = str(payload.get("asset_id", ""))
-    if target.target_type == "engagement" and asset_id:
-        # 项目看不到的资产，关联了 Agent 也拿不到（快照按项目的可见范围挑）：直接说清楚，不让关联
+    if asset_id and (target.target_type == "engagement" or target.engagement_slug):
+        # 项目看不到的资产，关联了 Agent 也拿不到（快照按项目的可见范围挑）：直接说清楚，不让关联。
+        # 关联给 Agent 时按它所在的项目判断
         audience = _project_audience(context, target)
         if not service.visible_to_project(context.engine, [asset_id], **audience):
             label = service.scope_label(context.engine, asset_id, _department_names(context))
@@ -336,6 +396,27 @@ def link(
     return result
 
 
+@router.post("/recommend/unlink")
+def unlink(
+    payload: dict[str, Any] = Body(...),
+    context: ServiceContext = Depends(get_context),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """解除关联：和关联同样的权限（目标负责人或管理员）。页面上项目资产、Agent 资产的「解除关联」用它。"""
+    target = _target(context, payload, override_context=False, allow_template=True)
+    if not _owns(principal, target):
+        raise HTTPException(status_code=403, detail="只有目标负责人或管理员能解除关联")
+    result = service.unlink(
+        context.engine,
+        principal,
+        target.target_type,
+        target.target_id,
+        str(payload.get("asset_id") or ""),
+    )
+    recommendation_cache.invalidate()
+    return result
+
+
 @router.get("/recommend/linked")
 def linked(
     target_type: str,
@@ -347,9 +428,13 @@ def linked(
     """关联给目标的资产。`include_own=true` 且目标是项目时，再带上项目自己的资产（source=project），
     它们不用关联也会给项目的 Agent。"""
     items = service.linked_assets(context.engine, principal, target_type, target_id)
-    if target_type == "engagement" and items:
-        # 已经关联、但项目看不到的（比如别的部门的资产）：标出来，Agent 实际不会带上
-        target = service.target_from_directory(context.directory, target_type, target_id)
+    target = (
+        service.target_from_directory(context.directory, target_type, target_id)
+        if target_type in service.TARGET_TYPES
+        else None
+    )
+    if items and target and (target_type == "engagement" or target.engagement_slug):
+        # 已经关联、但项目看不到的（比如别的部门的资产）：标出来，Agent 实际不会带上（Agent 按所在项目判断）
         visible = service.visible_to_project(
             context.engine,
             {item["asset_id"] for item in items},
@@ -373,13 +458,14 @@ def linked(
 
 
 def _project_audience(context: ServiceContext, target: service.Target) -> dict[str, str]:
-    """项目的部门、客户：和生成 Agent 资产快照时用的一样。"""
-    project = context.directory.engagements().get(target.target_id, {})
+    """项目的部门、客户：和生成 Agent 资产快照时用的一样。目标是 Agent 时用它所在的项目。"""
+    slug = target.engagement_slug if target.target_type == "agent" else target.target_id
+    project = context.directory.engagements().get(slug, {})
+    department = target.department_code if target.target_type == "engagement" else ""
     return {
-        "engagement_slug": target.target_id,
-        "department_code": target.department_code or str(project.get("department_code", "")),
-        "customer_code": str(project.get("customer_code", ""))
-        or _customer_of(context, target.target_id),
+        "engagement_slug": slug,
+        "department_code": department or str(project.get("department_code", "")),
+        "customer_code": str(project.get("customer_code", "")) or _customer_of(context, slug),
     }
 
 

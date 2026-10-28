@@ -122,9 +122,16 @@ def index_repository(
 
 
 def _attachments(
-    manifest: AssetManifest, file_store: Any, text_limit: int
+    manifest: AssetManifest,
+    file_store: Any,
+    text_limit: int,
+    enriched: dict[str, str] | None = None,
 ) -> tuple[list[dict], list[str]]:
-    """附件清单和从附件里提取出的文字。原件按哈希在文件存储里，不在仓库里。"""
+    """附件清单和从附件里提取出的文字。原件按哈希在文件存储里，不在仓库里。
+
+    enriched：已做完图片理解的附件 {sha256: 带图片说明的文字版}。有就用它建检索，
+    截图、架构图里的内容在资产中心也能搜到（2026-10-28）；图片附件、扫描件也靠它才有文字。"""
+    enriched = enriched or {}
     listed: list[dict] = []
     chunks: list[str] = []
     for attachment in manifest.spec.attachments:
@@ -141,6 +148,11 @@ def _attachments(
         if file_store is not None and blob is None:
             entry["text_extraction"] = "missing"
             entry["detail"] = "文件存储里找不到这个附件的原件"
+        elif blob is not None and enriched.get(attachment.sha256):
+            entry["bytes"] = len(blob)
+            entry["text_extraction"] = "ok"
+            entry["detail"] = "含图片说明"
+            chunks.append(enriched[attachment.sha256][:text_limit])
         elif blob is not None:
             extraction = extract_text(attachment.name, blob, limit=text_limit)
             entry["bytes"] = len(blob)
@@ -253,7 +265,16 @@ def _index_repository(
                 )
             valid = not any(f.severity == "error" for f in findings)
 
-            attachments, extracted_chunks = _attachments(manifest, file_store, text_limit)
+            from fde_asset.modules.asset import attachment_vision
+
+            attachments, extracted_chunks = _attachments(
+                manifest,
+                file_store,
+                text_limit,
+                attachment_vision.finished_texts(
+                    engine, [item.sha256 for item in manifest.spec.attachments]
+                ),
+            )
 
             if not valid:
                 for finding in findings:

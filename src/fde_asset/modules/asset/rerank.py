@@ -98,8 +98,10 @@ def order_by_model(
     """
     if reranker is None or not getattr(reranker, "usable", False) or not candidates:
         return None
+    # 有完整描述（类型、摘要、适用场景、结论、标签、附件摘要）就用它，没有退回标题加摘要
     documents = [
-        f"{item['title']}。{(item.get('summary') or '')[:MAX_SUMMARY]}" for item in candidates
+        item.get("_doc") or f"{item['title']}。{(item.get('summary') or '')[:MAX_SUMMARY]}"
+        for item in candidates
     ]
     try:
         scored = reranker.rank(query, documents, limit)

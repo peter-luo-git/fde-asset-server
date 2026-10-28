@@ -92,13 +92,15 @@ def test_explain_degrades_honestly(client, monkeypatch) -> None:
     assert wang.post("/api/v1/recommend/explain", json={**TARGET, "asset_ids": ids}).json() == {
         "available": False,
         "reasons": {},
+        "why": "not_configured",
     }
 
     monkeypatch.setattr(routes_recommend, "build_client", lambda *args: FakeLlm(fail=True))
     failed = wang.post(
         "/api/v1/recommend/explain", json={**TARGET, "asset_ids": ids, "refresh": True}
     )
-    assert failed.json() == {"available": False, "reasons": {}}
+    # 模型配了但这次没成功（限流、超时），和没配分开说
+    assert failed.json() == {"available": False, "reasons": {}, "why": "failed"}
 
     assert (
         wang.post("/api/v1/recommend/explain", json={**TARGET, "asset_ids": []}).status_code == 422

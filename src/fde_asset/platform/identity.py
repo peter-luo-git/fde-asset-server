@@ -162,6 +162,13 @@ class LocalDirectory:
         """部门代号 → 名称。开发名单里没写就为空，页面显示代号。"""
         return dict(self._load().get("departments", {}))
 
+    def recent_questions(self, engagement_slug: str, agent: str = "") -> list[str]:
+        """项目频道里最近用户问 Agent 的问题（精确推荐用）。开发名单里写在 recent_questions 下，
+        给了 agent 就读 recent_questions["项目:Agent"]。"""
+        key = f"{engagement_slug}:{agent}" if agent else engagement_slug
+        raw = self._load().get("recent_questions", {}).get(key, [])
+        return [str(item) for item in raw if str(item).strip()]
+
     def write(self, data: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -289,6 +296,30 @@ class PlatformDirectory:
         except Exception as exc:  # noqa: BLE001 - 网络层的各种失败都算「问不到」
             raise PlatformUnavailable(str(exc)) from None
 
+    def recent_questions(self, engagement_slug: str, agent: str = "") -> list[str]:
+        """项目频道、话题里最近用户问 Agent 的问题（2026-10-28，精确推荐用）。私聊的平台不给。
+        给了 agent 就只要问这个 Agent 的（为 Agent 找资产）。
+        问不到（老版本平台没有这个接口、网络问题）就返回空，推荐照常按项目信息算。"""
+        if not self._service_key:
+            return []
+        try:
+            response = self._get(
+                "/internal/identity/engagements/"
+                + quote(engagement_slug, safe="")
+                + "/recent-questions",
+                headers={"X-FDE-Service-Key": self._service_key},
+                params={"days": 30, "limit": 60, **({"agent": agent} if agent else {})},
+            )
+            if response.status_code != 200:
+                return []
+            return [
+                str(item.get("text") or "")
+                for item in response.json().get("questions") or []
+                if isinstance(item, dict) and str(item.get("text") or "").strip()
+            ]
+        except (PlatformUnavailable, ValueError, AttributeError):
+            return []
+
     def work_item_access(self, work_item_id: str, username: str, *, write: bool = False) -> str:
         """不缓存任务权限：任务归属、成员撤权和读写限制每次由平台重新核验。"""
         if not self._service_key:
@@ -387,6 +418,10 @@ class PlatformDirectory:
             ):
                 raise PlatformUnavailable("fde-server Agent 推荐目录格式无效")
             agent_snapshot[raw["key"]] = {field: raw[field] for field in fields}
+            # 和项目、人的关系（2026-10-28）：老版本平台没有这几项，按空处理
+            for extra in ("scope", "engagement_slug", "engagement_name", "sharing_mode"):
+                value = raw.get(extra)
+                agent_snapshot[raw["key"]][extra] = value if isinstance(value, str) else ""
         try:
             snapshot = {
                 "departments": {

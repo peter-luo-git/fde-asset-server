@@ -52,6 +52,12 @@ class Target:
     owner: str = ""
     stage: str = ""
     role: str = ""
+    #: Agent 用（2026-10-28）：project = 项目里的 Agent，属于 engagement_slug 这个项目；
+    #: template = 公司模板（含以前直接挂在项目上的遗留用法），不当关联目标；company = 以后的公司级 Agent
+    scope: str = ""
+    engagement_slug: str = ""
+    #: 精确推荐用：项目里近期用户问 Agent 的问题总结（2026-10-28），见 project_focus
+    focus: str = ""
 
     def context(self) -> matching.MatchContext:
         return matching.MatchContext(
@@ -85,6 +91,8 @@ def target_from_directory(directory, target_type: str, target_id: str) -> Target
         owner=raw.get("owner", ""),
         stage=raw.get("stage", ""),
         role=raw.get("role", ""),
+        scope=raw.get("scope", "") if target_type == "agent" else "",
+        engagement_slug=raw.get("engagement_slug", "") if target_type == "agent" else "",
     )
 
 
@@ -96,6 +104,8 @@ def department_targets(directory, department_code: str) -> list[Target]:
         ("agent", directory.agents()),
     ):
         for target_id, raw in source.items():
+            if target_type == "agent" and raw.get("scope") == "template":
+                continue  # 公司模板不当推荐目标
             if raw.get("department_code") == department_code:
                 found.append(target_from_directory(directory, target_type, target_id))
     return found
@@ -142,7 +152,11 @@ def compute(
     if semantic and mode != "reranked":
         # 重排没成功：候选是没做字面粗筛的全集，不能原样推出去，重新走一遍关键词粗排
         return compute(engine, principal, target, limit=limit, llm=llm, reranker=None)
-    return (rules + picked)[:limit], mode
+    # 给模型看的完整描述不回给页面
+    return [
+        {key: value for key, value in item.items() if key != "_doc"}
+        for item in (rules + picked)[:limit]
+    ], mode
 
 
 def target_context(target: Target) -> dict[str, Any]:
@@ -154,6 +168,7 @@ def target_context(target: Target) -> dict[str, Any]:
         "阶段": target.stage,
         "类型": "项目" if target.target_type == "engagement" else "Agent",
         "Agent 角色": target.role,
+        "近期在问": target.focus,
     }
 
 
@@ -603,6 +618,38 @@ def scope_label(engine: Engine, asset_id: str, departments: dict[str, str] | Non
     if row.scope == "engagement":
         return f"项目 · {row.engagement_slug}"
     return {"company": "全公司", "user": "个人"}.get(row.scope, row.scope)
+
+
+def unlink(
+    engine: Engine,
+    principal: Principal,
+    target_type: str,
+    target_id: str,
+    asset_id: str,
+) -> dict[str, Any]:
+    """解除关联（2026-10-28）：只删关联关系，不删资产，也不动项目自己的资产和必选资产。"""
+    with engine.begin() as conn:
+        removed = conn.execute(
+            target_assets.delete().where(
+                and_(
+                    target_assets.c.target_type == target_type,
+                    target_assets.c.target_id == target_id,
+                    target_assets.c.asset_id == asset_id,
+                )
+            )
+        ).rowcount
+        if removed:
+            record_event(
+                conn,
+                "asset.unlinked",
+                {
+                    "asset_id": asset_id,
+                    "target_type": target_type,
+                    "target_id": target_id,
+                    "removed_by": principal.user_id,
+                },
+            )
+    return {"unlinked": bool(removed)}
 
 
 def linked_assets(

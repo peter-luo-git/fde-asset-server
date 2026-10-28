@@ -235,6 +235,11 @@ def test_agents_use_the_authenticated_platform_snapshot_and_safe_fields(tmp_path
             "role": "coding_agent",
             "owner": "wang",
             "department_code": "finance",
+            # 和项目、人的关系：老版本平台没给就是空
+            "scope": "",
+            "engagement_slug": "",
+            "engagement_name": "",
+            "sharing_mode": "",
         }
     }
     assert source.users() == ["admin", "wang"]

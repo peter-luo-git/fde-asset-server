@@ -115,8 +115,56 @@ def _score(
     return relevance, relevance + score, reasons
 
 
+KIND_NAME = {
+    "Rule": "规范",
+    "Skill": "技能",
+    "Solution": "方案",
+    "Implementation": "实施",
+    "Case": "问题",
+    "Experience": "经验",
+    "Application": "应用",
+    "Sop": "流程",
+}
+
+
+def rich_document(row: Any) -> str:
+    """给重排模型看的一份资产（2026-10-28 丰富）：类型、标题、摘要、适用和不适用场景、结论段、标签、行业、
+    附件摘要。以前只有标题和摘要，说法不同、但写在结论或附件里的内容对不上。总长控制在 1200 字以内。"""
+    parts = [f"{KIND_NAME.get(row.kind, row.kind)}：{row.title}", row.summary or ""]
+    try:
+        applicability = json.loads(row.applicability_json or "{}")
+    except ValueError:
+        applicability = {}
+    if applicability.get("suitable"):
+        parts.append(f"适用：{applicability['suitable']}")
+    if applicability.get("notSuitable"):
+        parts.append(f"不适用：{applicability['notSuitable']}")
+    if row.conclusion_md:
+        parts.append(f"结论：{' '.join(row.conclusion_md.split())[:300]}")
+    tags = json.loads(row.tags_json or "[]")
+    if tags:
+        parts.append("标签：" + "、".join(str(tag) for tag in tags[:10]))
+    industries = json.loads(row.industry_json or "[]")
+    if industries:
+        parts.append("行业：" + "、".join(str(item) for item in industries[:5]))
+    try:
+        attachments = json.loads(row.attachments_json or "[]")
+    except ValueError:
+        attachments = []
+    briefs = [
+        f"{item.get('name', '')}：{str(item.get('summary') or '')[:150]}"
+        for item in attachments
+        if isinstance(item, dict) and item.get("summary")
+    ][:3]
+    if briefs:
+        parts.append("附件：" + "；".join(briefs))
+    return "。".join(part.strip() for part in parts if part and part.strip())[:1200]
+
+
 def _item(row: Any, score: float, reasons: list[str], reuse: int) -> dict[str, Any]:
     return {
+        # 精确推荐交给重排模型看的完整描述（不回给页面）
+        "_doc": rich_document(row),
         "asset_id": row.asset_id,
         "kind": row.kind,
         "name": row.name,

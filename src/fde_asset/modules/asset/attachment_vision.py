@@ -743,23 +743,33 @@ def done_marker(engine: Engine, rows: list[Any]) -> list[str]:
 _WORKER_LOCK = threading.Lock()
 
 
-def start_worker(engine: Engine, file_store: Any) -> bool:
-    """没在做就起一个线程，把排着的一份份做完；已经在做就什么都不干。一次只做一份。"""
+def start_worker(engine: Engine, file_store: Any, on_done: Callable[[], Any] | None = None) -> bool:
+    """没在做就起一个线程，把排着的一份份做完；已经在做就什么都不干。一次只做一份。
+
+    on_done：这一批里有做完的，结束时调一次（重建检索，让图片说明能被搜到）。"""
     if not _WORKER_LOCK.acquire(blocking=False):
         return False
 
     def loop() -> None:
         from fde_asset.platform.llm.client import agent_model_client
 
+        finished = False
         try:
             while True:
                 result = run_one(engine, file_store, agent_model_client)
+                if result.get("status") == "done":
+                    finished = True
                 if not result or result.get("status") == "waiting_model":
-                    return
+                    break
         except Exception:  # noqa: BLE001 - 下一轮定时任务会再起
             logger.exception("attachment vision worker stopped")
         finally:
             _WORKER_LOCK.release()
+        if finished and on_done is not None:
+            try:
+                on_done()
+            except Exception:  # noqa: BLE001 - 重建检索失败等下次仓库有提交时再建
+                logger.exception("reindex after attachment vision failed")
 
     threading.Thread(target=loop, name="attachment-vision", daemon=True).start()
     return True

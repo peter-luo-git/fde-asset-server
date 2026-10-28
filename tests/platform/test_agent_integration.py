@@ -237,6 +237,14 @@ def test_agent_fetches_attachment_original_only_when_project_can_see_it(seeded) 
         assert got.status_code == 200, got.text
         content = base64.b64decode(got.json()["content_base64"])
         assert content[:2] == b"PK" and got.json()["bytes"] == len(content)
+        # Agent 常拿资产目录名（标识）当 asset_id 传，也要认
+        by_name = service.post(
+            "/internal/v1/agent-attachment",
+            json={**body, "asset_id": "oracle-to-pg-cutover"},
+            headers=HEADERS,
+        )
+        assert by_name.status_code == 200, by_name.text
+        assert by_name.json()["asset_id"] == asset_id
         missing = service.post(
             "/internal/v1/agent-attachment", json={**body, "filename": "没有.xlsx"}, headers=HEADERS
         )
