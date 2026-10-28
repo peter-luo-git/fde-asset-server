@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from fde_asset.api.routes_assets import _customer_of
 from fde_asset.api.deps import ServiceContext, get_context, get_principal
 from fde_asset.modules.asset import rerank as rerank_module
 from fde_asset.modules.recommend import service
@@ -313,6 +314,17 @@ def link(
     target = _target(context, payload, override_context=False)
     if not _owns(principal, target):
         raise HTTPException(status_code=403, detail="只有目标负责人或管理员能关联资产")
+    asset_id = str(payload.get("asset_id", ""))
+    if target.target_type == "engagement" and asset_id:
+        # 项目看不到的资产，关联了 Agent 也拿不到（快照按项目的可见范围挑）：直接说清楚，不让关联
+        audience = _project_audience(context, target)
+        if not service.visible_to_project(context.engine, [asset_id], **audience):
+            label = service.scope_label(context.engine, asset_id, _department_names(context))
+            raise HTTPException(
+                status_code=422,
+                detail=f"这个项目看不到这份资产（可见范围：{label}），关联了 Agent 也拿不到。"
+                "请先在资产详情的「调整可见范围」里加上这个项目或它所在的部门，再关联",
+            )
     try:
         result = service.link(
             context.engine, principal, target.target_type, target.target_id, payload["asset_id"]
@@ -335,8 +347,44 @@ def linked(
     """关联给目标的资产。`include_own=true` 且目标是项目时，再带上项目自己的资产（source=project），
     它们不用关联也会给项目的 Agent。"""
     items = service.linked_assets(context.engine, principal, target_type, target_id)
-    if include_own and target_type == "engagement":
-        items += service.project_own_assets(
-            context.engine, principal, target_id, {item["asset_id"] for item in items}
+    if target_type == "engagement" and items:
+        # 已经关联、但项目看不到的（比如别的部门的资产）：标出来，Agent 实际不会带上
+        target = service.target_from_directory(context.directory, target_type, target_id)
+        visible = service.visible_to_project(
+            context.engine,
+            {item["asset_id"] for item in items},
+            **_project_audience(context, target),
         )
+        departments = _department_names(context)
+        for item in items:
+            item["project_can_see"] = item["asset_id"] in visible
+            if not item["project_can_see"]:
+                item["scope_label"] = service.scope_label(
+                    context.engine, item["asset_id"], departments
+                )
+    if include_own and target_type == "engagement":
+        items += [
+            {**item, "project_can_see": True}
+            for item in service.project_own_assets(
+                context.engine, principal, target_id, {item["asset_id"] for item in items}
+            )
+        ]
     return {"items": items}
+
+
+def _project_audience(context: ServiceContext, target: service.Target) -> dict[str, str]:
+    """项目的部门、客户：和生成 Agent 资产快照时用的一样。"""
+    project = context.directory.engagements().get(target.target_id, {})
+    return {
+        "engagement_slug": target.target_id,
+        "department_code": target.department_code or str(project.get("department_code", "")),
+        "customer_code": str(project.get("customer_code", ""))
+        or _customer_of(context, target.target_id),
+    }
+
+
+def _department_names(context: ServiceContext) -> dict[str, str]:
+    try:
+        return dict(context.directory.departments())
+    except Exception:  # noqa: BLE001 - 部门名只用来写提示，拿不到就用代号
+        return {}

@@ -236,3 +236,79 @@ def test_department_head_pushes_to_a_colleague_but_links_own_directly(client) ->
         "/api/v1/recommend/link", json={**own, "asset_id": mine["asset_id"]}
     )
     assert linked.status_code == 200, linked.text
+
+
+def _other_department_asset(context) -> str:
+    """别的部门（不是 policy-import 所在的 finance）的部门资产，policy-import 看不到它。"""
+    from sqlalchemy import select
+
+    from fde_asset.core.db import asset_audiences, assets
+
+    with context.engine.connect() as conn:
+        rows = conn.execute(
+            select(assets.c.asset_id).where(
+                assets.c.scope == "department",
+                assets.c.department_code != "finance",
+                assets.c.kind != "Sop",
+                assets.c.deleted_at.is_(None),
+            )
+        ).fetchall()
+        for row in rows:
+            audiences = {
+                (a.audience, a.code)
+                for a in conn.execute(
+                    select(asset_audiences).where(asset_audiences.c.asset_id == row.asset_id)
+                )
+            }
+            if not audiences & {
+                ("company", ""),
+                ("department", "finance"),
+                ("engagement", "policy-import"),
+            } and not any(audience == "company" for audience, _ in audiences):
+                return row.asset_id
+    raise AssertionError("种子数据里没有别的部门的部门资产")
+
+
+def test_link_refuses_asset_the_project_cannot_see(client, context) -> None:
+    """项目看不到的资产（别的部门的）关联了 Agent 也拿不到：直接拒绝并说明怎么办（2026-10-28）。"""
+    asset_id = _other_department_asset(context)
+    target = {"target_type": "engagement", "target_id": "policy-import"}
+    refused = as_user(client, "admin").post(
+        "/api/v1/recommend/link", json={**target, "asset_id": asset_id}
+    )
+    assert refused.status_code == 422
+    assert "看不到" in refused.json()["detail"] and "调整可见范围" in refused.json()["detail"]
+    linked = as_user(client, "admin").get("/api/v1/recommend/linked", params=target).json()["items"]
+    assert asset_id not in {item["asset_id"] for item in linked}
+
+
+def test_linked_list_marks_assets_the_project_cannot_see(client, context) -> None:
+    """以前已经关联上的、项目看不到的资产：列表里标出来，Agent 不会带上。"""
+    from fde_asset.core.db import target_assets
+
+    hidden = _other_department_asset(context)
+    with context.engine.begin() as conn:
+        conn.execute(
+            target_assets.insert().values(
+                target_type="engagement",
+                target_id="policy-import",
+                asset_id=hidden,
+                source="manual",
+                created_by="admin",
+            )
+        )
+    items = (
+        as_user(client, "admin")
+        .get(
+            "/api/v1/recommend/linked",
+            params={
+                "target_type": "engagement",
+                "target_id": "policy-import",
+                "include_own": "true",
+            },
+        )
+        .json()["items"]
+    )
+    marked = next(item for item in items if item["asset_id"] == hidden)
+    assert marked["project_can_see"] is False and marked["scope_label"].startswith("部门")
+    assert all(item["project_can_see"] for item in items if item["asset_id"] != hidden)
