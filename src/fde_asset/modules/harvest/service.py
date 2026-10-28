@@ -41,6 +41,21 @@ from fde_asset.platform.scan.rules import blocking, scan_files
 NO_IMPORT_KINDS = frozenset({"Solution", "Implementation", "Case", "Experience"})
 
 
+def default_owner(principal: Principal, scope: str, department_code: str = "") -> str:
+    """新草稿默认的负责方。
+
+    作用域选了某个部门，负责方就是那个部门（2026-10-28）：以前一律填起草人自己的部门，
+    数据智能部的人起草平台部的规范，作用域是平台部、负责方却是数据智能部，两边都管不了它。
+    个人专用的是本人；其余作用域仍是起草人所在部门，没有部门时是本人。"""
+    if scope == "user":
+        return f"user:{principal.user_id}"
+    if scope == "department" and department_code:
+        return f"department:{department_code}"
+    if principal.department_code:
+        return f"department:{principal.department_code}"
+    return f"user:{principal.user_id}"
+
+
 class HarvestError(ValueError):
     pass
 
@@ -184,11 +199,7 @@ def create_draft(engine: Engine, principal: Principal, data: CandidateInput) -> 
     if data.scope == "user":
         # 个人专用：负责人是本人；部门记下来，带脚本时由本部门评审员看
         data = replace(data, department_code=principal.department_code)
-    owner = (
-        f"user:{principal.user_id}"
-        if data.scope == "user" or not principal.department_code
-        else f"department:{principal.department_code}"
-    )
+    owner = default_owner(principal, data.scope, data.department_code)
     files = data.files or render_template(
         data.kind,
         name=data.name,
@@ -360,11 +371,7 @@ def draft_from_upload(
     extraction = extract_text(filename, content)
     # 中文标题转不出 ASCII，以前一律落成 legacy-import，多传几份就重名了
     name = _slugify(title, fallback="") or generate_name(engine, kind)
-    owner = (
-        f"department:{principal.department_code}"
-        if principal.department_code
-        else f"user:{principal.user_id}"
-    )
+    owner = default_owner(principal, scope, department_code)
     rule = KIND_RULES[kind]
     excerpt = (
         extraction.text[:4000] if extraction.status == "ok" else "（未能提取文本，请人工补充要点）"
@@ -476,11 +483,7 @@ def draft_from_skill_package(
     origin_note = dict(source or {})
     if package.rejected:
         origin_note["rejected_files"] = package.rejected[:50]
-    owner = (
-        f"user:{principal.user_id}"
-        if scope == "user" or not principal.department_code
-        else f"department:{principal.department_code}"
-    )
+    owner = default_owner(principal, scope, department_code)
     manifest = {
         "apiVersion": "fde.asset/v1",
         "kind": "Skill",

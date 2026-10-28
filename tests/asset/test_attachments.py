@@ -129,3 +129,37 @@ def test_oversize_upload_rejected(client) -> None:
         },
     )
     assert response.status_code == 413
+
+
+def test_owner_defaults_to_the_department_chosen_as_scope(client) -> None:
+    """作用域选了某个部门，负责方默认就是那个部门，不是起草人自己的部门（2026-10-28）。"""
+    import base64
+
+    client.headers.update({"X-FDE-User": "chen"})  # chen 在 data-intel
+    response = client.post(
+        "/api/v1/harvest-candidates/from-upload",
+        json={
+            "kind": "Rule",
+            "title": "平台部编码规范",
+            "filename": "规范.md",
+            "content_base64": base64.b64encode("变量名用 snake_case".encode()).decode(),
+            "scope": "department",
+            "department_code": "platform",
+        },
+    )
+    assert response.status_code == 200, response.text
+    candidate = client.get(f"/api/v1/harvest-candidates/{response.json()['candidate_id']}").json()
+    assert "owner: department:platform" in candidate["files"]["asset.yaml"]
+
+    blank = client.post(
+        "/api/v1/harvest-candidates",
+        json={
+            "kind": "Case",
+            "title": "平台部的问题",
+            "scope": "department",
+            "department_code": "platform",
+        },
+    )
+    assert blank.status_code in (200, 201), blank.text
+    created = client.get(f"/api/v1/harvest-candidates/{blank.json()['candidate_id']}").json()
+    assert "owner: department:platform" in created["files"]["asset.yaml"]
