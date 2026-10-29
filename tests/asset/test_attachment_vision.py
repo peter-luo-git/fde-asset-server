@@ -7,6 +7,11 @@ import io
 import json
 from types import SimpleNamespace
 
+import pytest
+from sqlalchemy import select, update
+
+from fde_asset.core.db import assets, attachment_texts, harvest_candidates
+
 from fde_asset.modules.asset import attachment_vision as vision
 
 
@@ -207,6 +212,107 @@ def test_draft_attachment_text_version_api(client) -> None:
         f"/api/v1/harvest-candidates/{candidate_id}/attachments/说明.md/text-version"
     )
     assert other.json() == {"status": "not_applicable"}
+
+
+@pytest.mark.parametrize("payload", [{}, {"target": "u1-i1"}])
+@pytest.mark.parametrize("actor,expected_status", [("chen", 403), ("li", 200), ("admin", 200)])
+def test_asset_text_retry_requires_management_and_preserves_read_access(
+    client, payload, actor, expected_status
+) -> None:
+    context = client.app.state.context
+    sha = context.file_store.put(_png((20, 30, 40)))
+    with context.engine.begin() as conn:
+        asset_id = conn.execute(
+            select(assets.c.asset_id).where(assets.c.name == "oracle-to-pg-cutover")
+        ).scalar_one()
+        conn.execute(
+            update(assets)
+            .where(assets.c.asset_id == asset_id)
+            .values(
+                attachments_json=json.dumps(
+                    [{"name": "diagram.png", "path": "attachments/diagram.png", "sha256": sha}]
+                )
+            )
+        )
+    vision.enqueue(context.engine, sha, "diagram.png")
+    with context.engine.begin() as conn:
+        conn.execute(
+            update(attachment_texts)
+            .where(attachment_texts.c.sha256 == sha)
+            .values(status="done", text="original description")
+        )
+    client.headers.update({"X-FDE-User": actor})
+    detail = client.get(f"/api/v1/assets/{asset_id}")
+    assert detail.status_code == 200
+    assert detail.json()["can_manage"] is (expected_status == 200)
+    path = f"/api/v1/assets/{asset_id}/attachments/diagram.png/text-version"
+    assert client.get(path).json()["status"] == "done"
+    response = client.post(path + "/retry", json=payload)
+    assert response.status_code == expected_status
+    saved = vision.get(context.engine, sha)
+    assert saved["status"] == ("pending" if expected_status == 200 else "done")
+    with context.engine.connect() as conn:
+        include = conn.execute(
+            select(attachment_texts.c.include_json).where(attachment_texts.c.sha256 == sha)
+        ).scalar_one()
+    assert json.loads(include) == (["u1-i1"] if expected_status == 200 and payload else [])
+
+
+@pytest.mark.parametrize("payload", [{}, {"target": "u1-i1"}])
+@pytest.mark.parametrize(
+    "actor,status,expected_status",
+    [
+        ("li", "draft", 403),
+        ("admin", "draft", 403),
+        ("chen", "submitted", 409),
+        ("chen", "merged", 409),
+        ("chen", "rejected", 409),
+        ("chen", "draft", 200),
+    ],
+)
+def test_candidate_text_retry_requires_its_author_and_draft_status(
+    client, payload, actor, status, expected_status
+) -> None:
+    import base64
+
+    context = client.app.state.context
+    client.headers.update({"X-FDE-User": "chen"})
+    candidate = client.post(
+        "/api/v1/harvest-candidates",
+        json={"kind": "Solution", "title": "diagram draft", "scope": "company"},
+    ).json()
+    candidate_id = candidate["candidate_id"]
+    content = _png((25, 35, 45))
+    sha = hashlib.sha256(content).hexdigest()
+    added = client.post(
+        f"/api/v1/harvest-candidates/{candidate_id}/attachments",
+        json={"filename": "diagram.png", "content_base64": base64.b64encode(content).decode()},
+    )
+    assert added.status_code == 200, added.text
+    with context.engine.begin() as conn:
+        conn.execute(
+            update(attachment_texts)
+            .where(attachment_texts.c.sha256 == sha)
+            .values(status="done", text="original description")
+        )
+        conn.execute(
+            update(harvest_candidates)
+            .where(harvest_candidates.c.candidate_id == candidate_id)
+            .values(status=status)
+        )
+    client.headers.update({"X-FDE-User": actor})
+    path = f"/api/v1/harvest-candidates/{candidate_id}/attachments/diagram.png/text-version"
+    assert client.get(path).json()["status"] == "done"
+    response = client.post(path + "/retry", json=payload)
+    assert response.status_code == expected_status
+    assert vision.get(context.engine, sha)["status"] == (
+        "pending" if expected_status == 200 else "done"
+    )
+    with context.engine.connect() as conn:
+        include = conn.execute(
+            select(attachment_texts.c.include_json).where(attachment_texts.c.sha256 == sha)
+        ).scalar_one()
+    assert json.loads(include) == (["u1-i1"] if expected_status == 200 and payload else [])
 
 
 def test_search_index_uses_text_with_picture_descriptions() -> None:

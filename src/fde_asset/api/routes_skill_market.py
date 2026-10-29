@@ -16,7 +16,7 @@ from fde_asset.core.db import assets
 from fde_asset.modules.asset import catalog as catalog_module
 from fde_asset.modules.asset import skill_sources
 from fde_asset.modules.harvest import service as harvest
-from fde_asset.platform.identity import Principal
+from fde_asset.platform.identity import PlatformDirectory, Principal
 
 from fde_asset.api.routes_harvest import _checked_upload  # noqa: E402
 
@@ -217,6 +217,33 @@ def update_installed(
         raise _fail(exc) from None
 
 
+def _require_agent_project(
+    context: ServiceContext, principal: Principal, engagement_slug: str, agent_key: str
+) -> Principal:
+    if isinstance(context.directory, PlatformDirectory):
+        context.directory.refresh()
+        principal = context.directory.resolve(principal.user_id)
+    if not principal.is_admin and engagement_slug not in principal.engagement_slugs:
+        raise HTTPException(status_code=404, detail="项目不存在或无权访问")
+    if not agent_key:
+        return principal
+    agent = context.directory.agents().get(agent_key)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent 不存在或无权访问")
+    project = str(agent.get("engagement_slug") or "")
+    if project != engagement_slug and (
+        project or agent.get("scope") == "project" or agent_key.startswith("pa-")
+    ):
+        raise HTTPException(status_code=404, detail="Agent 不存在或不属于这个项目")
+    if agent.get("sharing_mode") == "private" and not (
+        principal.is_admin
+        or agent.get("owner") == principal.user_id
+        or principal.owns_engagement(engagement_slug)
+    ):
+        raise HTTPException(status_code=404, detail="Agent 不存在或无权访问")
+    return principal
+
+
 @router.get("/agent-skills")
 def agent_skills(
     engagement_slug: str = Query(..., min_length=1),
@@ -229,8 +256,7 @@ def agent_skills(
     from fde_asset.modules.asset import mandatory
     from fde_asset.modules.asset.snapshot import select_assets
 
-    if not principal.is_admin and engagement_slug not in principal.engagement_slugs:
-        raise HTTPException(status_code=404, detail="项目不存在或无权访问")
+    principal = _require_agent_project(context, principal, engagement_slug, agent_key)
     project = (context.directory.engagements() or {}).get(engagement_slug, {})
     membership = next(
         (m for m in principal.memberships if m.engagement_slug == engagement_slug), None
@@ -325,9 +351,9 @@ def agent_assets(
     from fde_asset.core.db import assets, target_assets
     from fde_asset.modules.asset import attachment_vision, mandatory
     from fde_asset.modules.asset.snapshot import select_assets
+    from fde_asset.modules.asset.visibility import visibility_clause
 
-    if not principal.is_admin and engagement_slug not in principal.engagement_slugs:
-        raise HTTPException(status_code=404, detail="项目不存在或无权访问")
+    principal = _require_agent_project(context, principal, engagement_slug, agent_key)
     project = (context.directory.engagements() or {}).get(engagement_slug, {})
     membership = next(
         (m for m in principal.memberships if m.engagement_slug == engagement_slug), None
@@ -365,7 +391,11 @@ def agent_assets(
         carried_ids = {row.asset_id for row in chosen.rows}
         missing_ids = sorted({asset_id for _, asset_id in linked} - carried_ids)
         missing_rows = (
-            conn.execute(select(assets).where(assets.c.asset_id.in_(missing_ids))).fetchall()
+            conn.execute(
+                select(assets).where(
+                    assets.c.asset_id.in_(missing_ids), visibility_clause(principal)
+                )
+            ).fetchall()
             if missing_ids
             else []
         )

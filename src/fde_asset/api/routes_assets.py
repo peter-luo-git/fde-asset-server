@@ -140,7 +140,7 @@ def ask_assets(
         context.engine,
         principal,
         q,
-        reranker=build_reranker(),
+        reranker=build_reranker(settings_store.get(context.engine, "rerank_model_name")),
         kind=kind,
         scope=scope,
         exclude_kinds=_kinds(exclude_kind),
@@ -449,6 +449,14 @@ def asset_attachment_text_version_retry(
     from fde_asset.modules.asset import attachment_vision
 
     sha = _asset_attachment_sha(context, principal, asset_id, filename)
+    with context.engine.connect() as conn:
+        row = conn.execute(select(assets).where(assets.c.asset_id == asset_id)).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="资产不存在或无权查看")
+    if not lifecycle.may_manage(principal, row):
+        raise HTTPException(
+            status_code=403, detail="只有资产负责人或它所在范围的评审人能重新理解附件"
+        )
     target = str(payload.get("target") or "")
     if target:
         attachment_vision.include_target(context.engine, sha, target)

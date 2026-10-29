@@ -40,13 +40,6 @@ RELATION_LABEL = {
 }
 
 
-def resolve_targets(engine: Engine) -> int:
-    """把 to_ref（kind/name）解析成 to_asset_id。返回补上的条数。"""
-    with engine.begin() as conn:
-        lock_index(conn)
-        return _resolve_targets(conn)
-
-
 def _resolve_targets(conn) -> int:
     by_ref = {
         f"{row.kind.lower()}/{row.name}": row.asset_id

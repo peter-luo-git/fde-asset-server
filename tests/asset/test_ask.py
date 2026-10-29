@@ -115,7 +115,9 @@ def test_model_failure_falls_back_to_keywords(indexed) -> None:
 
 
 def test_endpoint_is_not_shadowed_by_asset_id_route(client, monkeypatch) -> None:
-    monkeypatch.setattr(routes_assets, "build_reranker", lambda: MeaningReranker("序列跳号"))
+    monkeypatch.setattr(
+        routes_assets, "build_reranker", lambda _model="": MeaningReranker("序列跳号")
+    )
     chen = as_user(client, "chen")
     body = chen.get("/api/v1/assets/ask", params={"q": QUESTION}).json()
     assert body["mode"] == "semantic"
@@ -125,7 +127,7 @@ def test_endpoint_is_not_shadowed_by_asset_id_route(client, monkeypatch) -> None
 
 def test_threshold_follows_the_system_setting(client, monkeypatch) -> None:
     monkeypatch.setattr(
-        routes_assets, "build_reranker", lambda: MeaningReranker("序列跳号", hit=0.3)
+        routes_assets, "build_reranker", lambda _model="": MeaningReranker("序列跳号", hit=0.3)
     )
     admin = as_user(client, "admin")
     assert admin.get("/api/v1/assets/ask", params={"q": QUESTION}).json()["total"] == 1

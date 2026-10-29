@@ -78,9 +78,46 @@ def test_agent_focus_only_uses_questions_to_that_agent() -> None:
     directory = FakeDirectory(
         ["@文档助手 写手册", "@开发助手 改接口"], {"pa-dev": ["@开发助手 接口超时怎么排查"]}
     )
+
     result = project_focus.for_project(directory, "ops-dashboard", None, agent="pa-dev")
     assert result["summary"] == "接口超时怎么排查" and result["agent"] == "pa-dev"
     assert (
         project_focus.for_project(directory, "ops-dashboard", None, agent="pa-none")["questions"]
         == 0
     )
+
+
+def test_accurate_recommendation_does_not_disclose_other_projects_questions(client) -> None:
+    context = client.app.state.context
+    data = context.directory._load()
+    data["recent_questions"] = {"policy-import": ["项目里尚未公开的交付问题"]}
+    context.directory.write(data)
+    client.headers.update({"X-FDE-User": "zhao"})
+    response = client.post(
+        "/api/v1/recommend/compute",
+        json={
+            "target_type": "engagement",
+            "target_id": "policy-import",
+            "refresh": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["focus"] == {"summary": "", "keywords": [], "questions": 0}
+
+
+def test_accurate_recommendation_keeps_focus_for_a_current_project_member(client) -> None:
+    context = client.app.state.context
+    data = context.directory._load()
+    data["recent_questions"] = {"policy-import": ["保单批次导入超时怎么排查"]}
+    context.directory.write(data)
+    client.headers.update({"X-FDE-User": "chen"})
+    response = client.post(
+        "/api/v1/recommend/compute",
+        json={
+            "target_type": "engagement",
+            "target_id": "policy-import",
+            "refresh": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["focus"]["summary"] == "保单批次导入超时怎么排查"

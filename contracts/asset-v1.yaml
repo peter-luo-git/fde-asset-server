@@ -44,6 +44,31 @@ components:
       - decision
       title: SopCheckDecision
       type: object
+    UnlinkAssetRequest:
+      additionalProperties: false
+      properties:
+        asset_id:
+          maxLength: 64
+          minLength: 1
+          title: Asset Id
+          type: string
+        target_id:
+          maxLength: 120
+          minLength: 1
+          title: Target Id
+          type: string
+        target_type:
+          enum:
+          - engagement
+          - agent
+          title: Target Type
+          type: string
+      required:
+      - target_type
+      - target_id
+      - asset_id
+      title: UnlinkAssetRequest
+      type: object
     ValidationError:
       properties:
         loc:
@@ -4026,6 +4051,8 @@ paths:
                 title: Response Link Api V1 Recommend Link Post
                 type: object
           description: Successful Response
+        '404':
+          description: 资产不存在或对当前用户不可见
         '422':
           content:
             application/json:
@@ -4235,7 +4262,7 @@ paths:
       - recommend
   /api/v1/recommend/unlink:
     post:
-      description: 解除关联：和关联同样的权限（目标负责人或管理员）。页面上项目资产、Agent 资产的「解除关联」用它。
+      description: 负责人或管理员解除指定目标关联；重复解除返回 unlinked=false，保留资产正文。
       operationId: unlink_api_v1_recommend_unlink_post
       parameters:
       - in: header
@@ -4258,14 +4285,15 @@ paths:
         content:
           application/json:
             schema:
-              title: Payload
-              type: object
+              $ref: '#/components/schemas/UnlinkAssetRequest'
         required: true
       responses:
         '200':
           content:
             application/json:
               schema:
+                additionalProperties:
+                  type: boolean
                 title: Response Unlink Api V1 Recommend Unlink Post
                 type: object
           description: Successful Response
@@ -4319,6 +4347,8 @@ paths:
                 title: Response Decide Api V1 Recommend  Recommendation Id  Decide Post
                 type: object
           description: Successful Response
+        '404':
+          description: 资产不存在或对当前用户不可见
         '422':
           content:
             application/json:

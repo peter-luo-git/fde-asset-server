@@ -57,26 +57,25 @@ def mark_message(
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     """人在消息上「记为可沉淀」：频道里要是项目成员，私聊只记给自己。"""
-    scope = str(payload.get("scope") or "")
     engagement_slug = str(payload.get("engagement_slug") or "")
-    if scope == "channel" and not (
-        principal.is_admin or engagement_slug in principal.engagement_slugs
-    ):
-        raise HTTPException(status_code=403, detail="你不在这个项目里")
     try:
+        principal = suggestions.current_principal(context.directory, principal)
+        if not suggestions.may_write_project(principal, engagement_slug):
+            raise suggestions.SuggestionError("只有项目可写成员能记录沉淀候选", 403)
+        source = suggestions.checked_source(context.directory, principal, payload, message=True)
         return suggestions.record(
             context.engine,
-            engagement_slug=engagement_slug,
-            scope=scope,
-            scope_id=str(payload.get("scope_id") or ""),
+            engagement_slug=source["engagement_slug"],
+            scope=source["scope"],
+            scope_id=source["scope_id"],
             owner_user=principal.user_id,
             source="message",
             created_by=principal.user_id,
             kind=str(payload.get("kind") or ""),
             title=str(payload.get("title") or ""),
             summary=str(payload.get("summary") or ""),
-            conversation_id=str(payload.get("conversation_id") or ""),
-            message_id=str(payload.get("message_id") or ""),
+            conversation_id=source["conversation_id"],
+            message_id=source["message_id"],
         )
     except suggestions.SuggestionError as exc:
         raise _fail(exc) from None
@@ -92,11 +91,22 @@ def decide(
     """处理：drafted 起草了（带 candidate_id）、linked 已有资产（带 asset_id）、duplicate 重复（带 merged_into）、
     ignored 不沉淀（可带 note）、hold 待定、open 恢复。"""
     try:
+        principal = suggestions.current_principal(context.directory, principal)
+        status = str(payload.get("status") or "")
+        if status == "drafted" and payload.get("candidate_id"):
+            from fde_asset.api.routes_harvest import get_candidate
+
+            get_candidate(str(payload["candidate_id"]), context, principal)
+        if status == "linked" and payload.get("asset_id"):
+            from fde_asset.modules.recommend import service
+
+            if not service.visible_to(context.engine, principal, [str(payload["asset_id"])]):
+                raise HTTPException(status_code=404, detail="资产不存在或不可见")
         return suggestions.decide(
             context.engine,
             principal,
             suggestion_id,
-            str(payload.get("status") or ""),
+            status,
             str(payload.get("candidate_id") or ""),
             note=str(payload.get("note") or ""),
             asset_id=str(payload.get("asset_id") or ""),

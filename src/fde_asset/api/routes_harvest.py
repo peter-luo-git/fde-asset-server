@@ -242,7 +242,13 @@ def put_skill_file(
     if candidate["created_by"] != principal.user_id:
         raise HTTPException(status_code=403, detail="只有草稿作者能改文件")
     path = skill_package._clean_path(str(payload.get("path") or ""))
-    if path is None or path == "asset.yaml" or path.startswith("attachments/"):
+    if (
+        not path
+        or path == "asset.yaml"
+        or path == "attachments"
+        or path.startswith("attachments/")
+        or any(part.lower() == ".git" for part in path.split("/"))
+    ):
         raise HTTPException(
             status_code=422,
             detail="文件路径不对：要用技能目录里的相对路径，不能改 asset.yaml 和附件",
@@ -572,7 +578,11 @@ def candidate_attachment_text_version_retry(
     from fde_asset.api.routes_assets import _text_version
     from fde_asset.modules.asset import attachment_vision
 
-    get_candidate(candidate_id, context, principal)
+    candidate = get_candidate(candidate_id, context, principal)
+    if candidate["status"] != "draft":
+        raise HTTPException(status_code=409, detail="只有草稿可以重新理解附件")
+    if candidate["created_by"] != principal.user_id:
+        raise HTTPException(status_code=403, detail="只有草稿作者能重新理解附件")
     sha = _candidate_attachment_sha(context, candidate_id, filename)
     target = str(payload.get("target") or "")
     if target:

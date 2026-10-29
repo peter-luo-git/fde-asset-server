@@ -14,7 +14,9 @@ from tests.conftest import as_user
 @pytest.fixture(autouse=True)
 def _no_real_model(monkeypatch) -> None:
     """同一轮里别的用例可能把 .env.local 的模型配置加载进了环境变量；这里一律当作没配模型。"""
-    monkeypatch.setattr(routes_mcp.reranker_module, "build_reranker", NullReranker)
+    monkeypatch.setattr(
+        routes_mcp.reranker_module, "build_reranker", lambda _model="": NullReranker()
+    )
 
 
 def rpc(client, method: str, params: dict | None = None, request_id: int = 1):
@@ -79,7 +81,7 @@ def test_search_uses_the_semantic_model_when_configured(client, monkeypatch) -> 
             hits = [i for i, text in enumerate(documents) if "序列跳号" in text]
             return [Scored(index=i, score=0.8) for i in hits][:top_n]
 
-    monkeypatch.setattr(routes_mcp.reranker_module, "build_reranker", lambda: Fake())
+    monkeypatch.setattr(routes_mcp.reranker_module, "build_reranker", lambda _model="": Fake())
     is_error, found = call(
         as_user(client, "chen"), "search_assets", {"question": "换库之后编号不连续"}
     )

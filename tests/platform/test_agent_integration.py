@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from datetime import datetime, timezone
+
+import pytest
+from sqlalchemy import select, update
 
 from fde_asset.core.db import asset_usages, assets, target_assets
 from fde_asset.modules.asset import agent_bundle
@@ -27,6 +30,63 @@ def _link(context, target_type: str, target_id: str, name: str) -> None:
                 created_by="admin",
             )
         )
+
+
+@pytest.mark.parametrize("endpoint", ["agent-assets", "agent-skills"])
+def test_agent_asset_lists_reject_an_agent_from_another_project(client, endpoint) -> None:
+    context = client.app.state.context
+    data = context.directory._load()
+    data["agents"]["pa-other"] = {
+        "scope": "project",
+        "engagement_slug": "claims-recon",
+        "owner": "sun",
+        "sharing_mode": "project",
+    }
+    context.directory.write(data)
+    client.headers.update({"X-FDE-User": "chen"})
+    response = client.get(
+        f"/api/v1/{endpoint}",
+        params={
+            "engagement_slug": "policy-import",
+            "agent_key": "pa-other",
+        },
+    )
+    assert response.status_code == 404, response.text
+
+
+def test_agent_assets_do_not_expose_titles_of_invisible_linked_assets(client) -> None:
+    context = client.app.state.context
+    _link(context, "engagement", "policy-import", "pg-vacuum-tuning")
+    client.headers.update({"X-FDE-User": "wang"})
+    response = client.get("/api/v1/agent-assets", params={"engagement_slug": "policy-import"})
+    assert response.status_code == 200, response.text
+    hidden_id = _asset_id(context, "pg-vacuum-tuning")
+    assert hidden_id not in {item["asset_id"] for item in response.json()["not_carried"]}
+
+
+@pytest.mark.parametrize("endpoint", ["agent-assets", "agent-skills"])
+@pytest.mark.parametrize("actor,expected", [("chen", 404), ("wang", 200), ("admin", 200)])
+def test_private_agent_asset_configuration_is_limited_to_managers(
+    client, endpoint, actor, expected
+):
+    context = client.app.state.context
+    data = context.directory._load()
+    data["agents"]["pa-private"] = {
+        "scope": "project",
+        "engagement_slug": "policy-import",
+        "owner": "wang",
+        "sharing_mode": "private",
+    }
+    context.directory.write(data)
+    client.headers.update({"X-FDE-User": actor})
+    response = client.get(
+        f"/api/v1/{endpoint}",
+        params={
+            "engagement_slug": "policy-import",
+            "agent_key": "pa-private",
+        },
+    )
+    assert response.status_code == expected, response.text
 
 
 def _bundle(context, tmp_path, **kwargs):
@@ -266,3 +326,44 @@ def test_agent_fetches_attachment_original_only_when_project_can_see_it(seeded) 
         readme = base64.b64decode(bundle["files"][readme_path]).decode("utf-8")
         assert f"asset_id={asset_id}，filename=baseline.xlsx" in readme
         assert "fde_asset_attachment_fetch" in readme
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["restricted", "invalid", "deprecated", "archived", "draft", "deleted", "outside_project"],
+)
+def test_attachment_original_refuses_assets_excluded_from_project_snapshot(seeded, case) -> None:
+    """原件取回和资产快照遵循同一权限、有效性和生命周期边界。"""
+    with _service(seeded) as service:
+        context = service.app.state.context
+        asset_id = _asset_id(context, "oracle-to-pg-cutover")
+        if case == "outside_project":
+            from fde_asset.core.db import asset_audiences
+
+            with context.engine.begin() as conn:
+                conn.execute(asset_audiences.delete().where(asset_audiences.c.asset_id == asset_id))
+                conn.execute(
+                    asset_audiences.insert().values(
+                        asset_id=asset_id, audience="engagement", code="other-project"
+                    )
+                )
+        else:
+            values = {
+                "restricted": {"restricted": True},
+                "invalid": {"valid": False},
+                "deleted": {"deleted_at": datetime.now(timezone.utc)},
+            }.get(case, {"lifecycle": case})
+            with context.engine.begin() as conn:
+                conn.execute(update(assets).where(assets.c.asset_id == asset_id).values(**values))
+        response = service.post(
+            "/internal/v1/agent-attachment",
+            json={
+                "username": "chen",
+                "engagement_slug": "policy-import",
+                "asset_id": asset_id,
+                "filename": "baseline.xlsx",
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 404, response.text
+        assert "content_base64" not in response.json()

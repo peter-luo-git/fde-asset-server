@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -201,11 +200,3 @@ def _view(row: Any) -> dict[str, Any]:
         "created_at": row.created_at.isoformat() if row.created_at else "",
         "decided_at": row.decided_at.isoformat() if row.decided_at else "",
     }
-
-
-def current_visibility(engine: Engine, asset_id: str) -> list[str]:
-    with engine.connect() as conn:
-        row = conn.execute(
-            select(assets.c.visibility_json).where(assets.c.asset_id == asset_id)
-        ).first()
-    return json.loads(row.visibility_json or "[]") if row else []

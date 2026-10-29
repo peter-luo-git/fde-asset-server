@@ -28,7 +28,13 @@ from sqlalchemy.engine import Connection, Engine
 
 from fde_asset.core.db import clean_text, harvest_candidates, harvest_suggestions, record_event
 from fde_asset.modules.asset.indexer import asset_id_for_candidate
-from fde_asset.platform.identity import Principal
+from fde_asset.platform.identity import (
+    HarvestSourceNotFound,
+    PlatformDirectory,
+    PlatformUnavailable,
+    Principal,
+    PrincipalNotFound,
+)
 
 SCOPES = {"channel", "dm"}
 SOURCES = {"agent", "message"}
@@ -56,6 +62,43 @@ class SuggestionError(ValueError):
         self.status = status
 
 
+def current_principal(directory, principal: Principal) -> Principal:
+    """写入不使用登录会话中缓存的旧成员角色。"""
+    if not isinstance(directory, PlatformDirectory):
+        return principal
+    try:
+        directory.refresh()
+        return directory.resolve(principal.user_id)
+    except PrincipalNotFound:
+        raise SuggestionError("用户不存在或已失效", 401) from None
+    except PlatformUnavailable:
+        raise SuggestionError("暂时无法向平台确认身份", 503) from None
+
+
+def checked_source(directory, principal: Principal, payload: dict[str, Any], *, message: bool):
+    """来源由平台按真实消息/会话 ACL 核准；写权限由调用方按当前项目成员关系另行检查。"""
+    values = {
+        key: str(payload.get(key) or "")
+        for key in ("engagement_slug", "scope", "scope_id", "conversation_id", "message_id")
+    }
+    if (
+        not values["engagement_slug"]
+        or len(values["engagement_slug"]) > 128
+        or values["scope"] not in SCOPES
+        or not values["scope_id"]
+        or any(len(values[key]) > 64 for key in ("scope_id", "conversation_id", "message_id"))
+        or (message and not values["message_id"])
+        or (not message and not values["conversation_id"])
+    ):
+        raise SuggestionError("要给出有效的项目、会话范围和真实消息或 Agent 会话编号")
+    try:
+        return directory.harvest_source_access(username=principal.user_id, **values)
+    except HarvestSourceNotFound:
+        raise SuggestionError("消息或会话不存在或无权访问", 404) from None
+    except PlatformUnavailable:
+        raise SuggestionError("暂时无法向平台确认沉淀来源", 503) from None
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -69,8 +112,18 @@ def _files(value: Any) -> list[str]:
         return []
     cleaned: list[str] = []
     for item in value[:MAX_FILES]:
-        path = str(item or "").strip().lstrip("/")
-        if path and ".." not in path.split("/") and len(path) <= 512 and path not in cleaned:
+        if not isinstance(item, str):
+            continue
+        path = item.strip()
+        if (
+            path
+            and not path.startswith("/")
+            and "\\" not in path
+            and "\x00" not in path
+            and not any(part.lower() in {"", ".", "..", ".git"} for part in path.split("/"))
+            and len(path) <= 512
+            and path not in cleaned
+        ):
             cleaned.append(path)
     return cleaned
 
@@ -89,11 +142,18 @@ def may_see(principal: Principal, row: Any) -> bool:
 def may_handle(principal: Principal, row: Any) -> bool:
     """私聊的本人处理；频道的项目可写成员（负责人、成员）和管理员处理，只读成员只能看。"""
     if row.scope == "dm":
-        return row.owner_user == principal.user_id
+        return row.owner_user == principal.user_id and may_write_project(
+            principal, row.engagement_slug
+        )
+    return may_write_project(principal, row.engagement_slug)
+
+
+def may_write_project(principal: Principal, engagement_slug: str) -> bool:
+    """每次写入都按当前项目成员关系判断；只读成员和已撤权成员不可写。"""
     if principal.is_admin:
         return True
     return any(
-        m.engagement_slug == row.engagement_slug and m.role in {"owner", "member"}
+        m.engagement_slug == engagement_slug and m.role in {"owner", "member"}
         for m in principal.memberships
     )
 
@@ -220,12 +280,14 @@ def record(
                 harvest_suggestions.c.kind == kind,
                 func.lower(func.replace(harvest_suggestions.c.title, " ", ""))
                 == _same_title(title),
-                or_(
-                    harvest_suggestions.c.scope == "channel",
-                    and_(
-                        harvest_suggestions.c.scope == "dm",
+                harvest_suggestions.c.scope == scope,
+                *(
+                    [
                         harvest_suggestions.c.owner_user == owner_user,
-                    ),
+                        harvest_suggestions.c.scope_id == scope_id,
+                    ]
+                    if scope == "dm"
+                    else []
                 ),
             )
             .order_by(harvest_suggestions.c.created_at)
@@ -246,7 +308,18 @@ def record(
             if target.status not in UNSETTLED and existing is None:
                 existing = target
         if existing is not None and existing.status in UNSETTLED:
-            merged = list(dict.fromkeys([*json.loads(existing.files_json or "[]"), *files_list]))
+            same_origin = (
+                existing.scope_id == scope_id and existing.conversation_id == conversation_id
+            )
+            # files 只描述原会话目录，不能把另一会话的相对路径挂到原会话下。
+            merged = list(
+                dict.fromkeys(
+                    [
+                        *json.loads(existing.files_json or "[]"),
+                        *(files_list if same_origin else []),
+                    ]
+                )
+            )
             merged_extra = {**json.loads(existing.extra_json or "{}"), **(extra or {})}
             if "packages" in (extra or {}):
                 merged_extra["packages"] = sorted(
@@ -260,8 +333,10 @@ def record(
                     summary=_text(summary, 4000) or existing.summary,
                     files_json=json.dumps(merged[:MAX_FILES], ensure_ascii=False),
                     extra_json=json.dumps(merged_extra, ensure_ascii=False),
-                    conversation_id=conversation_id or existing.conversation_id,
-                    message_id=message_id or existing.message_id,
+                    conversation_id=existing.conversation_id,
+                    message_id=(message_id or existing.message_id)
+                    if same_origin
+                    else existing.message_id,
                     updated_at=now,
                 )
             )
@@ -457,6 +532,15 @@ def decide(
             raise SuggestionError("沉淀候选不存在或无权查看", 404)
         if not may_handle(principal, row):
             raise SuggestionError("只读成员只能查看，不能处理", 403)
+        if (
+            row.status == status
+            and row.candidate_id == (candidate_id if status == "drafted" else "")
+            and row.related_asset_id == (asset_id if status == "linked" else "")
+            and row.merged_into == (merged_into if status == "duplicate" else "")
+            and row.decision_note == (_text(note, 1000) if status != "open" else "")
+        ):
+            states = _draft_states(conn, {row.candidate_id} if row.candidate_id else set())
+            return public(row, states.get(row.candidate_id), principal)
         if status == "duplicate":
             target = conn.execute(
                 select(harvest_suggestions).where(harvest_suggestions.c.id == merged_into)
@@ -470,8 +554,10 @@ def decide(
             if target.merged_into == suggestion_id:
                 raise SuggestionError("这两条已经反过来合并过了")
             # 文件并过去；私聊的内容不并进频道候选（别人看得到），只记一次提到
-            same_audience = target.scope == row.scope and (
-                row.scope == "channel" or target.scope_id == row.scope_id
+            same_audience = (
+                target.scope == row.scope
+                and target.scope_id == row.scope_id
+                and target.conversation_id == row.conversation_id
             )
             files = json.loads(target.files_json or "[]")
             if same_audience:

@@ -112,6 +112,30 @@ def test_settings_default_and_update(client) -> None:
     assert updated.json()["values"]["app_image_size_limit_mb"] == 2048
 
 
+def test_rerank_model_setting_persists_separately_from_explanation_model(client) -> None:
+    from sqlalchemy import select
+
+    from fde_asset.core.db import system_settings
+
+    admin = as_user(client, "admin")
+    response = admin.put(
+        "/api/v1/settings",
+        json={"values": {"rerank_model_name": "dedicated-ranker", "rerank_model": "reason-model"}},
+    )
+    assert response.status_code == 200, response.text
+    with client.app.state.context.engine.connect() as connection:
+        stored = dict(
+            connection.execute(select(system_settings.c.key, system_settings.c.value)).all()
+        )
+    assert stored["rerank_model_name"] == "dedicated-ranker"
+    assert stored["rerank_model"] == "reason-model"
+    reread = {item["key"]: item["value"] for item in admin.get("/api/v1/settings").json()["items"]}
+    assert reread["rerank_model_name"] == "dedicated-ranker"
+    cleared = admin.put("/api/v1/settings", json={"values": {"rerank_model_name": ""}})
+    assert cleared.json()["values"]["rerank_model_name"] == ""
+    assert cleared.json()["values"]["rerank_model"] == "reason-model"
+
+
 def test_only_admin_changes_settings(client) -> None:
     denied = as_user(client, "chen").put(
         "/api/v1/settings", json={"values": {"app_image_size_limit_mb": 1}}

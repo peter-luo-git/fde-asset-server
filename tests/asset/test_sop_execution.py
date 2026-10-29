@@ -237,6 +237,24 @@ def test_board_summary_shows_step_and_check_counts(service) -> None:
     assert service.get("/api/v1/engagements/other-project/sop-board").status_code == 404
 
 
+@pytest.mark.parametrize("decision, expected", [("confirm", "passed"), ("reject", "failed")])
+def test_human_decision_preserves_agent_report_turn(service, decision, expected) -> None:
+    assert _bind(service).status_code == 200
+    assert (
+        _report(service, [{"index": 1, "status": "passed", "evidence": "邮件截图"}]).status_code
+        == 200
+    )
+    response = service.post(
+        "/api/v1/work-items/w-1/sop/checks",
+        json={"step": 1, "index": 1, "decision": decision},
+    )
+    assert response.status_code == 200, response.text
+    check = _state(service)["steps"][0]["checks"][1]
+    assert check["status"] == expected
+    assert check["turn_id"] == "t-1" and check["evidence"] == "邮件截图"
+    assert check["by"] == "user:chen"
+
+
 def test_agent_cannot_override_human_confirmation(service) -> None:
     _bind(service)
     service.post(

@@ -26,7 +26,7 @@ from fde_asset.modules.asset import sop_progress
 from fde_asset.modules.asset import usage as usage_module
 from fde_asset.modules.asset.visibility import audience_clause
 from fde_asset.modules.asset.manifest import KIND_RULES
-from fde_asset.platform.identity import PlatformUnavailable, PrincipalNotFound
+from fde_asset.platform.identity import PlatformDirectory, PlatformUnavailable, PrincipalNotFound
 from fde_asset.platform.repo.ports import RepoRef
 
 # 内部接口不进对外的接口契约
@@ -417,13 +417,15 @@ def agent_harvest_suggestion(
     username = str(payload.get("username") or "")
     engagement_slug = str(payload.get("engagement_slug") or "")
     try:
+        if isinstance(context.directory, PlatformDirectory):
+            context.directory.refresh()
         principal = context.directory.resolve(username)
     except PrincipalNotFound:
         raise HTTPException(status_code=404, detail="没有这个用户") from None
     except PlatformUnavailable:
         raise HTTPException(status_code=503, detail="暂时无法向平台确认身份") from None
-    if not principal.is_admin and engagement_slug not in principal.engagement_slugs:
-        raise HTTPException(status_code=403, detail="这个用户不在这个项目里")
+    if not suggestions.may_write_project(principal, engagement_slug):
+        raise HTTPException(status_code=403, detail="只有项目可写成员能记录沉淀候选")
     extra = {}
     if payload.get("skill") or payload.get("packages"):
         extra = {
@@ -431,18 +433,19 @@ def agent_harvest_suggestion(
             "packages": [str(item) for item in (payload.get("packages") or [])][:30],
         }
     try:
+        source = suggestions.checked_source(context.directory, principal, payload, message=False)
         return suggestions.record(
             context.engine,
-            engagement_slug=engagement_slug,
-            scope=str(payload.get("scope") or ""),
-            scope_id=str(payload.get("scope_id") or ""),
+            engagement_slug=source["engagement_slug"],
+            scope=source["scope"],
+            scope_id=source["scope_id"],
             owner_user=principal.user_id,
             source="agent",
-            created_by=str(payload.get("agent") or "agent"),
+            created_by=source["agent_profile_id"] or "agent",
             kind=str(payload.get("kind") or ""),
             title=str(payload.get("title") or ""),
             summary=str(payload.get("summary") or ""),
-            conversation_id=str(payload.get("conversation_id") or ""),
+            conversation_id=source["conversation_id"],
             files=payload.get("files"),
             extra=extra,
         )

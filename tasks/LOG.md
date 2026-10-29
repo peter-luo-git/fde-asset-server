@@ -2,6 +2,9 @@
 
 | 日期 | 切片 | 提交 | check | 评审 | 备注 |
 |---|---|---|---|---|---|
+| 2026-10-19 | agent-assets-members-20261019 实现验收 | 基线96a3096；待Root提交 | 通过（完整make check：524通过/1模型网关条件跳过/3已有警告；head0011_checkup_findings） | implementer_asset_linking实现；Root已读实际diff | typed POST recommend/unlink幂等解除指定目标三元组、保留资产与其他关联；pa目标读取和写入实时目录、转交/撤权/缺失目标拒绝；link与accept同事务在写入及幂等返回前复用现有visibility_clause，缺失/不可见统一404且admin仍受restricted限制。最终定向51通过、完整1406.46秒退出0；独立tmpfs与本任务PG已清理，旧中断及红灯日志保留；贡献与命令见operations/agent-contributions/agent-assets-members-20261019/implementer_asset_linking.md。无Git写、业务库变更或部署，三服务部署/E2E由Root收口。 |
+| 2026-10-19 | agent-assets-members-20261019 可见性补强文审 | 基线96a3096；待Root提交 | 需修改（补强最终make check及部署E2E待收口） | reviewer_label_docs，docs-impact-control | 核对link/accept同事务visibility检查先于幂等返回、缺失/不可见统一404及admin restricted拒绝；unlink允许清理当前可管理目标旧关联；更新README与待验收说明，无新增review文件或业务/Git写，保留前轮失败历史。 |
+| 2026-10-19 | agent-assets-members-20261019 文审 | 基线96a3096；待Root提交 | 需修改（最终make check及部署/E2E待Root收口） | reviewer_label_docs，docs-impact-control | 只更新既有README：当前pa目录/转交后授权、POST recommend/unlink三元组幂等/保留资产与其他关联；无新增review文件、业务/Git写或生成契约修改，git diff --check与写后重读；final2日志pytest KeyError保留，最终证据由Root补录。 |
 | 2026-09-30 | S-00 | — | — | — | 仓库骨架创建：进程入口、配置、健康检查、Makefile、看板 |
 | 2026-09-30 | S-01 ~ S-20 | `132c543` | 绿（133 测试） | 自检 | 资产服务 v0.1 全量：索引、目录、SOP 分层、快照、沉淀、评审、线索、护照；十二步演示全绿 |
 | 2026-09-30 | S-W1/W2/W3 | fde-web `444e71d` | 绿（310 测试） | 自检 | 前端 `src/features/asset/` 自包含 feature + 两层端到端（契约 11 步、浏览器 12 步） |
@@ -26,3 +29,25 @@
 | 2026-10-12 | full-test-fixes-20261012 锁后继文审 | 基线d511a7a；待Root提交 | 通过（online/offline锁检查与隔离build；文审窄验证） | implementer_specs_asset_fixes实现；implementer_runtime_deploy_fixes文审；待Root验收 | 首轮共享PATH无uv未跑条件门禁，Root缺锁红证据保留；真实45包uv.lock补齐，19直接pin/原pyproject不变，未sync共享venv或重跑423项；README0.5及文审贡献记录后继证据 |
 | 2026-10-16 | discussion-task-20261016 | 基线2ae58f2（含dev1005 b74740a）；待Root提交 | 通过（完整make check：482通过/2条件跳过/3警告；head 0008_app_health_source） | reviewer_resource_relation实现；Root整合与文审 | 任务资产读写/摘要/Agent SOP按可信工作项归属逐次授权，兼容旧空slug并拒绝伪造/错项目；严格整数真实步骤与不可见资产保护，生成契约及README0.7同步。定向33通过；共享磁盘首次外部143及后继I/O受控中止日志保留，TMPDIR独立tmpfs完整检查05:48:24–05:53:18 UTC退出0；模型网关/PostgreSQL搬迁条件跳过，PATH无uv未触发条件锁检查，未Git写/部署/真模型。 |
 | 2026-10-19 | message-history-repair-sync-20261019 P1后续切片 | 待后续切片 | 未实现/未验收 | implementer_asset_sync_guards | `mandatory.py:add` 捕获并发唯一键 `IntegrityError` 后未使用 savepoint/回滚便继续 SELECT，真实 PostgreSQL 事务可能已中止；依仓库评审规则转后续独立切片补并发回归，本轮仅修审批列表P0和生成契约。 |
+
+| 2026-10-20 | test-system-refresh-20261020 | 基线0f3da9c；Root实施 | 相关策略28通过/1模型跳过；应用/Compose资源50通过/2容器跳过；固定PG冒烟34通过，最终门槛8.96秒；Ruff通过 | Root实施；reviewer_test_refresh先复审后补超时资源清理 | 模型/Docker显式授权，执行失败不再skip；契约测试独占PG；新增60秒固定冒烟及空/skip结果拒绝，默认移除继承模型配置；不改业务源码，不全量/模型/部署/推送。 |
+| 2026-10-21 | model-defaults-20261021 | Root核验，随本提交整合 | 通过（定向88通过/1真实模型取消选择；Ruff与格式检查通过） | implementer_asset_rerank；Root整合与文审 | 新增rerank_model_name沿用系统设置并严格验证字符串/255字符/控制符；ask、精确推荐、MCP三入口覆盖专用重排模型，空值回退环境默认；缓存区分模型，rerank_model仍仅生成理由；README区分用途。合成HTTP与Root隔离PG验证，无全量/真实模型/部署/推送；由Root提交。 |
+| 2026-10-21 | recent-commit-tests-20261021 | 基线4735983；Root待整合 | 通过（相关54通过；Ruff与格式检查通过；3种变异均被捕获） | implementer_asset（运行名implementer_asset_recent）编写/验证；Root集成 | tests/platform/test_model_settings.py补7例：真实ASGI设置批量回滚与身份权限，保存/清空/切换模型后的准确推荐及缓存；合成SQL/MockTransport阻断真实网络，未改业务源码；参考FastAPI测试及SQLAlchemy2.0事务官方文档，无文档行为变更；证据.run/recent-commit-tests-20261021/asset-*，状态由Root代记；无DB/真实模型/全量/E2E/push/部署。 |
+| 2026-10-21 | test-inclusion-e2e-20261021 | 基线3fcdded；Root待整合 | 通过（遗漏3份26通过；12步主链及新增定向E2E共14通过；Ruff/格式通过） | implementer_asset（运行名implementer_asset_recent）编写/验证；Root集成 | tests/e2e/test_rerank_model_settings.py补ask/recommend/MCP三入口真实uvicorn+Git+PG测试：模型设置/清空回退、管理员权限、真实事务回滚及模型前SQL可见性（含MCP伪造身份无效）；只合成外部rerank，现有12步主链未改。初轮测试自身CursorResult转换/空评分语义假设已纠正并保留失败证据；3轮独占PG均finally清理，DB标记为0、容器确认不存在。日志/JUnit与清理证据.run/test-inclusion-e2e-20261021/asset-*；无全量/真实模型/现有业务DB/push/部署/Git写，状态Root代记。 |
+
+2026-10-22 | obsolete-code-20261022 | Root删除已替代且无调用的10声明/9文件，researcher_runtime_asset只读取证；隔离PG定向152通过/1项Docker未选择，Ruff通过；清单/初次环境失败及复验证据见operations/agent-contributions/obsolete-code-20261022/audit.json；无全量/E2E/推送/部署。
+
+2026-10-23 | asset-git-reaping-20261023 | Root实施；reviewer_docs_reaping只读审查 | Git调用统一前台自动维护，覆盖本地与Gitea路径；Linux子reaper回归主动收集失败场景的后台进程；Git2.47.3真实隔离回归改前2失败/改后2通过，相关pytest10通过，Ruff/格式检查通过；官方Git机制与版本见README，配套fde-deploy资产服务init配置；无全量/E2E/真实模型/推送/部署，任务证据在工作区.run/asset-git-reaping-20261023。
+
+- 2026-10-27 dev1005 e4d2bdb 合并相关评审：通过；124项相关pytest、隔离PG0014升级/降级再升级及契约生成核验通过；仅相关验证，未做全量/E2E/真实模型/部署。
+
+- 2026-10-27 reviewer_docs 文档复核：通过；核对0014、依赖状态/容量、SOP看板与turn_id保留及三类示范技能许可；README已覆盖，Specs镜像104路径字节一致；测试与PG结果采用实施记录，未重跑测试或访问线上；贡献见operations/agent-contributions/dev1005-update-20261027/reviewer_docs.md。
+
+- 2026-10-27 reviewer_latest_docs 最新dev1005文审：通过；README 1.1补两条依赖POST、草稿/评审边界与SVG转PNG配套，无新迁移；106路径及两仓契约字节/摘要一致；最终相关17项通过日志已核对，未重跑全量/E2E/模型/安装/部署；按AGENTS不新增评审Markdown。
+
+- 2026-10-27 dev1005-latest-20261027 Asset增量016d0ba→27a87e8审查：通过；implementer_server_latest（任务路径/root/implementer_server_latest，原Server责任完成后由Root追加Asset范围）只审查3个上游变更文件，实际修复routes_harvest.py的PUT空路径/附件目录/任意.git段保护及GET按当前文件摘要读取后台模型结果，避免旧检查状态与慢旧任务污染；新增tests/asset/test_skill_file_editing.py覆盖作者权限、路径、UTF-8字节大小/总量/数量、增改删、自动检查/脚本编辑与版本缓存，全程模型替身。独占PG红灯3失败/10通过（11.14秒），修复后相关3文件43通过（32.23秒），两次临时PG均按归属finally清理；证据为工作区.run/dev1005-latest-20261027/asset-edit-review-{red,green}.log/xml及对应-result.json，原失败不覆盖。Ruff、4文件format和compileall/diff检查通过；Asset smoke venv缺ruff入口，改用既有Server venv同版0.9.2，不安装依赖。2026-10-27核对FastAPI官方BackgroundTasks（https://fastapi.tiangolo.com/tutorial/background-tasks/，在线滚动文档，本地0.115.6），复用响应后任务机制、不复制源码或新增状态；后台任务非持久队列，模型输入仍有文档/脚本数量及长度上限，不承诺全目录完整通读。未改文档/生成契约、未Git写/全量/E2E/真实模型/部署；Root负责最终固定Asset冒烟、契约文审和提交部署，外部AGENT由Root代存。
+
+- 2026-10-28：Root合并 dev1005 71b6376（4提交），采用实时试跑进度、评审阶段Agent模型通读、项目自有资产与规范20000字节校验；解决recommend/linked与本地unlink相邻冲突、删除重复model结果覆盖；机械导出契约并同步Specs。第1轮相关81通过/1新增夹具作用域错误，第2轮82通过，临时PostgreSQL已清理；未运行全量/E2E/真实模型，未推送部署。证据：工作区.run/dev1005-merge-20261028/asset-targeted-final.log。
+- 2026-10-28增量：继续合入46a7706附件摘要与layout=2快照，模型生成只返回不保存；附件/快照/契约27通过，契约同步至110路径。本轮未运行真实模型或部署。
+
+- 2026-10-28 github-harvest-sync-20261028 / implementer_sync_asset 合并相关评审：通过；合入精确cd8bd8a并保留本地身份、权限、typed解除与重排设置；修来源ACL、只读及撤权、DM去重保密、跨会话文件、私有Agent清单和草稿/资产引用权限；官方Alembic1.14.1机制适配解决33字符0017标识写入32字符版本列，空库及0015合成库升级/重复升级/资产保留2通过。相关批次229通过/3目录夹具失败，修夹具后重排文件34通过、最后候选文件18通过、契约2通过（跨批236个不同相关用例）；29变更Python编译/Ruff及diff检查通过，公开契约118路径。未全量/E2E/真实模型/提交/推送/部署；Root负责最终审查、固定冒烟、Specs镜像、生产副本及部署，贡献见operations/agent-contributions/github-harvest-sync-20261028/implementer_sync_asset.md。

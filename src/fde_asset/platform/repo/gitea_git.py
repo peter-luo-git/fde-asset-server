@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from .local_git import GitCommandError, LocalGitRepo
+from .local_git import GitCommandError, LocalGitRepo, git_command
 from .ports import RepoRef, TreeEntry
 
 
@@ -71,7 +71,7 @@ class GiteaGitRepo(LocalGitRepo):
     def _remote_git(self, args: list[str], cwd: Path) -> str:
         """要连 Gitea 的 git 命令。令牌走环境变量传给 git，不出现在命令行和仓库配置里。"""
         result = subprocess.run(
-            ["git", *args],
+            git_command(args),
             cwd=str(cwd),
             capture_output=True,
             text=True,

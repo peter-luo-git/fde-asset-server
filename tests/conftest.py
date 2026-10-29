@@ -30,6 +30,33 @@ from fde_asset.settings import AssetSettings  # noqa: E402
 from scripts.seed_assets import seed  # noqa: E402
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--live-model", action="store_true", help="Run explicitly authorized model acceptance"
+    )
+    parser.addoption(
+        "--docker-integration", action="store_true", help="Run owned Docker acceptance"
+    )
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "live_model: explicitly authorized real model acceptance")
+    config.addinivalue_line("markers", "docker: owned Docker integration acceptance")
+    if not config.getoption("live_model"):
+        for key in list(os.environ):
+            if (
+                key.startswith(("FDE_ASSET_LLM_", "FDE_ASSET_RERANK_"))
+                or key == "FDE_ASSET_REASON_MODEL"
+            ):
+                os.environ.pop(key)
+
+
+def pytest_runtest_setup(item):
+    for marker, option in (("live_model", "live_model"), ("docker", "docker_integration")):
+        if item.get_closest_marker(marker) and not item.config.getoption(option):
+            pytest.skip(f"requires explicit --{option.replace('_', '-')}")
+
+
 @pytest.fixture(autouse=True)
 def _env_does_not_leak():
     """个别用例会把 .env.local 的模型配置读进环境变量；用例结束后还原，免得后面的用例悄悄连上真实模型。"""
@@ -50,13 +77,12 @@ POSTGRES_URL = os.environ.get(
 @contextmanager
 def temporary_database():
     """在测试库服务器上建一个临时库，给出它的地址，用完删掉。"""
-    import uuid
-
     from sqlalchemy import create_engine
     from sqlalchemy.engine import make_url
+    from scripts.smoke_database import register_database
 
     server = make_url(POSTGRES_URL).set(drivername="postgresql+psycopg")
-    name = "asset_test_" + uuid.uuid4().hex[:12]
+    name, marker = register_database()
     admin = create_engine(server, isolation_level="AUTOCOMMIT")
     with admin.connect() as conn:
         conn.exec_driver_sql(f'CREATE DATABASE "{name}"')
@@ -66,6 +92,8 @@ def temporary_database():
         with admin.connect() as conn:
             # 用例里建的连接池可能还开着，强制断开再删
             conn.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        if marker is not None:
+            marker.unlink(missing_ok=True)
         admin.dispose()
 
 

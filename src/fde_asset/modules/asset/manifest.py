@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -521,8 +521,3 @@ def validate_asset(
         findings.append(Finding("replaced_by_missing", "废弃资产必须填写 spec.replacedBy"))
 
     return ParsedAsset(manifest, rule, sections, findings)
-
-
-def kind_spec_fields(manifest: AssetManifest) -> dict[str, Any]:
-    """返回 kind 专属字段（spec 里除通用字段以外的部分）。"""
-    return dict(manifest.spec.model_extra or {})

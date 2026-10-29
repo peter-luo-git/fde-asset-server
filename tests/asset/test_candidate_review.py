@@ -185,3 +185,24 @@ def test_reviewer_can_mark_the_new_asset_mandatory_for_its_scope(client) -> None
     asset_id = asset_id_for_candidate(cid)
     entries = wang.get(f"/api/v1/assets/{asset_id}/mandatory").json()["entries"]
     assert [entry["entry"] for entry in entries] == ["engagement:policy-import"]
+
+
+def test_rule_size_limit_uses_utf8_bytes_and_blocks_submission(client):
+    chen = as_user(client, "chen")
+    candidate = chen.post(
+        "/api/v1/harvest-candidates",
+        json={
+            "kind": "Rule",
+            "name": "rule-byte-limit",
+            "title": "规范长度",
+            "scope": "engagement",
+            "engagement_slug": "policy-import",
+        },
+    ).json()
+    path = f"/api/v1/harvest-candidates/{candidate['candidate_id']}"
+    for text, blocked in [("x" * 20_000, False), ("汉" * 6_667, True)]:
+        changed = chen.patch(path, json={"files": {"RULE.md": text}})
+        assert changed.status_code == 200, changed.text
+        codes = {item["code"] for item in changed.json()["checks"]["format"]}
+        assert ("rule_too_large" in codes) is blocked
+    assert chen.post(path + "/submit", json={}).status_code == 409

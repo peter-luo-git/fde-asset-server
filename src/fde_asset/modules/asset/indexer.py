@@ -63,10 +63,6 @@ class IndexReport:
     findings: list[tuple[str, str]] = field(default_factory=list)
 
 
-def new_asset_id() -> str:
-    return str(uuid.uuid4())
-
-
 def asset_id_for_candidate(candidate_id: str) -> str:
     """草稿入库后的资产编号。由草稿编号算出来：打回重交还是同一份资产，也不用另存一列。"""
     return str(uuid.uuid5(NAMESPACE, f"candidate|{candidate_id}"))

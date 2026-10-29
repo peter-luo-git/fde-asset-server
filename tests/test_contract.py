@@ -8,16 +8,8 @@ from scripts.export_openapi import CONTRACT, build_spec, render
 
 
 def test_contract_file_matches_the_code(monkeypatch) -> None:
-    # 生成接口描述要建应用、读配置，但不连数据库；没配库地址时给一个占位（2026-10-26 全量里因此报错）
-    import os
-
-    monkeypatch.setenv(
-        "FDE_ASSET_DATABASE_URL",
-        os.environ.get("FDE_ASSET_DATABASE_URL")
-        or os.environ.get("FDE_ASSET_TEST_DATABASE_URL")
-        # 和 conftest 的测试库默认地址一致（带密码，建应用时会连库）
-        or "postgresql://postgres:test@127.0.0.1:55432/postgres",
-    )
+    # OpenAPI 取自真实路由声明；契约测试不启动服务或接触继承的业务数据库配置。
+    monkeypatch.setattr("fde_asset.api.app.build_context", lambda _settings: None)
     assert CONTRACT.exists(), "先运行 python scripts/export_openapi.py 生成契约"
     assert CONTRACT.read_text(encoding="utf-8") == render(build_spec()), (
         "接口变了但契约没更新：运行 python scripts/export_openapi.py 后一起提交"

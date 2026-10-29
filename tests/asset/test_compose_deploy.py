@@ -21,9 +21,6 @@ from fde_asset.modules.app.compose import ComposeError, dump, validate_and_rewri
 from fde_asset.platform.runner.compose_runner import LocalComposeRunner
 from tests.docker_resources import OWNER_LABEL, OwnedComposeRunner
 
-COMPOSE_RUNNER = LocalComposeRunner()
-HAS_COMPOSE = COMPOSE_RUNNER.available()
-
 BASIC = """
 services:
   web:
@@ -205,7 +202,7 @@ def test_path_traversal_in_bundle_is_blocked(tmp_path) -> None:
 # —— 真跑一组容器 ——
 
 
-@pytest.mark.skipif(not HAS_COMPOSE, reason="本机没有 docker compose")
+@pytest.mark.docker
 def test_real_two_container_app_serves(tmp_path, docker_resources) -> None:
     """两个服务：一个对外的 web，一个只在内部网络的 sidecar。只有 web 能被访问到。"""
     work = tmp_path
@@ -224,8 +221,7 @@ def test_real_two_container_app_serves(tmp_path, docker_resources) -> None:
         text=True,
         timeout=600,
     )
-    if build.returncode != 0:
-        pytest.skip(f"构建镜像失败：{build.stderr[-300:]}")
+    assert build.returncode == 0, "authorized Compose image build failed"
 
     text = f"""
 services:

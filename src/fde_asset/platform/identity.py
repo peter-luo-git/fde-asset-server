@@ -16,7 +16,6 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
 from urllib.parse import quote
 
 
@@ -84,8 +83,23 @@ class WorkItemForbidden(PermissionError):
     pass
 
 
-class DirectorySource(Protocol):
-    def resolve(self, user_id: str) -> Principal: ...
+class HarvestSourceNotFound(LookupError):
+    pass
+
+
+def _checked_harvest_source(payload: object, expected: dict[str, str]) -> dict[str, str]:
+    if not isinstance(payload, dict):
+        raise PlatformUnavailable("平台沉淀来源响应格式无效")
+    for key, value in expected.items():
+        if key == "conversation_id" and not value:
+            continue
+        if payload.get(key) != value:
+            raise PlatformUnavailable("平台沉淀来源响应与请求不匹配")
+    conversation = payload.get("conversation_id", "")
+    agent = payload.get("agent_profile_id", "")
+    if not isinstance(conversation, str) or not isinstance(agent, str):
+        raise PlatformUnavailable("平台沉淀来源响应格式无效")
+    return {**expected, "conversation_id": conversation, "agent_profile_id": agent}
 
 
 class LocalDirectory:
@@ -169,62 +183,35 @@ class LocalDirectory:
         raw = self._load().get("recent_questions", {}).get(key, [])
         return [str(item) for item in raw if str(item).strip()]
 
+    def harvest_source_access(
+        self,
+        username: str,
+        engagement_slug: str,
+        scope: str,
+        scope_id: str,
+        *,
+        conversation_id: str = "",
+        message_id: str = "",
+    ) -> dict[str, str]:
+        """开发目录也要求显式登记来源和可访问者，不相信请求自己声明的频道或私聊。"""
+        expected = {
+            "username": username,
+            "engagement_slug": engagement_slug,
+            "scope": scope,
+            "scope_id": scope_id,
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+        }
+        for raw in self._load().get("harvest_sources", []):
+            if isinstance(raw, dict) and all(
+                raw.get(key, "") == value for key, value in expected.items()
+            ):
+                return _checked_harvest_source(raw, expected)
+        raise HarvestSourceNotFound(scope_id)
+
     def write(self, data: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-class HttpDirectory:
-    """正式环境：成员关系来自 fde-server 的只读接口，带缓存与 fail closed。
-
-    资产服务不信任调用方传来的用户头，用户身份由 OIDC 令牌确定（见 OidcVerifier）。
-    """
-
-    def __init__(self, base_url: str, ttl_seconds: int = 60, client=None) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.ttl = ttl_seconds
-        self._cache: dict[str, tuple[float, Principal]] = {}
-        self._client = client
-
-    def users(self) -> list[str]:  # pragma: no cover - 正式环境由 fde-server 提供名单
-        """正式环境不从资产服务枚举用户；评审人名单由 fde-server 给。"""
-        return []
-
-    def engagements(self) -> dict[str, dict]:  # pragma: no cover - 同上
-        return {}
-
-    def agents(self) -> dict[str, dict]:  # pragma: no cover - 同上
-        return {}
-
-    def resolve(self, user_id: str) -> Principal:
-        now = time.monotonic()
-        hit = self._cache.get(user_id)
-        if hit and now - hit[0] < self.ttl:
-            return hit[1]
-        if self._client is None:  # pragma: no cover - 需要真实 fde-server
-            raise PrincipalNotFound(user_id)
-        response = self._client.get(f"{self.base_url}/internal/v1/users/{user_id}/memberships")
-        response.raise_for_status()
-        payload = response.json()
-        principal = Principal(
-            user_id=user_id,
-            display_name=payload.get("display_name", user_id),
-            department_code=payload.get("department_code", ""),
-            is_admin=bool(payload.get("is_admin")),
-            is_asset_reviewer=bool(payload.get("is_asset_reviewer")),
-            is_department_head=bool(payload.get("is_department_head")),
-            memberships=tuple(
-                Membership(
-                    m["engagement_slug"],
-                    m.get("department_code", ""),
-                    m.get("role", "member"),
-                    m.get("customer_code", ""),
-                )
-                for m in payload.get("memberships", [])
-            ),
-        )
-        self._cache[user_id] = (now, principal)
-        return principal
 
 
 class PlatformUnavailable(RuntimeError):
@@ -320,6 +307,41 @@ class PlatformDirectory:
         except (PlatformUnavailable, ValueError, AttributeError):
             return []
 
+    def harvest_source_access(
+        self,
+        username: str,
+        engagement_slug: str,
+        scope: str,
+        scope_id: str,
+        *,
+        conversation_id: str = "",
+        message_id: str = "",
+    ) -> dict[str, str]:
+        """沉淀前重新核验真实来源；不缓存会话权限，撤权后立即失效。"""
+        if not self._service_key:
+            raise PlatformUnavailable("没有配置和 fde-server 共用的服务密钥")
+        expected = {
+            "username": username,
+            "engagement_slug": engagement_slug,
+            "scope": scope,
+            "scope_id": scope_id,
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+        }
+        response = self._get(
+            "/internal/identity/harvest-source/access",
+            headers={"X-FDE-Service-Key": self._service_key},
+            params=expected,
+        )
+        if response.status_code in (401, 403, 404):
+            raise HarvestSourceNotFound(scope_id)
+        if response.status_code != 200:
+            raise PlatformUnavailable("暂时无法确认沉淀来源权限")
+        try:
+            return _checked_harvest_source(response.json(), expected)
+        except (TypeError, ValueError):
+            raise PlatformUnavailable("平台沉淀来源响应格式无效") from None
+
     def work_item_access(self, work_item_id: str, username: str, *, write: bool = False) -> str:
         """不缓存任务权限：任务归属、成员撤权和读写限制每次由平台重新核验。"""
         if not self._service_key:
@@ -387,10 +409,10 @@ class PlatformDirectory:
 
     # ---- 名单 ----
 
-    def _directory(self) -> dict:
+    def _directory(self, *, refresh: bool = False) -> dict:
         now = time.monotonic()
         with self._lock:
-            if self._snapshot and now - self._snapshot[0] < self.ttl:
+            if not refresh and self._snapshot and now - self._snapshot[0] < self.ttl:
                 return self._snapshot[1]
         if not self._service_key:
             raise PlatformUnavailable("没有配置和 fde-server 共用的服务密钥")
@@ -466,6 +488,10 @@ class PlatformDirectory:
 
     def agents(self) -> dict[str, dict]:
         return self._directory()["agents"]
+
+    def refresh(self) -> None:
+        """写入项目前重新核对当前目录；失败时保留拒绝访问，不回退旧缓存。"""
+        self._directory(refresh=True)
 
     def departments(self) -> dict[str, str]:
         """部门代号 → 名称，选可见范围时显示用。"""
