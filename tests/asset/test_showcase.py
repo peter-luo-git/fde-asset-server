@@ -10,6 +10,83 @@ from fde_asset.modules.asset import sop
 from tests.conftest import as_user
 
 
+def test_project_development_workflow_preserves_delivery_guidance() -> None:
+    """迁移 Runtime 原正文契约到资产目录；只验证送达指引，不冒充模型遵循验收。"""
+    import re
+
+    from fde_asset.modules.asset import showcase_content
+
+    item = next(item for item in showcase_content.SHOWCASE if item["name"] == "project-development")
+    workflow = item["files"]["references/project-development-workflow.md"]
+    requirements = {
+        "需求变化先读并更新原任务": r"已确认的需求变化.*fde_task_get.*fde_task_update",
+        "验收标准与乐观版本": r"acceptance_md.*expected_version",
+        "建议不成为用户验收": r"讨论建议、疑问和未采纳选项不写成用户确认的验收标准",
+        "完成后退回沿用原任务": r"完成后退回.*沿用原任务及历史记录",
+        "历史PR不能代本轮交付": r"历史 PR 的合并或批准不代表本轮交付通过",
+        "本轮重新评审与验收": r"等待新的评审与发起人验收",
+        "正式文档交付复用或登记任务": r"正式 Spec、PRD、设计报告、PPT.*复用相关任务.*创建一次",
+        "文档任务仓库可空": r"省略 `repo_id` 或传 null",
+        "实际仓库清单与创建权限": r"fde_project_repository_list.*fde_project_repository_create.*不授予建仓权限",
+        "会话工作目录": r"sessions/<键>/.*project_workspace.session",
+        "打开实际仓库并使用返回路径": r"fde_workspace_open_repo\(repository_id\).*checkout_relative_path",
+        "保护其他目录": r"不要修改 `repos/` 下的仓库副本和 `sessions/` 下别的目录",
+        "移除工作树保留边界": r"只有用户范围包含清理.*git worktree remove",
+        "不预读整套技能": r"根据当前任务加载适用的流程及专业 Skill，不预先读取整套正文",
+        "正文适用用户当前指令和权限": r"用户当前指令和平台权限边界保持优先",
+        "设计交付来源分类": r"公开答复、方案文档和需求摘要.*用户明确事项.*Agent建议／实现选项.*待确认问题",
+        "任务和PR沿用归属": r"任务描述、验收标准和 PR 说明",
+        "确认只到逐项需求": r"已确认只修饰.*逐项需求.*引用旧版时保留每项的原归属",
+        "记录读回和发布复核": r"fde_work_record_read.*发布前核对.*修正后复核",
+        "讨论记录按真实来源保存": r"fde_work_record_write.*讨论／待确认",
+        "同时核对作者与来源": r"原话、作者身份与来源消息必须一起核对",
+        "未知作者不猜姓名": r"无法核实作者时只引用原话和消息标识，不猜姓名",
+        "独立读取安排": r"独立读取放在同一模型响应",
+        "写入审批保留依赖": r"写入、审批和需要前序结果才能确定参数的动作继续按依赖顺序执行",
+    }
+    for label, pattern in requirements.items():
+        assert re.search(pattern, workflow, re.DOTALL), label
+
+
+def test_project_development_is_optional_and_copies_complete_workflow(client) -> None:
+    """示范流程仅显式安装；完整正文随技能入库和复制，不依赖 Runtime 内置文件。"""
+    import hashlib
+
+    admin = as_user(client, "admin")
+    listed = {item["name"]: item for item in admin.get("/api/v1/showcase").json()["items"]}
+    assert "project-development" in listed
+    example = listed["project-development"]
+    assert example["kind"] == "Skill"
+    assert example["title"] == "项目开发交付（示范，可选）"
+    assert example["installed"] is False and example["asset_id"] is None
+    assert set(example["files"]) == {
+        "SKILL.md",
+        "references/project-development-workflow.md",
+    }
+
+    installed = admin.post("/api/v1/showcase/install").json()
+    assert installed["failed"] == [], installed
+    assert "project-development" in installed["installed"]
+    listed_after = {item["name"]: item for item in admin.get("/api/v1/showcase").json()["items"]}
+    asset_id = listed_after["project-development"]["asset_id"]
+    assert listed_after["project-development"]["installed"] is True and asset_id
+    repeated = admin.post("/api/v1/showcase/install").json()
+    assert repeated["installed"] == [] and repeated["updated"] == []
+    assert "project-development" in repeated["skipped"]
+
+    chen = as_user(client, "chen")
+    copied = chen.post(f"/api/v1/assets/{asset_id}/copy", json={})
+    assert copied.status_code == 200, copied.text
+    draft = copied.json()
+    assert draft["scope"] == "user" and draft["name"].startswith("project-development-copy-")
+    assert f"name: {draft['name']}" in draft["files"]["SKILL.md"]
+    # 迁移前源技能仅去除 frontmatter 后的完整 UTF-8 正文指纹，防止丢段或只复制短入口。
+    workflow = draft["files"]["references/project-development-workflow.md"]
+    assert hashlib.sha256(workflow.encode("utf-8")).hexdigest() == (
+        "f00a14a83f68abb873ddfd0c3f9c036446863cf296e9a540d46290bbbfbd0e62"
+    )
+
+
 def test_install_showcase_then_copy_as_draft(client) -> None:
     admin = as_user(client, "admin")
     listed = admin.get("/api/v1/showcase").json()

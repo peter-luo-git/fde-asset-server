@@ -950,6 +950,14 @@ SHOWCASE: list[dict[str, Any]] = [
         "新建任务「做一份运维看板的项目周报」，绑这条流程；看 Agent 先出提纲、再写页面，最后用 fcp-pptx-builder 生成 slides/汇报.pptx",
     ),
     _skill(
+        "project-development",
+        "项目开发交付（示范，可选）",
+        "按明确选择使用的完整项目开发交付示范；短入口导航，完整流程按需读取",
+        "用户明确调用完整项目开发交付示范流程，或任务已选择该流程",
+        "一般开发请求、只读查询、冒烟、逐项回答，或用户已指定其他步骤和技能",
+        _folder("project-development"),
+    ),
+    _skill(
         "fcp-tech-doc-writer",
         "技术文档写作（示范）",
         "按读者和范围定结构、结论先行，附文档模板和自查清单",
@@ -1030,6 +1038,9 @@ SHOWCASE: list[dict[str, Any]] = [
 ]
 
 TRY_SKILL = {
+    "project-development": "管理员在示范库显式安装后，按现有关联方式选择该技能；"
+    "再明确提出「使用 project-development 完整项目开发交付示范流程」，观察是否按需读取完整参考；"
+    "只读查询或已指定其他技能时应按用户当前要求直接处理",
     "fcp-tech-doc-writer": "在私聊里说「帮我写一份内部运维看板的部署说明大纲」，看 Agent 是否加载这个技能、按模板出大纲",
     "fcp-code-review-checklist": "在私聊里说「帮我评审一下 xxx 这段代码」，看 Agent 是否按清单逐项检查",
     "fcp-markdown-slides": "在私聊里说「帮我做一份运维看板项目周报的 PPT 提纲」，看 Agent 是否先问受众、再按每页一个结论写",

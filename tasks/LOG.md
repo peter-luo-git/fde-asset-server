@@ -51,3 +51,4 @@
 - 2026-10-28增量：继续合入46a7706附件摘要与layout=2快照，模型生成只返回不保存；附件/快照/契约27通过，契约同步至110路径。本轮未运行真实模型或部署。
 
 - 2026-10-28 github-harvest-sync-20261028 / implementer_sync_asset 合并相关评审：通过；合入精确cd8bd8a并保留本地身份、权限、typed解除与重排设置；修来源ACL、只读及撤权、DM去重保密、跨会话文件、私有Agent清单和草稿/资产引用权限；官方Alembic1.14.1机制适配解决33字符0017标识写入32字符版本列，空库及0015合成库升级/重复升级/资产保留2通过。相关批次229通过/3目录夹具失败，修夹具后重排文件34通过、最后候选文件18通过、契约2通过（跨批236个不同相关用例）；29变更Python编译/Ruff及diff检查通过，公开契约118路径。未全量/E2E/真实模型/提交/推送/部署；Root负责最终审查、固定冒烟、Specs镜像、生产副本及部署，贡献见operations/agent-contributions/github-harvest-sync-20261028/implementer_sync_asset.md。
+- 2026-10-29 implementer_asset：将 project-development 完整正文保全迁入可选示范 Skill，短入口明确用户步骤/技能/只读优先，沿用显式安装与既有快照/复制路径，不自动安装或关联；API回归先RED后GREEN，迁入原正文契约后 tests/asset/test_showcase.py 5通过，限定Ruff/格式及正文指纹核对通过；未全量/E2E/模型/Git写/推送/部署，贡献见 operations/agent-contributions/project-development-showcase-20261029/implementer_asset.md。
