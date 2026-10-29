@@ -432,10 +432,23 @@ def run_demo(data_dir: Path, *, verbose: bool = True, database_url: str = "") ->
         # 12 工作台：历史文档导入与线索
         def step12() -> list[str]:
             pdf = make_pdf(["Legacy migration playbook", "Step 1 freeze writes", "Step 2 verify"])
-            upload = chen.post(
+            # 方案、实施、问题、经验不从文件导入（2026-10-28）：正文按模板手写，历史文档作附件
+            refused = chen.post(
                 "/api/v1/harvest-candidates/from-upload",
                 json={
                     "kind": "Implementation",
+                    "title": "历史迁移手册",
+                    "filename": "legacy.pdf",
+                    "content_base64": base64.b64encode(pdf).decode(),
+                    "scope": "company",
+                },
+            )
+            _check(refused.status_code == 422, f"实施不应从文件导入：{refused.status_code}")
+            # 规范可以导入：原文整篇作正文
+            upload = chen.post(
+                "/api/v1/harvest-candidates/from-upload",
+                json={
+                    "kind": "Rule",
                     "title": "历史迁移手册",
                     "filename": "legacy.pdf",
                     "content_base64": base64.b64encode(pdf).decode(),
@@ -451,7 +464,7 @@ def run_demo(data_dir: Path, *, verbose: bool = True, database_url: str = "") ->
             upload2 = chen.post(
                 "/api/v1/harvest-candidates/from-upload",
                 json={
-                    "kind": "Solution",
+                    "kind": "Rule",
                     "title": "历史方案文档",
                     "filename": "legacy.docx",
                     "content_base64": base64.b64encode(docx).decode(),

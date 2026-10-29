@@ -15,7 +15,8 @@ def test_contract_file_matches_the_code(monkeypatch) -> None:
         "FDE_ASSET_DATABASE_URL",
         os.environ.get("FDE_ASSET_DATABASE_URL")
         or os.environ.get("FDE_ASSET_TEST_DATABASE_URL")
-        or "postgresql://postgres@127.0.0.1:55432/postgres",
+        # 和 conftest 的测试库默认地址一致（带密码，建应用时会连库）
+        or "postgresql://postgres:test@127.0.0.1:55432/postgres",
     )
     assert CONTRACT.exists(), "先运行 python scripts/export_openapi.py 生成契约"
     assert CONTRACT.read_text(encoding="utf-8") == render(build_spec()), (
