@@ -1027,6 +1027,18 @@ SHOWCASE: list[dict[str, Any]] = [
         "正式文档里的措辞润色",
         _folder("fcp-chengyu-jinnang"),
     ),
+    # 2026-10-29 从 Runtime 镜像里移过来：原来内置并在系统提示里要求先加载，会压过任务里写明的指令；
+    # 现在和其他技能一样，需要的项目或 Agent 手动关联。正文与原 Runtime 版本一致，只改了名字
+    _skill(
+        "fcp-project-development",
+        "项目开发流程（示范）",
+        "需求讨论、设计、方案交付、实施时的工作方法：逐项保留需求原话和发言人、区分用户明确事项与 Agent 建议、"
+        "发布前核对、工作记录按版本读回再写",
+        "持续做需求讨论、出设计方案、按任务实施的开发类项目；入口会去找 Superpowers 的 using-superpowers，"
+        "要用的话把它一并关联（找不到时 Agent 会说明缺少，不影响其余工作）",
+        "只读查询、连通性检查、逐条列好步骤的小任务（会多出工作记录和方案文档）",
+        _folder("fcp-project-development"),
+    ),
 ]
 
 TRY_SKILL = {
@@ -1042,6 +1054,8 @@ TRY_SKILL = {
     "fcp-chengyu-jinnang": "在私聊里说「给我个锦囊：线上偶发报错，我已经加了三次重试还是不行」，"
     "看 Agent 是否只点一个成语（如釜底抽薪）就停下；再问「什么意思」，看是否四句话讲完典故",
     "fcp-english-sentence-coach": "在私聊里说「我想练英语：把『这个问题我们下周再讨论』翻成英文」，看 Agent 是否先让你自己写",
+    "fcp-project-development": "关联给项目里的 Agent 后，在频道里说「我们想做一个运维看板，先讨论下需求」，"
+    "看 Agent 是否加载这个技能、把你的原话记进工作记录，并把建议和待确认分开写",
 }
 for _item in SHOWCASE:
     if _item["kind"] == "Skill":
