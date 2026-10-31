@@ -264,6 +264,79 @@ def test_agent_cannot_override_human_confirmation(service) -> None:
     assert response.json()["results"][0]["status"] == "passed"
 
 
+def test_human_pass_is_visible_to_agent_but_step_waits_for_human_click(service) -> None:
+    assert _bind(service).status_code == 200
+    _report(service, [{"index": 0, "status": "passed", "evidence": "docs/方案.md"}])
+    for index in range(2):
+        assert (
+            service.post(
+                "/api/v1/work-items/w-1/sop/checks",
+                json={"step": 1, "index": index, "decision": "confirm"},
+            ).status_code
+            == 200
+        )
+    payload = service.get(
+        "/internal/v1/work-items/w-1/sop-step", params=CALLER, headers=HEADERS
+    ).json()
+    assert payload["step"] == 1 and payload["unfinished"] == 0
+    assert payload["next_step"] == 2 and payload["awaiting_human_advance"] is True
+    assert all(c["status"] == "passed" and c["by"] == "user:chen" for c in payload["checks"])
+    assert "人工确认通过" in payload["prompt_md"] and "点击" in payload["prompt_md"]
+    assert "重复" in payload["prompt_md"]
+    assert _report(service, [{"index": 0, "status": "unknown"}]).json()["unfinished"] == 0
+    assert _state(service)["sop_step"] == 1
+    assert _bind(service, step=2).status_code == 200
+    advanced = service.get(
+        "/internal/v1/work-items/w-1/sop-step", params=CALLER, headers=HEADERS
+    ).json()
+    assert advanced["step"] == 2 and advanced["awaiting_human_advance"] is False
+
+
+@pytest.mark.parametrize("human_confirmed", [True, False])
+def test_auto_step_preserves_human_advance_boundary(service, human_confirmed) -> None:
+    assert _bind(service, step=2).status_code == 200
+    ctx = service.app.state.context
+    with ctx.engine.begin() as conn:
+        row = conn.execute(
+            select(work_item_assets).where(work_item_assets.c.work_item_id == "w-1")
+        ).one()
+        progress = json.loads(row.progress_json)
+        progress["steps_snapshot"][1]["auto"] = True
+        progress["steps_snapshot"][1]["checks"] = [
+            {
+                "index": 0,
+                "type": "command",
+                "type_label": "命令",
+                "text": "测试通过",
+                "command": "pytest -q",
+            }
+        ]
+        conn.execute(
+            update(work_item_assets)
+            .where(work_item_assets.c.id == row.id)
+            .values(progress_json=json.dumps(progress))
+        )
+    if human_confirmed:
+        service.post(
+            "/api/v1/work-items/w-1/sop/checks",
+            json={"step": 2, "index": 0, "decision": "confirm"},
+        )
+    result = _report(
+        service,
+        [
+            {
+                "index": 0,
+                "status": "passed",
+                "evidence": "proof test-check",
+                "verified": True,
+            }
+        ],
+        step=2,
+    ).json()
+    assert result["advanced_to"] == (None if human_confirmed else 3)
+    assert _state(service)["sop_step"] == (2 if human_confirmed else 3)
+
+
 def test_viewer_cannot_confirm(service) -> None:
     _bind(service)
     service.headers.update({"X-FDE-User": "zhao"})

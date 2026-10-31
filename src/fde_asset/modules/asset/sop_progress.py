@@ -414,12 +414,14 @@ def apply_report(
 
 def _auto_advance(steps: list[dict[str, Any]], progress: dict[str, Any], step: int) -> int | None:
     current = next((s for s in steps if s["number"] == step), None)
+    states = (progress.get("steps") or {}).get(str(step), {}).get("checks", {})
     if (
         current is None
         or not current.get("auto")
         or not current.get("checks")
         or any(c["type"] not in MACHINE_TYPES for c in current["checks"])
         or unfinished_checks(steps, progress, step)
+        or any(str(state.get("by", "")).startswith("user:") for state in states.values())
     ):
         return None
     following = [s["number"] for s in steps if s["number"] > step]
@@ -642,6 +644,9 @@ def agent_step(engine: Engine, row: Any, title: str, *, budget: int = 8192) -> d
     step = next((s for s in steps if s["number"] == current), None)
     if step is None:
         return {"found": False}
+    states = (progress.get("steps") or {}).get(str(current), {}).get("checks", {})
+    unfinished = len(unfinished_checks(steps, progress, current))
+    next_step = next((s["number"] for s in steps if s["number"] > current), None)
     text = sop_module.render_prompt(
         title=title,
         version=row.sop_version,
@@ -657,7 +662,22 @@ def agent_step(engine: Engine, row: Any, title: str, *, budget: int = 8192) -> d
         "total_steps": len(steps),
         "step_title": step["title"],
         "sop_version": row.sop_version,
-        "checks": step.get("checks", []),
+        "checks": [
+            {
+                **check,
+                **{
+                    key: value
+                    for key, value in states.get(str(check["index"]), {}).items()
+                    if key in {"status", "by", "at"}
+                },
+            }
+            for check in step.get("checks", [])
+        ],
+        "unfinished": unfinished,
+        "next_step": next_step,
+        "awaiting_human_advance": bool(step.get("checks"))
+        and unfinished == 0
+        and next_step is not None,
         "skills": step.get("skills", []),
         "prompt_md": text,
     }

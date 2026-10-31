@@ -456,19 +456,40 @@ def render_prompt(
     if step.get("body"):
         lines.append(step["body"])
     states = (progress.get("steps") or {}).get(str(current), {}).get("checks", {})
+    if step.get("checks") and all(
+        states.get(str(check["index"]), {}).get("status") == "passed" for check in step["checks"]
+    ):
+        next_step = next((s["number"] for s in steps if s["number"] > current), None)
+        lines.append("本步检查点已全部通过，不要重复要求确认或补交已确认检查点的证明。")
+        if next_step is not None:
+            lines.append(
+                f"流程仍停留在第 {current} 步；请提示负责人在任务的执行规范（SOP）中"
+                f"点击进入第 {next_step} 步。人工确认通过不等于推进步骤，点击前不要执行或回报后续步骤。"
+            )
+        else:
+            lines.append("这已是流程最后一步；检查点通过不等于任务成果已评审或验收。")
     if step.get("checks"):
         lines.append(
-            "检查点（收尾前必须调用 fde_sop_checkpoint_report 逐条回报状态和证据"
+            "检查点（未完成项在收尾前调用 fde_sop_checkpoint_report 逐条回报状态和证据"
             + (f"，work_item_id={work_item_id}" if work_item_id else "")
-            + f"，step={current}；没有证据的「通过」会被降为「无法判断」）："
+            + f"，step={current}；已人工确认通过的无需重复回报；没有证据的「通过」会被降为「无法判断」）："
         )
         for check in step["checks"]:
             state = states.get(str(check["index"]), {})
             status = STATUS_LABELS.get(state.get("status", ""), "未检查")
+            human_passed = state.get("status") == "passed" and str(state.get("by", "")).startswith(
+                "user:"
+            )
+            if human_passed:
+                status += "，已人工确认通过"
             lines.append(
                 f"  {check['index'] + 1}. [{check['type_label']}] {check['text']}（目前：{status}）"
             )
-            lines.append(f"     怎么回报：{_REPORT_HINTS[check['type']]}")
+            lines.append(
+                "     已由人工确认，无需重复回报或补交平台验证证明。"
+                if human_passed
+                else f"     怎么回报：{_REPORT_HINTS[check['type']]}"
+            )
     if step.get("outputs"):
         lines.append("产出：" + "、".join(step["outputs"]))
     if step.get("skills"):
