@@ -1,8 +1,15 @@
 # 资产中心服务镜像。构建上下文是本仓库根目录：docker build -t fde-asset-server:<版本> .
 FROM python:3.12-slim
 
+# 构建时可选国内源（不传＝官方源，行为不变）。例：--build-arg DEBIAN_MIRROR=http://mirrors.tencent.com/debian
+ARG DEBIAN_MIRROR=
+ARG PIP_INDEX_URL=https://pypi.org/simple
+
 # 资产原件存在本地 git 裸仓库里，运行时要调 git
-RUN apt-get update \
+RUN if [ -n "$DEBIAN_MIRROR" ]; then \
+        sed -i "s|http://deb.debian.org/debian|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -14,7 +21,7 @@ RUN python - <<'PY' > /tmp/requirements.txt
 import tomllib
 print("\n".join(tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]))
 PY
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" -r /tmp/requirements.txt
 
 COPY src ./src
 COPY scripts ./scripts
