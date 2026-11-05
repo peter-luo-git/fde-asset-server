@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from typing import Literal
@@ -16,12 +17,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 API_VERSION = "fde.asset/v1"
 NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
-OWNER_PATTERN = re.compile(r"^(department|user):[A-Za-z0-9._-]+$")
+#: 部门代号、账号的写法跟平台一致：不能有空白、冒号和斜杠，最多 100 个字。
+#: 平台的部门代号来自登录系统的组织，可以是中文（如「央企事业部」）；以前这里只认英文，
+#: 中文部门的人起草的资产负责方是 department:央企事业部，提交时被拒（2026-11-05 生产）
+_CODE = r"[^\s:/]{1,100}"
+OWNER_PATTERN = re.compile(rf"^(department|user):{_CODE}$")
 ID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 #: 可见范围的一项：全公司，或某个部门、客户、项目、个人
-VISIBILITY_PATTERN = re.compile(
-    r"^(company|(department|customer|engagement|user):[A-Za-z0-9._-]+)$"
-)
+VISIBILITY_PATTERN = re.compile(rf"^(company|(department|customer|engagement|user):{_CODE})$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 #: 所有资产都在同一个仓库的这个目录下，一个资产一个以编号命名的子目录
 ASSET_ROOT = "assets"
@@ -353,8 +356,16 @@ def parse_manifest(raw_yaml: str) -> tuple[AssetManifest | None, list[Finding]]:
 
 
 def owner_slug(owner_value: str) -> str:
-    """负责人的账号或部门代号，整理成能放进挂载名的写法。"""
-    return re.sub(r"[^a-z0-9]+", "-", (owner_value or "").lower()).strip("-") or "owner"
+    """负责人的账号或部门代号，整理成能放进挂载名的写法。
+
+    挂载名只能是小写字母、数字和连字符；中文代号整理后是空的，改用代号的短哈希，
+    免得不同的中文部门都变成同一个名字。"""
+    slug = re.sub(r"[^a-z0-9]+", "-", (owner_value or "").lower()).strip("-")
+    if slug:
+        return slug
+    if not owner_value:
+        return "owner"
+    return "o" + hashlib.sha1(owner_value.encode("utf-8")).hexdigest()[:8]
 
 
 def visibility_entry(

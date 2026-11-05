@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
-from fde_asset.modules.asset.manifest import KIND_RULES, parse_manifest, validate_asset
+from fde_asset.modules.asset.manifest import KIND_RULES, owner_slug, parse_manifest, validate_asset
 
 BASE = """apiVersion: fde.asset/v1
 kind: {kind}
@@ -71,6 +73,43 @@ def test_owner_format_enforced() -> None:
     )
     assert manifest is None
     assert any("owner" in f.message for f in findings)
+
+
+def test_chinese_department_code_accepted() -> None:
+    # 平台的部门代号可以是中文（来自登录系统的组织），2026-11-05 生产上提交规范被拒
+    text = BASE.format(kind="Case", extra=EXTRA["Case"]).replace(
+        "department:data-intel", "department:央企事业部\n  visibility:\n  - department:央企事业部"
+    )
+    manifest, findings = parse_manifest(text)
+    assert findings == [], [f.message for f in findings]
+    assert manifest is not None
+
+
+@pytest.mark.parametrize(
+    "owner",
+    [
+        "department:",
+        "department:央企 事业部",
+        "department:a/b",
+        "team:dev",
+        "department:" + "x" * 101,
+    ],
+)
+def test_owner_code_still_rejects_blank_slash_and_overlong(owner: str) -> None:
+    manifest, findings = parse_manifest(
+        BASE.format(kind="Case", extra=EXTRA["Case"]).replace("department:data-intel", f'"{owner}"')
+    )
+    assert manifest is None
+    assert any("owner" in f.message for f in findings)
+
+
+def test_owner_slug_for_chinese_code_is_stable_and_distinct() -> None:
+    first, second = owner_slug("央企事业部"), owner_slug("数据智能部")
+    assert first == owner_slug("央企事业部")
+    assert first != second
+    assert re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", first)
+    assert owner_slug("data-intel") == "data-intel"
+    assert owner_slug("") == "owner"
 
 
 def test_directory_name_must_match() -> None:
