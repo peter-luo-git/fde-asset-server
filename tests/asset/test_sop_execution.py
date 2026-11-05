@@ -404,6 +404,25 @@ def test_default_most_specific_scope_wins_and_permissions(service) -> None:
     ).json()["removed"]
 
 
+def test_admin_can_list_sop_defaults(service) -> None:
+    # 管理员的可管理范围是不带代号的范围名，曾导致清单接口 500（2026-11-05 生产）
+    service.headers.update({"X-FDE-User": "wang"})
+    service.put(
+        "/api/v1/sop-defaults",
+        json={"entry": "engagement:policy-import", "asset_id": _id(service, "delivery-standard")},
+    )
+    service.headers.update({"X-FDE-User": "admin"})
+    response = service.get("/api/v1/sop-defaults")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["is_admin"] is True
+    assert ("engagement", "policy-import") in [(i["scope"], i["code"]) for i in body["items"]]
+    service.headers.update({"X-FDE-User": "wang"})
+    assert [i["code"] for i in service.get("/api/v1/sop-defaults").json()["items"]] == [
+        "policy-import"
+    ]
+
+
 def test_sop_cannot_be_reference_mandatory_or_linked(service) -> None:
     response = service.post(
         "/api/v1/work-items/w-1/assets", json={"asset_id": _id(service), "role": "reference"}

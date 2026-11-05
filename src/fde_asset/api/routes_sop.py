@@ -67,11 +67,16 @@ def list_defaults(
     principal: Principal = Depends(get_principal),
 ) -> dict[str, Any]:
     """默认流程清单：管理员看全部，其他人看自己负责的范围。"""
-    mine = {
-        mandatory.parse(key)
-        for key in mandatory.manageable_scopes(principal)
-        if not key.startswith("user")
-    }
+    # 管理员看全部；manageable_scopes 对管理员只给不带代号的范围名，不能拿去解析（2026-11-05 修复 500）
+    mine = (
+        set()
+        if principal.is_admin
+        else {
+            mandatory.parse(key)
+            for key in mandatory.manageable_scopes(principal)
+            if not key.startswith("user")
+        }
+    )
     with context.engine.connect() as conn:
         rows = conn.execute(
             select(sop_defaults).order_by(sop_defaults.c.scope, sop_defaults.c.code)
